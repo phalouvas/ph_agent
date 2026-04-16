@@ -7,8 +7,7 @@
  "field_order": [
   "chat_session",
   "sender_type",
-  "content",
-  "attachments"
+  "content"
  ],
  "fields": [
   {
@@ -31,14 +30,9 @@
   },
   {
    "fieldname": "content",
-   "fieldtype": "Long Text",
+   "fieldtype": "Markdown Editor",
    "label": "Content",
    "reqd": 1
-  },
-  {
-   "fieldname": "attachments",
-   "fieldtype": "JSON",
-   "label": "Attachments"
   }
  ],
  "links": [],

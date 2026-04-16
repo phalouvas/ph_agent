@@ -36,6 +36,10 @@ function initPhChat(container, page) {
 	chat.setAttribute("messages-loaded", "false");
 	chat.setAttribute("room-actions", JSON.stringify([{ name: "deleteRoom", title: __("Delete") }]));	chat.setAttribute("room-info-enabled", "true");	container.appendChild(chat);
 
+	// Prevent Frappe global keyboard shortcuts (e.g. Shift+/ = "?") from
+	// firing while the user is typing inside the chat component.
+	container.addEventListener("keydown", (e) => e.stopPropagation());
+
 	let rooms = [];
 	let messages = [];
 	let activeRoomId = null;

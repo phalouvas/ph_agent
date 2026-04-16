@@ -8,6 +8,18 @@
   {
    "child": 0,
    "collapsible": 1,
+   "icon": "message-square-text",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "AI Chat",
+   "link_to": "chat",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
    "icon": "cloud-cog",
    "indent": 0,
    "keep_closed": 0,
@@ -53,7 +65,7 @@
    "type": "Section Break"
   }
  ],
- "modified": "2026-04-16 15:33:34.027791",
+ "modified": "2026-04-16 15:56:06.830576",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

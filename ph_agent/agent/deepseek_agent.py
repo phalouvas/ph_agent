@@ -51,11 +51,24 @@ def get_agent_response(session_name: str, user_message: str) -> tuple[str, int, 
 
 	run_config = RunConfig(tracing_disabled=True)
 
+	# Build full conversation history for context
+	prior_messages = frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session_name},
+		fields=["sender_type", "content"],
+		order_by="creation asc",
+	)
+	history = [
+		{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
+		for m in prior_messages
+	]
+	history.append({"role": "user", "content": user_message})
+
 	try:
 		result = asyncio.run(
 			Runner.run(
 				agent,
-				input=user_message,
+				input=history,
 				run_config=run_config,
 			)
 		)

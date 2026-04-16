@@ -74,7 +74,7 @@ def send_message(session, content):
 
 	frappe.db.commit()
 
-	# Emit real-time event to the session room
+	# Emit real-time event to the current user
 	frappe.publish_realtime(
 		event="new_message",
 		message={
@@ -84,7 +84,7 @@ def send_message(session, content):
 			"content": reply,
 			"creation": str(agent_msg.creation),
 		},
-		room=f"chat_session_{session}",
+		user=frappe.session.user,
 		after_commit=True,
 	)
 

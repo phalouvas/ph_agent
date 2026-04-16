@@ -45,12 +45,12 @@ def create_session(provider_name=None):
 
 
 @frappe.whitelist()
-def send_message(session, content):
+def send_message(session, content, file_names=None):
 	"""Store a user message, call the LLM agent, and store the response."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
 	# Store user message
-	frappe.get_doc(
+	user_msg = frappe.get_doc(
 		{
 			"doctype": "Chat Message",
 			"chat_session": session,
@@ -58,6 +58,17 @@ def send_message(session, content):
 			"content": content,
 		}
 	).insert(ignore_permissions=False)
+
+	# Link any uploaded files to this message
+	if file_names:
+		names = frappe.parse_json(file_names) if isinstance(file_names, str) else file_names
+		for file_name in names:
+			frappe.db.set_value(
+				"File",
+				file_name,
+				{"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},
+			)
+
 	frappe.db.commit()
 
 	# Call agent
@@ -125,6 +136,12 @@ def get_history(session):
 		fields=["name", "sender_type", "content", "creation"],
 		order_by="creation asc",
 	)
+	for msg in messages:
+		msg["files"] = frappe.get_all(
+			"File",
+			filters={"attached_to_doctype": "Chat Message", "attached_to_name": msg["name"]},
+			fields=["name", "file_name", "file_size", "file_url", "is_private"],
+		)
 	return messages
 
 

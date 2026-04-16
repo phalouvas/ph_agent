@@ -44,6 +44,12 @@ function initPhChat(container, page) {
 	// ── Helper: format a Chat Message record ──────────────────────
 	function fmtMsg(m) {
 		const dt = new Date((m.creation || "").replace(" ", "T"));
+		const files = (m.files || []).map((f) => ({
+			name: f.file_name,
+			size: f.file_size,
+			type: (f.file_name || "").split(".").pop().toLowerCase(),
+			url: f.file_url,
+		}));
 		return {
 			_id: m.name,
 			content: m.content,
@@ -52,7 +58,27 @@ function initPhChat(container, page) {
 			timestamp: dt.toTimeString().slice(0, 5),
 			date: dt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
 			saved: true,
+			files: files.length ? files : undefined,
 		};
+	}
+
+	// ── Helper: upload a single file to Frappe ────────────────────
+	function uploadFile(file) {
+		return new Promise((resolve, reject) => {
+			const formData = new FormData();
+			formData.append("file", file.blob, file.name);
+			formData.append("is_private", "1");
+			$.ajax({
+				url: "/api/method/upload_file",
+				type: "POST",
+				data: formData,
+				processData: false,
+				contentType: false,
+				headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
+				success: (r) => resolve(r.message),
+				error: reject,
+			});
+		});
 	}
 
 	// ── Load rooms (sessions) ──────────────────────────────────────
@@ -170,9 +196,15 @@ function initPhChat(container, page) {
 	});
 
 	// ── Event: user sends a message ───────────────────────────────
-	chat.addEventListener("send-message", ({ detail: [{ roomId, content }] }) => {
-		// Optimistic user bubble
+	chat.addEventListener("send-message", ({ detail: [{ roomId, content, files }] }) => {
+		// Optimistic user bubble with local file previews
 		const tempId = "temp_" + Date.now();
+		const localFiles = (files || []).map((f) => ({
+			name: f.name,
+			size: f.size,
+			type: (f.name || "").split(".").pop().toLowerCase(),
+			url: f.localUrl,
+		}));
 		messages = [
 			...messages,
 			{
@@ -183,48 +215,59 @@ function initPhChat(container, page) {
 				timestamp: new Date().toTimeString().slice(0, 5),
 				date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
 				saved: false,
+				files: localFiles.length ? localFiles : undefined,
 			},
 		];
 		chat.messages = messages;
 
-		frappe.call({
-			method: "ph_agent.api.chat.send_message",
-			args: { session: roomId, content },
-			callback: (r) => {
-				if (r.message) {
-					if (r.message.status === "error") {
-						// Mark user message as failed, add error agent bubble
+		// Upload files first (if any), then send the message
+		const uploadPromises = (files || []).map((f) => uploadFile(f));
+		Promise.all(uploadPromises)
+			.then((uploaded) => {
+				const fileNames = uploaded.map((u) => u.name);
+				frappe.call({
+					method: "ph_agent.api.chat.send_message",
+					args: { session: roomId, content, file_names: fileNames },
+					callback: (r) => {
+						if (r.message) {
+							if (r.message.status === "error") {
+								messages = messages.map((m) =>
+									m._id === tempId ? { ...m, saved: true, failure: true } : m
+								);
+								messages = [
+									...messages,
+									{
+										_id: r.message.agent_message,
+										content: "⚠️ " + r.message.error,
+										senderId: agentId,
+										username: "AI Agent",
+										timestamp: new Date().toTimeString().slice(0, 5),
+										date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
+										saved: true,
+									},
+								];
+							} else {
+								messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
+							}
+							chat.messages = messages;
+						}
+					},
+					error: () => {
 						messages = messages.map((m) =>
-							m._id === tempId ? { ...m, saved: true, failure: true } : m
+							m._id === tempId ? { ...m, failure: true } : m
 						);
-						messages = [
-							...messages,
-							{
-								_id: r.message.agent_message,
-								content: "⚠️ " + r.message.error,
-								senderId: agentId,
-								username: "AI Agent",
-								timestamp: new Date().toTimeString().slice(0, 5),
-								date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
-								saved: true,
-							},
-						];
-					} else {
-						// Mark user message as saved
-						messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
-					}
-					chat.messages = messages;
-				}
-			},
-			error: () => {
-				// Network / server error — mark the user message as failed
+						chat.messages = messages;
+						frappe.show_alert({ message: __("Failed to send message. Please try again."), indicator: "red" });
+					},
+				});
+			})
+			.catch(() => {
 				messages = messages.map((m) =>
 					m._id === tempId ? { ...m, failure: true } : m
 				);
 				chat.messages = messages;
-				frappe.show_alert({ message: __("Failed to send message. Please try again."), indicator: "red" });
-			},
-		});
+				frappe.show_alert({ message: __("File upload failed. Please try again."), indicator: "red" });
+			});
 	});
 
 	// ── Event: room header clicked → change provider ─────────────

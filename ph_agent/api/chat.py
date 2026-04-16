@@ -61,7 +61,20 @@ def send_message(session, content):
 	frappe.db.commit()
 
 	# Call agent
-	reply, input_tokens, output_tokens = get_agent_response(session, content)
+	try:
+		reply, input_tokens, output_tokens = get_agent_response(session, content)
+	except frappe.exceptions.ValidationError as e:
+		# Return error as a failed agent message so the UI can show the failure indicator
+		failed_msg = frappe.get_doc(
+			{
+				"doctype": "Chat Message",
+				"chat_session": session,
+				"sender_type": "Agent",
+				"content": str(e),
+			}
+		).insert(ignore_permissions=False)
+		frappe.db.commit()
+		return {"status": "error", "error": str(e), "agent_message": failed_msg.name}
 
 	# Store agent response
 	agent_msg = frappe.get_doc(

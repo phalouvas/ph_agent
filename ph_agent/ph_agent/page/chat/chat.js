@@ -192,10 +192,37 @@ function initPhChat(container, page) {
 			args: { session: roomId, content },
 			callback: (r) => {
 				if (r.message) {
-					// Mark user message as saved
-					messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
+					if (r.message.status === "error") {
+						// Mark user message as failed, add error agent bubble
+						messages = messages.map((m) =>
+							m._id === tempId ? { ...m, saved: true, failure: true } : m
+						);
+						messages = [
+							...messages,
+							{
+								_id: r.message.agent_message,
+								content: "⚠️ " + r.message.error,
+								senderId: agentId,
+								username: "AI Agent",
+								timestamp: new Date().toTimeString().slice(0, 5),
+								date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
+								saved: true,
+							},
+						];
+					} else {
+						// Mark user message as saved
+						messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
+					}
 					chat.messages = messages;
 				}
+			},
+			error: () => {
+				// Network / server error — mark the user message as failed
+				messages = messages.map((m) =>
+					m._id === tempId ? { ...m, failure: true } : m
+				);
+				chat.messages = messages;
+				frappe.show_alert({ message: __("Failed to send message. Please try again."), indicator: "red" });
 			},
 		});
 	});

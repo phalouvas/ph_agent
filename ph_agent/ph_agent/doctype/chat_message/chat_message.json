@@ -1,0 +1,70 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-04-16 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "chat_session",
+  "sender_type",
+  "content",
+  "attachments"
+ ],
+ "fields": [
+  {
+   "fieldname": "chat_session",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Chat Session",
+   "options": "Chat Session",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "User",
+   "fieldname": "sender_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Sender Type",
+   "options": "User\nAgent",
+   "reqd": 1
+  },
+  {
+   "fieldname": "content",
+   "fieldtype": "Long Text",
+   "label": "Content",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attachments",
+   "fieldtype": "JSON",
+   "label": "Attachments"
+  }
+ ],
+ "links": [],
+ "modified": "2026-04-16 15:35:51.288867",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "Chat Message",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "if_owner": 1,
+   "read": 1,
+   "role": "All"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}

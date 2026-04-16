@@ -43,9 +43,12 @@ def get_agent_response(session_name: str, user_message: str) -> tuple[str, int, 
 		openai_client=openai_client,
 	)
 
+	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
+	system_prompt = session.system_prompt or provider_doc.system_prompt or None
+
 	agent = Agent(
 		name="PH Agent",
-		instructions="You are a helpful assistant integrated into an ERPNext business system. Answer clearly and concisely.",
+		instructions=system_prompt,
 		model=model,
 	)
 

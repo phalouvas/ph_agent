@@ -9,6 +9,7 @@
 		"user",
 		"llm_provider",
 		"status",
+		"system_prompt",
 		"column_break_1",
 		"input_tokens",
 		"output_tokens"
@@ -47,6 +48,12 @@
 			"label": "Status",
 			"options": "Open\nClosed\nArchived",
 			"reqd": 1
+		},
+		{
+			"fieldname": "system_prompt",
+			"fieldtype": "Long Text",
+			"label": "System Prompt",
+			"description": "Overrides the provider-level system prompt for this session. Leave empty to use the provider default."
 		},
 		{
 			"fieldname": "column_break_1",

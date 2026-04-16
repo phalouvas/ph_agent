@@ -105,6 +105,7 @@ function initPhChat(container, page) {
 
 	// ── Event: room selected → load messages ──────────────────────
 	chat.addEventListener("fetch-messages", ({ detail: [{ room }] }) => {
+		if (!room.roomId) return;
 		activeRoomId = room.roomId;
 		chat.setAttribute("messages-loaded", "false");
 		frappe.call({

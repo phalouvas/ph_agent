@@ -83,23 +83,69 @@ function initPhChat(container, page) {
 
 	// ── Create new session ─────────────────────────────────────────
 	function createNewSession() {
-		frappe.call({
-			method: "ph_agent.api.chat.create_session",
-			callback: (r) => {
-				if (!r.message) return;
-				const newRoom = {
-					roomId: r.message.session,
-					roomName: r.message.title,
-					users: [
-						{ _id: currentUserId, username: frappe.boot.user.full_name || currentUserId },
-						{ _id: agentId, username: "AI Agent" },
+		// Fetch enabled providers, then show a dialog
+		frappe.db
+			.get_list("LLM Provider", {
+				filters: { is_enabled: 1 },
+				fields: ["name", "is_default"],
+				order_by: "is_default desc, name asc",
+			})
+			.then((providers) => {
+				if (!providers.length) {
+					frappe.msgprint({
+						title: __("No LLM Provider Configured"),
+						message: __(
+							"Please go to <b>PH Agent → LLM Provider</b> and create an enabled provider before starting a chat."
+						),
+						indicator: "red",
+					});
+					return;
+				}
+
+				const defaultProvider = (providers.find((p) => p.is_default) || providers[0]).name;
+
+				const options = providers.map((p) => ({
+					label: p.name + (p.is_default ? " (" + __("default") + ")" : ""),
+					value: p.name,
+				}));
+
+				const d = new frappe.ui.Dialog({
+					title: __("New Chat"),
+					fields: [
+						{
+							fieldname: "provider_name",
+							fieldtype: "Select",
+							label: __("LLM Provider"),
+							options: options.map((o) => o.value).join("\n"),
+							default: defaultProvider,
+							reqd: 1,
+						},
 					],
-				};
-				rooms = [newRoom, ...rooms];
-				chat.rooms = rooms;
-				chat.setAttribute("room-id", r.message.session);
-			},
-		});
+					primary_action_label: __("Start Chat"),
+					primary_action(values) {
+						d.hide();
+						frappe.call({
+							method: "ph_agent.api.chat.create_session",
+							args: { provider_name: values.provider_name },
+							callback: (r) => {
+								if (!r.message) return;
+								const newRoom = {
+									roomId: r.message.session,
+									roomName: r.message.title,
+									users: [
+										{ _id: currentUserId, username: frappe.boot.user.full_name || currentUserId },
+										{ _id: agentId, username: "AI Agent" },
+									],
+								};
+								rooms = [newRoom, ...rooms];
+								chat.rooms = rooms;
+								chat.setAttribute("room-id", r.message.session);
+							},
+						});
+					},
+				});
+				d.show();
+			});
 	}
 	window._phChatCreateSession = createNewSession;
 

@@ -34,12 +34,12 @@ function initPhChat(container, page) {
 	chat.setAttribute("show-audio", "false");
 	chat.setAttribute("rooms-loaded", "false");
 	chat.setAttribute("messages-loaded", "false");
-	chat.setAttribute("room-actions", JSON.stringify([{ name: "deleteRoom", title: __("Delete") }]));
-	container.appendChild(chat);
+	chat.setAttribute("room-actions", JSON.stringify([{ name: "deleteRoom", title: __("Delete") }]));	chat.setAttribute("room-info-enabled", "true");	container.appendChild(chat);
 
 	let rooms = [];
 	let messages = [];
 	let activeRoomId = null;
+	let roomProviders = {}; // roomId -> llm_provider
 
 	// ── Helper: format a Chat Message record ──────────────────────
 	function fmtMsg(m) {
@@ -61,19 +61,22 @@ function initPhChat(container, page) {
 		frappe.db
 			.get_list("Chat Session", {
 				filters: { user: currentUserId, status: ["!=", "Archived"] },
-				fields: ["name", "title", "modified"],
+				fields: ["name", "title", "modified", "llm_provider"],
 				order_by: "modified desc",
 				limit: 50,
 			})
 			.then((sessions) => {
-				rooms = sessions.map((s) => ({
-					roomId: s.name,
-					roomName: s.title,
-					users: [
-						{ _id: currentUserId, username: frappe.boot.user.full_name || currentUserId },
-						{ _id: agentId, username: "AI Agent" },
-					],
-				}));
+				rooms = sessions.map((s) => {
+					roomProviders[s.name] = s.llm_provider;
+					return {
+						roomId: s.name,
+						roomName: s.title + " — " + s.llm_provider,
+						users: [
+							{ _id: currentUserId, username: frappe.boot.user.full_name || currentUserId },
+							{ _id: agentId, username: "AI Agent" },
+						],
+					};
+				});
 				chat.rooms = rooms;
 				chat.setAttribute("rooms-loaded", "true");
 			});
@@ -129,9 +132,10 @@ function initPhChat(container, page) {
 							args: { provider_name: values.provider_name },
 							callback: (r) => {
 								if (!r.message) return;
-								const newRoom = {
-									roomId: r.message.session,
-									roomName: r.message.title,
+							roomProviders[r.message.session] = r.message.llm_provider;
+							const newRoom = {
+								roomId: r.message.session,
+								roomName: r.message.title + " — " + r.message.llm_provider,
 									users: [
 										{ _id: currentUserId, username: frappe.boot.user.full_name || currentUserId },
 										{ _id: agentId, username: "AI Agent" },
@@ -194,6 +198,53 @@ function initPhChat(container, page) {
 				}
 			},
 		});
+	});
+
+	// ── Event: room header clicked → change provider ─────────────
+	chat.addEventListener("room-info", ({ detail: [room] }) => {
+		const roomId = room.roomId;
+		frappe.db
+			.get_list("LLM Provider", {
+				filters: { is_enabled: 1 },
+				fields: ["name", "is_default"],
+				order_by: "is_default desc, name asc",
+			})
+			.then((providers) => {
+				if (!providers.length) return;
+				const currentProvider = roomProviders[roomId] || "";
+				const d = new frappe.ui.Dialog({
+					title: __("Change LLM Provider"),
+					fields: [
+						{
+							fieldname: "provider_name",
+							fieldtype: "Select",
+							label: __("LLM Provider"),
+							options: providers.map((p) => p.name).join("\n"),
+							default: currentProvider,
+							reqd: 1,
+						},
+					],
+					primary_action_label: __("Save"),
+					primary_action(values) {
+						d.hide();
+						if (values.provider_name === currentProvider) return;
+						frappe.call({
+							method: "ph_agent.api.chat.update_session_provider",
+							args: { session: roomId, provider_name: values.provider_name },
+							callback: () => {
+								roomProviders[roomId] = values.provider_name;
+								rooms = rooms.map((r) =>
+									r.roomId === roomId
+										? { ...r, roomName: r.roomName.split(" — ")[0] + " — " + values.provider_name }
+										: r
+								);
+								chat.rooms = rooms;
+							},
+						});
+					},
+				});
+				d.show();
+			});
 	});
 
 	// ── Event: + button → new session ─────────────────────────────

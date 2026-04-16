@@ -3,6 +3,17 @@ from ph_agent.agent.deepseek_agent import get_agent_response
 
 
 @frappe.whitelist()
+def update_session_provider(session, provider_name):
+	"""Change the LLM Provider on an existing Chat Session."""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+	if not frappe.db.exists("LLM Provider", {"name": provider_name, "is_enabled": 1}):
+		frappe.throw(frappe._("LLM Provider {0} not found or is disabled.").format(provider_name))
+	frappe.db.set_value("Chat Session", session, "llm_provider", provider_name)
+	frappe.db.commit()
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
 def create_session(provider_name=None):
 	"""Create a new Chat Session. Uses default LLM Provider if provider_name not specified."""
 	if not provider_name:

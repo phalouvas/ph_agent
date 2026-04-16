@@ -33,6 +33,35 @@ def create_session(provider_name=None):
 
 
 @frappe.whitelist()
+def send_message(session, content):
+	"""Store a user message and return a placeholder agent response."""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+
+	# Store user message
+	frappe.get_doc(
+		{
+			"doctype": "Chat Message",
+			"chat_session": session,
+			"sender_type": "User",
+			"content": content,
+		}
+	).insert(ignore_permissions=False)
+
+	# Placeholder agent response
+	agent_reply = frappe.get_doc(
+		{
+			"doctype": "Chat Message",
+			"chat_session": session,
+			"sender_type": "Agent",
+			"content": "_Agent response coming soon..._",
+		}
+	).insert(ignore_permissions=False)
+
+	frappe.db.commit()
+	return {"status": "ok", "agent_message": agent_reply.name}
+
+
+@frappe.whitelist()
 def get_history(session):
 	"""Return all messages for a Chat Session, ordered by creation time."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)

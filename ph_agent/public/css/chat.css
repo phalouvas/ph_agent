@@ -1,0 +1,22 @@
+/* Chat page container */
+.page-content-wrapper .page-content {
+	padding: 0;
+}
+
+/* Remove default page padding so chat fills the space */
+[data-page-route="chat"] .page-content-wrapper {
+	padding: 0;
+	overflow: hidden;
+}
+
+[data-page-route="chat"] .page-content {
+	padding: 0;
+	overflow: hidden;
+}
+
+/* Make chat component fill its container */
+vue-advanced-chat {
+	display: block;
+	height: 100%;
+	font-family: var(--font-stack);
+}

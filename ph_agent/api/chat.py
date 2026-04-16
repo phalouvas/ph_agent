@@ -1,4 +1,5 @@
 import frappe
+from ph_agent.agent.deepseek_agent import get_agent_response
 
 
 @frappe.whitelist()
@@ -34,7 +35,7 @@ def create_session(provider_name=None):
 
 @frappe.whitelist()
 def send_message(session, content):
-	"""Store a user message and return a placeholder agent response."""
+	"""Store a user message, call the LLM agent, and store the response."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
 	# Store user message
@@ -46,19 +47,48 @@ def send_message(session, content):
 			"content": content,
 		}
 	).insert(ignore_permissions=False)
+	frappe.db.commit()
 
-	# Placeholder agent response
-	agent_reply = frappe.get_doc(
+	# Call agent
+	reply, input_tokens, output_tokens = get_agent_response(session, content)
+
+	# Store agent response
+	agent_msg = frappe.get_doc(
 		{
 			"doctype": "Chat Message",
 			"chat_session": session,
 			"sender_type": "Agent",
-			"content": "_Agent response coming soon..._",
+			"content": reply,
 		}
 	).insert(ignore_permissions=False)
 
+	# Update token counts on the session
+	frappe.db.set_value(
+		"Chat Session",
+		session,
+		{
+			"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
+			"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
+		},
+	)
+
 	frappe.db.commit()
-	return {"status": "ok", "agent_message": agent_reply.name}
+
+	# Emit real-time event to the session room
+	frappe.publish_realtime(
+		event="new_message",
+		message={
+			"session": session,
+			"name": agent_msg.name,
+			"sender_type": "Agent",
+			"content": reply,
+			"creation": str(agent_msg.creation),
+		},
+		room=f"chat_session_{session}",
+		after_commit=True,
+	)
+
+	return {"status": "ok", "agent_message": agent_msg.name, "reply": reply}
 
 
 @frappe.whitelist()

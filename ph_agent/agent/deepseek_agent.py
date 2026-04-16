@@ -76,3 +76,50 @@ def get_agent_response(session_name: str, user_message: str) -> tuple[str, int, 
 	output_tokens = result.raw_responses[-1].usage.output_tokens if result.raw_responses else 0
 
 	return reply, input_tokens, output_tokens
+
+
+def generate_session_title(session_name: str, user_message: str, agent_reply: str) -> str:
+	"""
+	Ask the LLM to generate a short 5-8 word title that summarises the conversation.
+	Returns the title string, or an empty string on failure.
+	"""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		return ""
+
+	openai_client = AsyncOpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url,
+	)
+
+	model = OpenAIChatCompletionsModel(
+		model=provider_doc.default_model,
+		openai_client=openai_client,
+	)
+
+	title_agent = Agent(
+		name="Title Generator",
+		instructions=(
+			"Generate a concise 5-8 word title that summarises the following conversation. "
+			"Return only the title text — no quotes, no punctuation at the end, no explanation."
+		),
+		model=model,
+	)
+
+	prompt = f"User: {user_message}\nAssistant: {agent_reply}"
+
+	try:
+		result = asyncio.run(
+			Runner.run(
+				title_agent,
+				input=prompt,
+				run_config=RunConfig(tracing_disabled=True),
+			)
+		)
+		return (result.final_output or "").strip()
+	except Exception:
+		logger.exception("Title generation failed for session %s", session_name)
+		return ""

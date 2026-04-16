@@ -1,5 +1,5 @@
 import frappe
-from ph_agent.agent.deepseek_agent import get_agent_response
+from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_response
 
 
 @frappe.whitelist()
@@ -108,6 +108,22 @@ def send_message(session, content, file_names=None):
 	)
 
 	frappe.db.commit()
+
+	# Auto-generate a title after the first exchange (title is still default "New Chat")
+	current_title = frappe.db.get_value("Chat Session", session, "title")
+	if current_title == "New Chat":
+		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
+		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
+			new_title = generate_session_title(session, content, reply)
+			if new_title:
+				frappe.db.set_value("Chat Session", session, "title", new_title)
+				frappe.db.commit()
+				frappe.publish_realtime(
+					event="session_renamed",
+					message={"session": session, "title": new_title},
+					user=frappe.session.user,
+					after_commit=True,
+				)
 
 	# Emit real-time event to the current user
 	frappe.publish_realtime(

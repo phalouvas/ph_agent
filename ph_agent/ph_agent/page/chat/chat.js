@@ -341,6 +341,16 @@ function initPhChat(container, page) {
 		}
 	});
 
+	// ── Real-time: session title auto-generated ───────────────────
+	frappe.realtime.on("session_renamed", (data) => {
+		rooms = rooms.map((r) => {
+			if (r.roomId !== data.session) return r;
+			const provider = roomProviders[r.roomId] || "";
+			return { ...r, roomName: data.title + (provider ? " — " + provider : "") };
+		});
+		chat.rooms = rooms;
+	});
+
 	// ── Real-time: agent reply arrives ────────────────────────────
 	frappe.realtime.on("new_message", (data) => {
 		if (data.session !== activeRoomId) return;

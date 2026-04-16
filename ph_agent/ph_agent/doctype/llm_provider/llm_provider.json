@@ -1,0 +1,91 @@
+{
+	"actions": [],
+	"allow_rename": 1,
+	"autoname": "field:provider_name",
+	"creation": "2026-04-16 00:00:00.000000",
+	"doctype": "DocType",
+	"engine": "InnoDB",
+	"field_order": [
+		"provider_name",
+		"is_enabled",
+		"is_default",
+		"section_api",
+		"api_key",
+		"api_url",
+		"default_model"
+	],
+	"fields": [
+		{
+			"fieldname": "provider_name",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Provider Name",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"default": "1",
+			"fieldname": "is_enabled",
+			"fieldtype": "Check",
+			"in_list_view": 1,
+			"label": "Enabled"
+		},
+		{
+			"default": "0",
+			"fieldname": "is_default",
+			"fieldtype": "Check",
+			"in_list_view": 1,
+			"label": "Default"
+		},
+		{
+			"fieldname": "section_api",
+			"fieldtype": "Section Break",
+			"label": "API Configuration"
+		},
+		{
+			"fieldname": "api_key",
+			"fieldtype": "Password",
+			"label": "API Key",
+			"reqd": 1
+		},
+		{
+			"default": "https://api.deepseek.com/v1",
+			"fieldname": "api_url",
+			"fieldtype": "Data",
+			"label": "API URL",
+			"reqd": 1
+		},
+		{
+			"default": "deepseek-chat",
+			"fieldname": "default_model",
+			"fieldtype": "Data",
+			"label": "Default Model",
+			"reqd": 1
+		}
+	],
+	"links": [],
+	"modified": "2026-04-16 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "PH Agent",
+	"name": "LLM Provider",
+	"naming_rule": "By fieldname",
+	"owner": "Administrator",
+	"permissions": [
+		{
+			"create": 1,
+			"delete": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "System Manager",
+			"share": 1,
+			"write": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": [],
+	"track_changes": 1
+}

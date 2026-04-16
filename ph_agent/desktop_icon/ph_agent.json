@@ -1,0 +1,21 @@
+{
+ "app": "ph_agent",
+ "bg_color": "gray",
+ "creation": "2026-04-16 15:13:45.359526",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon_type": "Link",
+ "idx": 0,
+ "label": "PH Agent",
+ "link_to": "PH Agent",
+ "link_type": "Workspace Sidebar",
+ "logo_url": "/assets/ph_agent/images/logo.svg",
+ "modified": "2026-04-16 15:13:45.359526",
+ "modified_by": "Administrator",
+ "name": "PH Agent",
+ "owner": "Administrator",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}

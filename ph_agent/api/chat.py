@@ -1,5 +1,6 @@
 import frappe
 from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_response
+from ph_agent.utils.pdf import extract_pdf_text
 
 
 @frappe.whitelist()
@@ -71,9 +72,21 @@ def send_message(session, content, file_names=None):
 
 	frappe.db.commit()
 
+	# Build enriched content for the agent: append extracted PDF text from attachments
+	agent_content = content
+	if file_names:
+		names = frappe.parse_json(file_names) if isinstance(file_names, str) else file_names
+		pdf_texts = []
+		for file_name in names:
+			text = extract_pdf_text(file_name)
+			if text:
+				pdf_texts.append(f"[PDF: {frappe.db.get_value('File', file_name, 'file_name')}]\n{text}")
+		if pdf_texts:
+			agent_content = content + "\n\n" + "\n\n".join(pdf_texts)
+
 	# Call agent
 	try:
-		reply, input_tokens, output_tokens = get_agent_response(session, content)
+		reply, input_tokens, output_tokens = get_agent_response(session, agent_content)
 	except frappe.exceptions.ValidationError as e:
 		# Return error as a failed agent message so the UI can show the failure indicator
 		failed_msg = frappe.get_doc(
@@ -114,7 +127,7 @@ def send_message(session, content, file_names=None):
 	if current_title == "New Chat":
 		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
 		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
-			new_title = generate_session_title(session, content, reply)
+			new_title = generate_session_title(session, agent_content, reply)
 			if new_title:
 				frappe.db.set_value("Chat Session", session, "title", new_title)
 				frappe.db.commit()

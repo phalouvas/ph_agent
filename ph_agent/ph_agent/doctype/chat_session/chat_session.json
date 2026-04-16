@@ -1,0 +1,100 @@
+{
+	"actions": [],
+	"autoname": "hash",
+	"creation": "2026-04-16 00:00:00.000000",
+	"doctype": "DocType",
+	"engine": "InnoDB",
+	"field_order": [
+		"title",
+		"user",
+		"llm_provider",
+		"status",
+		"column_break_1",
+		"input_tokens",
+		"output_tokens"
+	],
+	"fields": [
+		{
+			"default": "New Chat",
+			"fieldname": "title",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Title",
+			"reqd": 1
+		},
+		{
+			"default": "__user",
+			"fieldname": "user",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "User",
+			"options": "User",
+			"reqd": 1
+		},
+		{
+			"fieldname": "llm_provider",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "LLM Provider",
+			"options": "LLM Provider",
+			"reqd": 1
+		},
+		{
+			"default": "Open",
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"in_list_view": 1,
+			"label": "Status",
+			"options": "Open\nClosed\nArchived",
+			"reqd": 1
+		},
+		{
+			"fieldname": "column_break_1",
+			"fieldtype": "Column Break"
+		},
+		{
+			"default": "0",
+			"fieldname": "input_tokens",
+			"fieldtype": "Int",
+			"label": "Input Tokens"
+		},
+		{
+			"default": "0",
+			"fieldname": "output_tokens",
+			"fieldtype": "Int",
+			"label": "Output Tokens"
+		}
+	],
+	"links": [],
+	"modified": "2026-04-16 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "PH Agent",
+	"name": "Chat Session",
+	"owner": "Administrator",
+	"permissions": [
+		{
+			"create": 1,
+			"delete": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "System Manager",
+			"share": 1,
+			"write": 1
+		},
+		{
+			"create": 1,
+			"delete": 0,
+			"read": 1,
+			"role": "All",
+			"write": 1,
+			"if_owner": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": [],
+	"track_changes": 0
+}

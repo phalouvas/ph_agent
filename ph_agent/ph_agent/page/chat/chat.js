@@ -48,6 +48,18 @@ function initPhChat(container, page, $status) {
 	// firing while the user is typing inside the chat component.
 	container.addEventListener("keydown", (e) => e.stopPropagation());
 
+	// Hide the Regenerate action on the current user's own messages.
+	// The library shows ALL actions for own messages with no built-in exclusion flag.
+	// We use a MutationObserver so this works in both shadow DOM and light DOM.
+	const _regenRoot = chat.shadowRoot || container;
+	new MutationObserver(() => {
+		_regenRoot.querySelectorAll(".vac-menu-options:not(.vac-menu-left) .vac-menu-item").forEach((el) => {
+			if (el.textContent.trim() === __("Regenerate")) {
+				el.parentElement.style.display = "none";
+			}
+		});
+	}).observe(_regenRoot, { childList: true, subtree: true });
+
 	let rooms = [];
 
 	// ── Status bar helpers ────────────────────────────────────────

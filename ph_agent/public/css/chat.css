@@ -20,7 +20,3 @@ vue-advanced-chat {
 	height: 100%;
 	font-family: var(--font-stack);
 }
-/* Hide the Regenerate action on the current user's own messages */
-.vac-offset-current [data-action="regenerateMessage"] {
-        display: none !important;
-}

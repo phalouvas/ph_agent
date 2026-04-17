@@ -150,7 +150,7 @@ def get_history(session):
 	messages = frappe.get_all(
 		"Chat Message",
 		filters={"chat_session": session},
-		fields=["name", "sender_type", "content", "creation"],
+		fields=["name", "sender_type", "content", "creation", "is_edited"],
 		order_by="creation asc",
 	)
 	for msg in messages:
@@ -170,3 +170,195 @@ def delete_session(session):
 	frappe.delete_doc("Chat Session", session, ignore_permissions=False)
 	frappe.db.commit()
 	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def edit_message(message_id, content):
+	"""Edit a user message, delete all subsequent messages, and re-run the agent."""
+	msg = frappe.get_doc("Chat Message", message_id)
+	if msg.sender_type != "User":
+		frappe.throw(frappe._("Only user messages can be edited."))
+	if msg.owner != frappe.session.user:
+		frappe.throw(frappe._("You can only edit your own messages."), frappe.exceptions.PermissionError)
+	frappe.has_permission("Chat Session", doc=msg.chat_session, throw=True)
+
+	session = msg.chat_session
+	lock_key = f"ph_agent:lock:{session}"
+	if frappe.cache().get_value(lock_key):
+		frappe.throw(
+			frappe._("Another message is already being processed. Please wait."),
+			frappe.exceptions.ValidationError,
+		)
+
+	# Save the edited content
+	msg.content = content
+	msg.is_edited = 1
+	msg.edited_at = frappe.utils.now_datetime()
+	msg.edited_by = frappe.session.user
+	msg.save(ignore_permissions=True)
+
+	# Delete ALL messages that came after this one
+	subsequent = frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session, "creation": [">", msg.creation]},
+		fields=["name"],
+		order_by="creation asc",
+	)
+	deleted_ids = []
+	for subsequent_msg in subsequent:
+		deleted_ids.append(subsequent_msg.name)
+		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": subsequent_msg.name})
+		frappe.delete_doc("Chat Message", subsequent_msg.name, ignore_permissions=True)
+
+	frappe.db.commit()
+
+	frappe.publish_realtime(
+		event="message_edited",
+		message={
+			"session": session,
+			"message_id": message_id,
+			"content": content,
+			"is_edited": True,
+			"deleted_ids": deleted_ids,
+		},
+		user=frappe.session.user,
+	)
+
+	# Re-enqueue the agent with the updated content
+	file_names = frappe.get_all(
+		"File",
+		filters={"attached_to_doctype": "Chat Message", "attached_to_name": message_id},
+		pluck="name",
+	)
+	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
+	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
+	_emit_status(session, frappe._("Calling AI…"))
+
+	job = frappe.enqueue(
+		"ph_agent.api.agent_jobs._call_agent_background",
+		session=session,
+		user_msg_name=message_id,
+		content=content,
+		file_names=file_names,
+		enqueued_by=frappe.session.user,
+		queue="long",
+		timeout=600,
+	)
+	frappe.cache().set_value(f"ph_agent:job:{session}", job.id, expires_in_sec=600)
+
+	return {"status": "queued", "deleted_ids": deleted_ids}
+
+
+@frappe.whitelist()
+def delete_message(message_id):
+	"""Delete a Chat Message. Users can delete their own messages; agent messages can be deleted by anyone with session access."""
+	msg = frappe.get_doc("Chat Message", message_id)
+	frappe.has_permission("Chat Session", doc=msg.chat_session, throw=True)
+
+	# For user messages, only the owner can delete
+	if msg.sender_type == "User" and msg.owner != frappe.session.user:
+		frappe.has_permission("Chat Session", ptype="write", doc=msg.chat_session, throw=True)
+
+	session = msg.chat_session
+	frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
+	frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
+	frappe.db.commit()
+
+	frappe.publish_realtime(
+		event="message_deleted",
+		message={"session": session, "message_id": message_id},
+		user=frappe.session.user,
+	)
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def delete_messages(message_ids):
+	"""Batch delete multiple Chat Messages."""
+	ids = frappe.parse_json(message_ids) if isinstance(message_ids, str) else message_ids
+	sessions_affected = set()
+	deleted_by_session = {}
+
+	for message_id in ids:
+		msg = frappe.get_doc("Chat Message", message_id)
+		frappe.has_permission("Chat Session", doc=msg.chat_session, throw=True)
+		if msg.sender_type == "User" and msg.owner != frappe.session.user:
+			frappe.has_permission("Chat Session", ptype="write", doc=msg.chat_session, throw=True)
+		sessions_affected.add(msg.chat_session)
+		deleted_by_session.setdefault(msg.chat_session, []).append(message_id)
+		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
+		frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
+
+	frappe.db.commit()
+
+	for session in sessions_affected:
+		frappe.publish_realtime(
+			event="messages_deleted",
+			message={"session": session, "message_ids": deleted_by_session[session]},
+			user=frappe.session.user,
+		)
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def regenerate_message(message_id):
+	"""Delete an agent message and re-run the agent for the preceding user message."""
+	msg = frappe.get_doc("Chat Message", message_id)
+	if msg.sender_type != "Agent":
+		frappe.throw(frappe._("Only agent messages can be regenerated."))
+	frappe.has_permission("Chat Session", doc=msg.chat_session, throw=True)
+
+	session = msg.chat_session
+	lock_key = f"ph_agent:lock:{session}"
+	if frappe.cache().get_value(lock_key):
+		frappe.throw(
+			frappe._("Another message is already being processed. Please wait."),
+			frappe.exceptions.ValidationError,
+		)
+
+	# Find the preceding user message
+	preceding = frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session, "creation": ["<", msg.creation], "sender_type": "User"},
+		fields=["name", "content", "creation"],
+		order_by="creation desc",
+		limit=1,
+	)
+	if not preceding:
+		frappe.throw(frappe._("No preceding user message found to regenerate from."))
+
+	user_msg = preceding[0]
+	file_names = frappe.get_all(
+		"File",
+		filters={"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},
+		pluck="name",
+	)
+
+	# Delete the agent message
+	frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
+	frappe.db.commit()
+
+	frappe.publish_realtime(
+		event="message_deleted",
+		message={"session": session, "message_id": message_id},
+		user=frappe.session.user,
+	)
+
+	# Set lock and enqueue agent
+	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
+	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
+	_emit_status(session, frappe._("Calling AI…"))
+
+	job = frappe.enqueue(
+		"ph_agent.api.agent_jobs._call_agent_background",
+		session=session,
+		user_msg_name=user_msg.name,
+		content=user_msg.content,
+		file_names=file_names,
+		enqueued_by=frappe.session.user,
+		queue="long",
+		timeout=600,
+	)
+	frappe.cache().set_value(f"ph_agent:job:{session}", job.id, expires_in_sec=600)
+
+	return {"status": "queued"}

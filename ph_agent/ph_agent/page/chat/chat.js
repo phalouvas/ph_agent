@@ -36,7 +36,13 @@ function initPhChat(container, page, $status) {
 	chat.setAttribute("show-audio", "false");
 	chat.setAttribute("rooms-loaded", "false");
 	chat.setAttribute("messages-loaded", "false");
-	chat.setAttribute("room-actions", JSON.stringify([{ name: "deleteRoom", title: __("Delete") }]));	chat.setAttribute("room-info-enabled", "true");	container.appendChild(chat);
+	chat.setAttribute("room-actions", JSON.stringify([{ name: "deleteRoom", title: __("Delete") }]));	chat.setAttribute("message-actions", JSON.stringify([
+		{ name: "editMessage", title: __("Edit"), onlyMe: true },
+		{ name: "deleteMessage", title: __("Delete") },
+		{ name: "selectMessages", title: __("Select") },
+		{ name: "regenerateMessage", title: __("Regenerate") },
+	]));
+	chat.setAttribute("message-selection-actions", JSON.stringify([{ name: "deleteMessages", title: __("Delete") }]));	chat.setAttribute("room-info-enabled", "true");	container.appendChild(chat);
 
 	// Prevent Frappe global keyboard shortcuts (e.g. Shift+/ = "?") from
 	// firing while the user is typing inside the chat component.
@@ -79,6 +85,7 @@ function initPhChat(container, page, $status) {
 			timestamp: dt.toTimeString().slice(0, 5),
 			date: dt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
 			saved: true,
+			edited: !!m.is_edited,
 			files: files.length ? files : undefined,
 		};
 	}
@@ -216,9 +223,9 @@ function initPhChat(container, page, $status) {
 		});
 	});
 
-	// ── Event: user sends a message ───────────────────────────────
-	chat.addEventListener("send-message", ({ detail: [{ roomId, content, files }] }) => {
-		// Block new messages while one is already being processed
+	// ── Event: user sends a message ─────────────────────────────
+	chat.addEventListener("send-message", ({ detail: [{ roomId, content, files, replyMessage }] }) => {
+		// ── New message path ───────────────────────────────────────
 		if (isProcessing) {
 			frappe.show_alert({ message: __("Please wait for the current response to finish."), indicator: "orange" });
 			return;
@@ -263,9 +270,11 @@ function initPhChat(container, page, $status) {
 					method: "ph_agent.api.chat.send_message",
 					args: { session: roomId, content, file_names: fileNames },
 					callback: (r) => {
-						// Job was queued successfully — mark user message as saved
+						// Job was queued successfully — replace temp ID with real persisted ID
 						if (r.message && r.message.status === "queued") {
-							messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
+							messages = messages.map((m) =>
+								m._id === tempId ? { ...m, _id: r.message.user_message, saved: true } : m
+							);
 							chat.messages = messages;
 						}
 					},
@@ -287,6 +296,101 @@ function initPhChat(container, page, $status) {
 				setProcessing(false);
 				frappe.show_alert({ message: __("File upload failed. Please try again."), indicator: "red" });
 			});
+	});
+
+	// ── Event: edit a message ─────────────────────────────────────
+	chat.addEventListener("edit-message", ({ detail: [{ roomId, messageId, newContent }] }) => {
+		if (isProcessing) {
+			frappe.show_alert({ message: __("Please wait for the current response to finish."), indicator: "orange" });
+			return;
+		}
+		setProcessing(true);
+		frappe.call({
+			method: "ph_agent.api.chat.edit_message",
+			args: { message_id: messageId, content: newContent },
+			callback: (r) => {
+				if (!r.message || r.message.status !== "queued") return;
+				// Update the edited user message and remove all subsequent messages
+				const deletedSet = new Set(r.message.deleted_ids || []);
+				messages = messages
+					.map((m) => (m._id === messageId ? { ...m, content: newContent, edited: true } : m))
+					.filter((m) => !deletedSet.has(m._id));
+				chat.messages = messages;
+				// Show typing indicator while agent re-runs
+				rooms = rooms.map((r) =>
+					r.roomId === roomId ? { ...r, typingUsers: [{ _id: agentId, username: "AI Agent" }] } : r
+				);
+				chat.rooms = rooms;
+			},
+			error: () => {
+				setProcessing(false);
+				frappe.show_alert({ message: __("Failed to edit message."), indicator: "red" });
+			},
+		});
+	});
+
+	// ── Event: delete a single message ───────────────────────────
+	chat.addEventListener("delete-message", ({ detail: [{ roomId, message }] }) => {
+		frappe.confirm(__("Delete this message?"), () => {
+			frappe.call({
+				method: "ph_agent.api.chat.delete_message",
+				args: { message_id: message._id },
+				callback: () => {
+					messages = messages.filter((m) => m._id !== message._id);
+					chat.messages = messages;
+				},
+				error: () => {
+					frappe.show_alert({ message: __("Failed to delete message."), indicator: "red" });
+				},
+			});
+		});
+	});
+
+	// ── Event: bulk-delete selected messages ─────────────────────
+	chat.addEventListener("message-selection-action-handler", ({ detail: [{ roomId, action, messages: selectedMsgs }] }) => {
+		if (action.name === "deleteMessages") {
+			frappe.confirm(__("Delete {0} selected message(s)?", [selectedMsgs.length]), () => {
+				const ids = selectedMsgs.map((m) => m._id);
+				frappe.call({
+					method: "ph_agent.api.chat.delete_messages",
+					args: { message_ids: ids },
+					callback: () => {
+						messages = messages.filter((m) => !ids.includes(m._id));
+						chat.messages = messages;
+					},
+					error: () => {
+						frappe.show_alert({ message: __("Failed to delete selected messages."), indicator: "red" });
+					},
+				});
+			});
+		}
+	});
+
+	// ── Event: custom message action (regenerate) ─────────────────
+	chat.addEventListener("message-action-handler", ({ detail: [{ roomId, action, message }] }) => {
+		if (action.name === "regenerateMessage") {
+			if (message.senderId !== agentId) return;
+			if (isProcessing) {
+				frappe.show_alert({ message: __("Please wait for the current response to finish."), indicator: "orange" });
+				return;
+			}
+			frappe.call({
+				method: "ph_agent.api.chat.regenerate_message",
+				args: { message_id: message._id },
+				callback: () => {
+					messages = messages.filter((m) => m._id !== message._id);
+					chat.messages = messages;
+					setProcessing(true);
+					rooms = rooms.map((r) =>
+						r.roomId === roomId ? { ...r, typingUsers: [{ _id: agentId, username: "AI Agent" }] } : r
+					);
+					chat.rooms = rooms;
+				},
+				error: () => {
+					frappe.show_alert({ message: __("Failed to regenerate message."), indicator: "red" });
+				},
+			});
+		}
 	});
 
 	// ── Event: room header clicked → change provider ─────────────
@@ -409,6 +513,30 @@ function initPhChat(container, page, $status) {
 		setStatus(__("Generation stopped"));
 		setProcessing(false);
 		setTimeout(() => setStatus(""), 2000);
+	});
+
+	// ── Real-time: message edited ─────────────────────────────────
+	frappe.realtime.on("message_edited", (data) => {
+		if (data.session !== activeRoomId) return;
+		const deletedSet = new Set(data.deleted_ids || []);
+		messages = messages
+			.map((m) => (m._id === data.message_id ? { ...m, content: data.content, edited: true } : m))
+			.filter((m) => !deletedSet.has(m._id));
+		chat.messages = messages;
+	});
+
+	// ── Real-time: single message deleted ─────────────────────────
+	frappe.realtime.on("message_deleted", (data) => {
+		if (data.session !== activeRoomId) return;
+		messages = messages.filter((m) => m._id !== data.message_id);
+		chat.messages = messages;
+	});
+
+	// ── Real-time: batch messages deleted ─────────────────────────
+	frappe.realtime.on("messages_deleted", (data) => {
+		if (data.session !== activeRoomId) return;
+		messages = messages.filter((m) => !data.message_ids.includes(m._id));
+		chat.messages = messages;
 	});
 
 	// ── Real-time: agent reply arrives ────────────────────────────

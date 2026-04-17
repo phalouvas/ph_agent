@@ -7,7 +7,10 @@
  "field_order": [
   "chat_session",
   "sender_type",
-  "content"
+  "content",
+  "is_edited",
+  "edited_at",
+  "edited_by"
  ],
  "fields": [
   {
@@ -33,6 +36,25 @@
    "fieldtype": "Markdown Editor",
    "label": "Content",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_edited",
+   "fieldtype": "Check",
+   "label": "Is Edited"
+  },
+  {
+   "fieldname": "edited_at",
+   "fieldtype": "Datetime",
+   "label": "Edited At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "edited_by",
+   "fieldtype": "Link",
+   "label": "Edited By",
+   "options": "User",
+   "read_only": 1
   }
  ],
  "links": [],

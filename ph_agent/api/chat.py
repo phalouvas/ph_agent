@@ -57,6 +57,15 @@ def send_message(session, content, file_names=None):
 	"""Store a user message and enqueue the LLM agent response as a background job."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
+	# Per-session lock: prevent concurrent processing
+	lock_key = f"ph_agent:lock:{session}"
+	if frappe.cache().get_value(lock_key):
+		frappe.throw(frappe._("Another message is already being processed. Please wait."), frappe.exceptions.ValidationError)
+	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
+
+	# Clear any stale cancel flag from a previous Stop (e.g. if the worker was killed mid-flight)
+	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
+
 	# Store user message
 	user_msg = frappe.get_doc(
 		{
@@ -116,6 +125,9 @@ def cancel_generation(session):
 		except Exception:
 			pass  # Best-effort; the cooperative flag below acts as fallback
 		frappe.cache().delete_value(f"ph_agent:job:{session}")
+
+	# Release the per-session processing lock
+	frappe.cache().delete_value(f"ph_agent:lock:{session}")
 
 	# Set cooperative cancellation flag for in-progress PDF extraction checks
 	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)

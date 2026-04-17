@@ -1,3 +1,5 @@
+import asyncio
+
 import frappe
 from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_response
 from ph_agent.utils.pdf import extract_pdf_text
@@ -16,13 +18,18 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			user=enqueued_by,
 		)
 
+	lock_key = f"ph_agent:lock:{session}"
 	cancel_key = f"ph_agent:cancel:{session}"
+
+	def release_lock():
+		frappe.cache().delete_value(lock_key)
 
 	def is_cancelled():
 		return bool(frappe.cache().get_value(cancel_key))
 
 	# Check for cancellation before doing any work
 	if is_cancelled():
+		release_lock()
 		frappe.cache().delete_value(cancel_key)
 		emit_status("")
 		frappe.publish_realtime(
@@ -39,6 +46,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		emit_status(frappe._("Extracting PDF text…"))
 		for file_name in file_names:
 			if is_cancelled():
+				release_lock()
 				frappe.cache().delete_value(cancel_key)
 				emit_status("")
 				frappe.publish_realtime(
@@ -56,7 +64,17 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	emit_status(frappe._("Calling AI…"))
 
 	try:
-		reply, input_tokens, output_tokens = get_agent_response(session, agent_content)
+		reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+	except asyncio.CancelledError:
+		release_lock()
+		frappe.cache().delete_value(cancel_key)
+		emit_status("")
+		frappe.publish_realtime(
+			event="generation_cancelled",
+			message={"session": session},
+			user=enqueued_by,
+		)
+		return
 	except frappe.exceptions.ValidationError as e:
 		failed_msg = frappe.get_doc(
 			{
@@ -67,6 +85,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			}
 		).insert(ignore_permissions=False)
 		frappe.db.commit()
+		release_lock()
 		emit_status("")
 		frappe.publish_realtime(
 			event="new_message",
@@ -117,7 +136,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					user=enqueued_by,
 				)
 
-	# Clear the status indicator and deliver the reply
+	# Release lock, clear the status indicator and deliver the reply
+	release_lock()
 	emit_status("")
 	frappe.publish_realtime(
 		event="new_message",

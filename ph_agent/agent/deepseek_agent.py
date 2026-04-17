@@ -9,11 +9,12 @@ from openai import AsyncOpenAI, AuthenticationError, RateLimitError
 logger = logging.getLogger(__name__)
 
 
-def get_agent_response(session_name: str, user_message: str) -> tuple[str, int, int]:
+def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int]:
 	"""
 	Call the LLM via agent-framework using the provider linked to the chat session.
 	Returns (reply_text, input_tokens, output_tokens).
 	Raises frappe.ValidationError with a user-friendly message on failure.
+	If cancel_check() returns True before or after the API call, raises asyncio.CancelledError.
 	"""
 	session = frappe.get_doc("Chat Session", session_name)
 	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
@@ -68,6 +69,10 @@ def get_agent_response(session_name: str, user_message: str) -> tuple[str, int, 
 	history.append({"role": "user", "content": user_message})
 
 	try:
+		# Check cancellation before starting the expensive API call
+		if cancel_check and cancel_check():
+			raise asyncio.CancelledError()
+
 		result = asyncio.run(
 			Runner.run(
 				agent,
@@ -75,6 +80,13 @@ def get_agent_response(session_name: str, user_message: str) -> tuple[str, int, 
 				run_config=run_config,
 			)
 		)
+
+		# Check cancellation after the API call returns — discard result if cancelled
+		if cancel_check and cancel_check():
+			raise asyncio.CancelledError()
+
+	except asyncio.CancelledError:
+		raise
 	except AuthenticationError:
 		frappe.throw(
 			frappe._("Authentication failed for provider {0}. Please check the API key.").format(provider_doc.name)

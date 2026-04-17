@@ -218,6 +218,13 @@ function initPhChat(container, page, $status) {
 
 	// ── Event: user sends a message ───────────────────────────────
 	chat.addEventListener("send-message", ({ detail: [{ roomId, content, files }] }) => {
+		// Block new messages while one is already being processed
+		if (isProcessing) {
+			frappe.show_alert({ message: __("Please wait for the current response to finish."), indicator: "orange" });
+			return;
+		}
+		setProcessing(true);
+
 		// Optimistic user bubble with local file previews
 		const tempId = "temp_" + Date.now();
 		const localFiles = (files || []).map((f) => ({
@@ -267,6 +274,7 @@ function initPhChat(container, page, $status) {
 							m._id === tempId ? { ...m, failure: true } : m
 						);
 						chat.messages = messages;
+						setProcessing(false);
 						frappe.show_alert({ message: __("Failed to send message. Please try again."), indicator: "red" });
 					},
 				});
@@ -276,6 +284,7 @@ function initPhChat(container, page, $status) {
 					m._id === tempId ? { ...m, failure: true } : m
 				);
 				chat.messages = messages;
+				setProcessing(false);
 				frappe.show_alert({ message: __("File upload failed. Please try again."), indicator: "red" });
 			});
 	});

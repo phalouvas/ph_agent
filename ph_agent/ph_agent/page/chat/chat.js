@@ -10,20 +10,22 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	}, "add");
 
 	// Mount container inside page main area
-	const $container = $('<div style="height: calc(100vh - 100px);"></div>');
+	const $container = $('<div style="height: calc(100vh - 120px);"></div>');
+	const $status = $('<div id="ph-chat-status" style="height:20px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:20px;display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}</style>');
 	$(page.main).append($container);
+	$(page.main).append($status);
 
 	// Load vue-advanced-chat from CDN, then initialise
 	$.getScript(
 		"https://cdn.jsdelivr.net/npm/vue-advanced-chat@2.0.4/dist/vue-advanced-chat.umd.js",
 		() => {
 			window["vue-advanced-chat"].register();
-			initPhChat($container[0], page);
+			initPhChat($container[0], page, $status);
 		}
 	);
 };
 
-function initPhChat(container, page) {
+function initPhChat(container, page, $status) {
 	const currentUserId = frappe.session.user;
 	const agentId = "ph_agent";
 
@@ -41,6 +43,12 @@ function initPhChat(container, page) {
 	container.addEventListener("keydown", (e) => e.stopPropagation());
 
 	let rooms = [];
+
+	// ── Status bar helper ─────────────────────────────────────────
+	function setStatus(text) {
+		$status.find(".ph-status-text").text(text || "");
+		$status.find(".ph-status-spinner").css("display", text ? "inline-block" : "none");
+	}
 	let messages = [];
 	let activeRoomId = null;
 	let roomProviders = {}; // roomId -> llm_provider
@@ -224,6 +232,12 @@ function initPhChat(container, page) {
 		];
 		chat.messages = messages;
 
+		// Show typing indicator
+		rooms = rooms.map((r) =>
+			r.roomId === roomId ? { ...r, typingUsers: [{ _id: agentId, username: "AI Agent" }] } : r
+		);
+		chat.rooms = rooms;
+
 		// Upload files first (if any), then send the message
 		const uploadPromises = (files || []).map((f) => uploadFile(f));
 		Promise.all(uploadPromises)
@@ -355,9 +369,28 @@ function initPhChat(container, page) {
 		chat.rooms = rooms;
 	});
 
+	// ── Real-time: agent status updates ──────────────────────────
+	frappe.realtime.on("agent_status", (data) => {
+		if (data.session !== activeRoomId) return;
+		setStatus(data.status || "");
+		if (!data.status) {
+			// Clear typing indicator when status is cleared
+			rooms = rooms.map((r) =>
+				r.roomId === activeRoomId ? { ...r, typingUsers: [] } : r
+			);
+			chat.rooms = rooms;
+		}
+	});
+
 	// ── Real-time: agent reply arrives ────────────────────────────
 	frappe.realtime.on("new_message", (data) => {
 		if (data.session !== activeRoomId) return;
+		// Clear typing indicator and status
+		rooms = rooms.map((r) =>
+			r.roomId === activeRoomId ? { ...r, typingUsers: [] } : r
+		);
+		chat.rooms = rooms;
+		setStatus("");
 		const dt = new Date((data.creation || "").replace(" ", "T"));
 		messages = [
 			...messages,

@@ -3,6 +3,15 @@ from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_resp
 from ph_agent.utils.pdf import extract_pdf_text
 
 
+def _emit_status(session, message):
+	"""Push a transient status string to the session owner's browser."""
+	frappe.publish_realtime(
+		event="agent_status",
+		message={"session": session, "status": message},
+		user=frappe.session.user,
+	)
+
+
 @frappe.whitelist()
 def update_session_provider(session, provider_name):
 	"""Change the LLM Provider on an existing Chat Session."""
@@ -77,6 +86,7 @@ def send_message(session, content, file_names=None):
 	if file_names:
 		names = frappe.parse_json(file_names) if isinstance(file_names, str) else file_names
 		pdf_texts = []
+		_emit_status(session, frappe._("Extracting PDF text…"))
 		for file_name in names:
 			text = extract_pdf_text(file_name)
 			if text:
@@ -85,6 +95,7 @@ def send_message(session, content, file_names=None):
 			agent_content = content + "\n\n" + "\n\n".join(pdf_texts)
 
 	# Call agent
+	_emit_status(session, frappe._("Calling AI…"))
 	try:
 		reply, input_tokens, output_tokens = get_agent_response(session, agent_content)
 	except frappe.exceptions.ValidationError as e:
@@ -98,6 +109,7 @@ def send_message(session, content, file_names=None):
 			}
 		).insert(ignore_permissions=False)
 		frappe.db.commit()
+		_emit_status(session, "")
 		return {"status": "error", "error": str(e), "agent_message": failed_msg.name}
 
 	# Store agent response
@@ -137,6 +149,9 @@ def send_message(session, content, file_names=None):
 					user=frappe.session.user,
 					after_commit=True,
 				)
+
+	# Clear the status indicator before delivering the reply
+	_emit_status(session, "")
 
 	# Emit real-time event to the current user
 	frappe.publish_realtime(

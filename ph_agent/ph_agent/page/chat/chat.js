@@ -15,14 +15,20 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	$(page.main).append($container);
 	$(page.main).append($status);
 
-	// Load vue-advanced-chat from CDN, then initialise
-	$.getScript(
-		"https://cdn.jsdelivr.net/npm/vue-advanced-chat@2.0.4/dist/vue-advanced-chat.umd.js",
-		() => {
-			window["vue-advanced-chat"].register();
-			initPhChat($container[0], page, $status);
-		}
-	);
+	// Load vue-advanced-chat locally (via page_js hook) with CDN fallback
+	if (window["vue-advanced-chat"]) {
+		window["vue-advanced-chat"].register();
+		initPhChat($container[0], page, $status);
+	} else {
+		// Fallback in case page_js didn't load the script
+		$.getScript(
+			"/assets/ph_agent/js/lib/vue-advanced-chat.umd.js",
+			() => {
+				window["vue-advanced-chat"].register();
+				initPhChat($container[0], page, $status);
+			}
+		);
+	}
 };
 
 function initPhChat(container, page, $status) {

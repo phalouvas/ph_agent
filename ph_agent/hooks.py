@@ -40,7 +40,7 @@ app_include_css = "/assets/ph_agent/css/chat.css"
 # webform_include_css = {"doctype": "public/css/doctype.css"}
 
 # include js in page
-# page_js = {"page" : "public/js/file.js"}
+page_js = {"chat": "public/js/lib/vue-advanced-chat.umd.js"}
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}

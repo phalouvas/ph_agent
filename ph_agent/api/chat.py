@@ -1,6 +1,4 @@
 import frappe
-from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_response
-from ph_agent.utils.pdf import extract_pdf_text
 
 
 def _emit_status(session, message):
@@ -56,7 +54,7 @@ def create_session(provider_name=None):
 
 @frappe.whitelist()
 def send_message(session, content, file_names=None):
-	"""Store a user message, call the LLM agent, and store the response."""
+	"""Store a user message and enqueue the LLM agent response as a background job."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
 	# Store user message
@@ -70,104 +68,67 @@ def send_message(session, content, file_names=None):
 	).insert(ignore_permissions=False)
 
 	# Link any uploaded files to this message
-	if file_names:
-		names = frappe.parse_json(file_names) if isinstance(file_names, str) else file_names
-		for file_name in names:
-			frappe.db.set_value(
-				"File",
-				file_name,
-				{"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},
-			)
+	file_names_list = frappe.parse_json(file_names) if isinstance(file_names, str) else (file_names or [])
+	for file_name in file_names_list:
+		frappe.db.set_value(
+			"File",
+			file_name,
+			{"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},
+		)
 
 	frappe.db.commit()
 
-	# Build enriched content for the agent: append extracted PDF text from attachments
-	agent_content = content
-	if file_names:
-		names = frappe.parse_json(file_names) if isinstance(file_names, str) else file_names
-		pdf_texts = []
-		_emit_status(session, frappe._("Extracting PDF text…"))
-		for file_name in names:
-			text = extract_pdf_text(file_name)
-			if text:
-				pdf_texts.append(f"[PDF: {frappe.db.get_value('File', file_name, 'file_name')}]\n{text}")
-		if pdf_texts:
-			agent_content = content + "\n\n" + "\n\n".join(pdf_texts)
-
-	# Call agent
+	# Show initial status immediately; the background job will update it further
 	_emit_status(session, frappe._("Calling AI…"))
-	try:
-		reply, input_tokens, output_tokens = get_agent_response(session, agent_content)
-	except frappe.exceptions.ValidationError as e:
-		# Return error as a failed agent message so the UI can show the failure indicator
-		failed_msg = frappe.get_doc(
-			{
-				"doctype": "Chat Message",
-				"chat_session": session,
-				"sender_type": "Agent",
-				"content": str(e),
-			}
-		).insert(ignore_permissions=False)
-		frappe.db.commit()
-		_emit_status(session, "")
-		return {"status": "error", "error": str(e), "agent_message": failed_msg.name}
 
-	# Store agent response
-	agent_msg = frappe.get_doc(
-		{
-			"doctype": "Chat Message",
-			"chat_session": session,
-			"sender_type": "Agent",
-			"content": reply,
-		}
-	).insert(ignore_permissions=False)
-
-	# Update token counts on the session
-	frappe.db.set_value(
-		"Chat Session",
-		session,
-		{
-			"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
-			"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
-		},
+	# Enqueue the agent call in the background
+	job = frappe.enqueue(
+		"ph_agent.api.agent_jobs._call_agent_background",
+		session=session,
+		user_msg_name=user_msg.name,
+		content=content,
+		file_names=file_names_list,
+		enqueued_by=frappe.session.user,
+		queue="long",
+		timeout=600,
 	)
 
-	frappe.db.commit()
+	# Persist the job ID so cancel_generation can stop it
+	frappe.cache().set_value(f"ph_agent:job:{session}", job.id, expires_in_sec=600)
 
-	# Auto-generate a title after the first exchange (title is still default "New Chat")
-	current_title = frappe.db.get_value("Chat Session", session, "title")
-	if current_title == "New Chat":
-		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
-		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
-			new_title = generate_session_title(session, agent_content, reply)
-			if new_title:
-				frappe.db.set_value("Chat Session", session, "title", new_title)
-				frappe.db.commit()
-				frappe.publish_realtime(
-					event="session_renamed",
-					message={"session": session, "title": new_title},
-					user=frappe.session.user,
-					after_commit=True,
-				)
+	return {"status": "queued", "user_message": user_msg.name}
 
-	# Clear the status indicator before delivering the reply
+
+@frappe.whitelist()
+def cancel_generation(session):
+	"""Cancel an ongoing LLM generation for the given session."""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+
+	# Attempt to stop the running RQ job
+	job_id = frappe.cache().get_value(f"ph_agent:job:{session}")
+	if job_id:
+		try:
+			from frappe.utils.background_jobs import get_redis_conn
+			from rq.command import send_stop_job_command
+
+			jid = job_id.decode() if isinstance(job_id, bytes) else job_id
+			send_stop_job_command(connection=get_redis_conn(), job_id=jid)
+		except Exception:
+			pass  # Best-effort; the cooperative flag below acts as fallback
+		frappe.cache().delete_value(f"ph_agent:job:{session}")
+
+	# Set cooperative cancellation flag for in-progress PDF extraction checks
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+
+	# Clear the status bar and notify the frontend
 	_emit_status(session, "")
-
-	# Emit real-time event to the current user
 	frappe.publish_realtime(
-		event="new_message",
-		message={
-			"session": session,
-			"name": agent_msg.name,
-			"sender_type": "Agent",
-			"content": reply,
-			"creation": str(agent_msg.creation),
-		},
+		event="generation_cancelled",
+		message={"session": session},
 		user=frappe.session.user,
-		after_commit=True,
 	)
 
-	return {"status": "ok", "agent_message": agent_msg.name, "reply": reply}
+	return {"status": "cancelled"}
 
 
 @frappe.whitelist()

@@ -11,7 +11,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 
 	// Mount container inside page main area
 	const $container = $('<div style="height: calc(100vh - 120px);"></div>');
-	const $status = $('<div id="ph-chat-status" style="height:20px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:20px;display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}</style>');
+	const $status = $('<div id="ph-chat-status" style="height:24px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:24px;display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span><button class="ph-stop-btn" title="Stop generation" style="display:none;margin-left:4px;padding:2px 8px;font-size:11px;font-weight:600;line-height:16px;border:none;border-radius:3px;background:#e53e3e;color:#fff;cursor:pointer;flex-shrink:0;">&#9632; Stop</button></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}.ph-stop-btn:hover{background:#c53030!important}</style>');
 	$(page.main).append($container);
 	$(page.main).append($status);
 
@@ -44,10 +44,19 @@ function initPhChat(container, page, $status) {
 
 	let rooms = [];
 
-	// ── Status bar helper ─────────────────────────────────────────
+	// ── Status bar helpers ────────────────────────────────────────
+	const $stopBtn = $status.find(".ph-stop-btn");
+	let isProcessing = false;
+
+	function setProcessing(active) {
+		isProcessing = active;
+		$stopBtn.css("display", active ? "inline-block" : "none");
+	}
+
 	function setStatus(text) {
 		$status.find(".ph-status-text").text(text || "");
 		$status.find(".ph-status-spinner").css("display", text ? "inline-block" : "none");
+		setProcessing(!!text);
 	}
 	let messages = [];
 	let activeRoomId = null;
@@ -247,26 +256,9 @@ function initPhChat(container, page, $status) {
 					method: "ph_agent.api.chat.send_message",
 					args: { session: roomId, content, file_names: fileNames },
 					callback: (r) => {
-						if (r.message) {
-							if (r.message.status === "error") {
-								messages = messages.map((m) =>
-									m._id === tempId ? { ...m, saved: true, failure: true } : m
-								);
-								messages = [
-									...messages,
-									{
-										_id: r.message.agent_message,
-										content: "⚠️ " + r.message.error,
-										senderId: agentId,
-										username: "AI Agent",
-										timestamp: new Date().toTimeString().slice(0, 5),
-										date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
-										saved: true,
-									},
-								];
-							} else {
-								messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
-							}
+						// Job was queued successfully — mark user message as saved
+						if (r.message && r.message.status === "queued") {
+							messages = messages.map((m) => (m._id === tempId ? { ...m, saved: true } : m));
 							chat.messages = messages;
 						}
 					},
@@ -369,6 +361,22 @@ function initPhChat(container, page, $status) {
 		chat.rooms = rooms;
 	});
 
+	// ── Stop button: cancel ongoing generation ───────────────────
+	$stopBtn.on("click", () => {
+		if (!activeRoomId || !isProcessing) return;
+		$stopBtn.prop("disabled", true);
+		frappe.call({
+			method: "ph_agent.api.chat.cancel_generation",
+			args: { session: activeRoomId },
+			callback: () => {
+				$stopBtn.prop("disabled", false);
+			},
+			error: () => {
+				$stopBtn.prop("disabled", false);
+			},
+		});
+	});
+
 	// ── Real-time: agent status updates ──────────────────────────
 	frappe.realtime.on("agent_status", (data) => {
 		if (data.session !== activeRoomId) return;
@@ -380,6 +388,18 @@ function initPhChat(container, page, $status) {
 			);
 			chat.rooms = rooms;
 		}
+	});
+
+	// ── Real-time: generation cancelled ──────────────────────────
+	frappe.realtime.on("generation_cancelled", (data) => {
+		if (data.session !== activeRoomId) return;
+		rooms = rooms.map((r) =>
+			r.roomId === activeRoomId ? { ...r, typingUsers: [] } : r
+		);
+		chat.rooms = rooms;
+		setStatus(__("Generation stopped"));
+		setProcessing(false);
+		setTimeout(() => setStatus(""), 2000);
 	});
 
 	// ── Real-time: agent reply arrives ────────────────────────────

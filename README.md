@@ -12,6 +12,10 @@ A Frappe app that integrates agentic AI chatbots into ERPNext, enabling autonomo
 - **Conversation memory** — Full message history is passed to the agent on every turn, enabling follow-up questions and contextual replies
 - **Auto-generated session titles** — After the first exchange, the LLM generates a concise title for the session automatically
 - **Session management** — Create, browse, and delete chat sessions from the chat UI
+- **Message editing** — Edit your own messages; subsequent messages are automatically deleted and the agent regenerates its response
+- **Message deletion** — Delete individual messages or batch delete selected messages
+- **Message regeneration** — Regenerate agent responses with a single click; the message stays in place with a spinner indicator
+- **Stop generation** — Cancel ongoing AI generation with a stop button
 - **Error handling** — Friendly error messages for misconfigured or disabled providers
 
 ### Requirements
@@ -61,6 +65,13 @@ To add additional providers (e.g. a local Ollama instance):
 5. Attach files using the paperclip icon in the message footer — PDF files are automatically read and their content is passed to the agent
 6. The agent remembers the full conversation history within a session — ask follow-up questions naturally
 7. After your first message, the session title updates automatically to reflect the topic
+8. **Message actions** (hover over a message to reveal):
+   - **Edit** your own messages (only visible on your messages)
+   - **Delete** any message (requires permission)
+   - **Select** multiple messages for batch deletion
+   - **Regenerate** agent responses (only visible on agent messages)
+9. **Stop generation** — Click the red stop button that appears while the AI is responding to cancel generation
+10. **Regeneration flow** — When regenerating an agent response, the message stays in place with a spinner until the new response arrives
 
 ### Contributing
 

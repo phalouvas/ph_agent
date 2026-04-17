@@ -374,26 +374,37 @@ function initPhChat(container, page, $status) {
 				frappe.show_alert({ message: __("Please wait for the current response to finish."), indicator: "orange" });
 				return;
 			}
+                        			// Show spinner in place immediately
+			const originalContent = message.content;
+			messages = messages.map((m) =>
+				m._id === message._id ? { ...m, content: "🔄 Regenerating…", regenerating: true } : m
+			);
+			chat.messages = messages;
+			setProcessing(true);
+			rooms = rooms.map((r) =>
+				r.roomId === roomId ? { ...r, typingUsers: [{ _id: agentId, username: "AI Agent" }] } : r
+			);
+			chat.rooms = rooms;
 			frappe.call({
 				method: "ph_agent.api.chat.regenerate_message",
 				args: { message_id: message._id },
-				callback: () => {
-					messages = messages.filter((m) => m._id !== message._id);
+				error: () => {
+					// Revert spinner on error
+					messages = messages.map((m) =>
+						m._id === message._id ? { ...m, content: originalContent, regenerating: false } : m
+					);
 					chat.messages = messages;
-					setProcessing(true);
+					setProcessing(false);
 					rooms = rooms.map((r) =>
-						r.roomId === roomId ? { ...r, typingUsers: [{ _id: agentId, username: "AI Agent" }] } : r
+						r.roomId === roomId ? { ...r, typingUsers: [] } : r
 					);
 					chat.rooms = rooms;
-				},
-				error: () => {
 					frappe.show_alert({ message: __("Failed to regenerate message."), indicator: "red" });
 				},
 			});
 		}
 	});
 
-	// ── Event: room header clicked → change provider ─────────────
 	chat.addEventListener("room-info", ({ detail: [room] }) => {
 		const roomId = room.roomId;
 		frappe.db
@@ -549,18 +560,21 @@ function initPhChat(container, page, $status) {
 		chat.rooms = rooms;
 		setStatus("");
 		const dt = new Date((data.creation || "").replace(" ", "T"));
-		messages = [
-			...messages,
-			{
-				_id: data.name,
-				content: data.content,
-				senderId: agentId,
-				username: "AI Agent",
-				timestamp: dt.toTimeString().slice(0, 5),
-				date: dt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
-				saved: true,
-			},
-		];
+		const newMsg = {
+			_id: data.name,
+			content: data.content,
+			senderId: agentId,
+			username: "AI Agent",
+			timestamp: dt.toTimeString().slice(0, 5),
+			date: dt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
+			saved: true,
+		};
+		if (data.old_message_id) {
+			// Replace the regenerating message in place
+			messages = messages.map((m) => (m._id === data.old_message_id ? newMsg : m));
+		} else {
+			messages = [...messages, newMsg];
+		}
 		chat.messages = messages;
 	});
 }

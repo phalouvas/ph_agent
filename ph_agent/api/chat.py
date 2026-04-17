@@ -334,17 +334,7 @@ def regenerate_message(message_id):
 		pluck="name",
 	)
 
-	# Delete the agent message
-	frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
-	frappe.db.commit()
-
-	frappe.publish_realtime(
-		event="message_deleted",
-		message={"session": session, "message_id": message_id},
-		user=frappe.session.user,
-	)
-
-	# Set lock and enqueue agent
+	# Set lock and enqueue agent (the background job will delete the old agent message)
 	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
 	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
 	_emit_status(session, frappe._("Calling AI…"))
@@ -356,6 +346,7 @@ def regenerate_message(message_id):
 		content=user_msg.content,
 		file_names=file_names,
 		enqueued_by=frappe.session.user,
+		agent_msg_name=message_id,
 		queue="long",
 		timeout=600,
 	)

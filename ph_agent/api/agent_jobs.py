@@ -5,7 +5,7 @@ from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_resp
 from ph_agent.utils.pdf import extract_pdf_text
 
 
-def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by):
+def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
 	"""
 	Background job: optionally extract PDFs, call the LLM agent, store the reply,
 	and push realtime events back to the user who enqueued the job.
@@ -87,18 +87,25 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		frappe.db.commit()
 		release_lock()
 		emit_status("")
+		error_payload = {
+			"session": session,
+			"name": failed_msg.name,
+			"sender_type": "Agent",
+			"content": "⚠️ " + str(e),
+			"creation": str(failed_msg.creation),
+		}
+		if agent_msg_name:
+			error_payload["old_message_id"] = agent_msg_name
 		frappe.publish_realtime(
 			event="new_message",
-			message={
-				"session": session,
-				"name": failed_msg.name,
-				"sender_type": "Agent",
-				"content": "⚠️ " + str(e),
-				"creation": str(failed_msg.creation),
-			},
+			message=error_payload,
 			user=enqueued_by,
 		)
 		return
+
+	# If regenerating, delete the old agent message before storing the new one
+	if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
+		frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
 
 	# Store agent response
 	agent_msg = frappe.get_doc(
@@ -139,14 +146,17 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	# Release lock, clear the status indicator and deliver the reply
 	release_lock()
 	emit_status("")
+	new_msg_payload = {
+		"session": session,
+		"name": agent_msg.name,
+		"sender_type": "Agent",
+		"content": reply,
+		"creation": str(agent_msg.creation),
+	}
+	if agent_msg_name:
+		new_msg_payload["old_message_id"] = agent_msg_name
 	frappe.publish_realtime(
 		event="new_message",
-		message={
-			"session": session,
-			"name": agent_msg.name,
-			"sender_type": "Agent",
-			"content": reply,
-			"creation": str(agent_msg.creation),
-		},
+		message=new_msg_payload,
 		user=enqueued_by,
 	)

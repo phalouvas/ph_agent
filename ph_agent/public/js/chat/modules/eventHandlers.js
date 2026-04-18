@@ -428,11 +428,11 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             frappe.call({
                 method: "ph_agent.api.chat.regenerate_message",
-                args: { message_name: message._id },
+                args: { message_id: message._id },
                 callback: (r) => {
                     state.setIsProcessing(false);
                     
-                    if (r.message && r.message.success) {
+                    if (r.message && r.message.status === "queued") {
                         frappe.show_alert({ 
                             message: __("Regenerating message..."), 
                             indicator: "green" 

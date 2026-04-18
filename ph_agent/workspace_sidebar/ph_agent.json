@@ -1,0 +1,75 @@
+{
+ "app": "ph_agent",
+ "creation": "2026-04-16 15:12:35.998944",
+ "docstatus": 0,
+ "doctype": "Workspace Sidebar",
+ "idx": 0,
+ "items": [
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "message-square-text",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "AI Chat",
+   "link_to": "chat",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "cloud-cog",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "LLM Provider",
+   "link_to": "LLM Provider",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "parentheses",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Chat Session",
+   "link_to": "Chat Session",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "message-square",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Chat Message",
+   "link_to": "Chat Message",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "list",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Reports",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
+  }
+ ],
+ "modified": "2026-04-16 15:56:06.830576",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "PH Agent",
+ "owner": "Administrator",
+ "standard": 1,
+ "title": "PH Agent"
+}

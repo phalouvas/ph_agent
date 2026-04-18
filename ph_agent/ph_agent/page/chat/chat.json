@@ -1,0 +1,15 @@
+{
+	"color": "#4361ee",
+	"creation": "2026-04-16 00:00:00.000000",
+	"doctype": "Page",
+	"icon": "comments",
+	"modified": "2026-04-16 00:00:00.000000",
+	"module": "PH Agent",
+	"name": "chat",
+	"page_name": "chat",
+	"restrict_to_domain": null,
+	"roles": [],
+	"standard": "Yes",
+	"system_page": 0,
+	"title": "AI Chat"
+}

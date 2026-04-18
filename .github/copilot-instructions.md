@@ -16,10 +16,16 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 - **Directory structure**:
   - `ph_agent/config/` – UI configuration (empty)
   - `ph_agent/patches/` – Database migrations (empty)
-  - `public/` – Front‑end assets (empty)
-  - `templates/pages/` – Website pages (empty)
+  - `ph_agent/ph_agent/doctype/` – DocTypes: `Chat Session`, `Chat Message`, `LLM Provider`
+  - `ph_agent/ph_agent/page/chat/` – Chat UI implementation (`chat.js`)
+  - `ph_agent/public/` – Front‑end assets (`css/chat.css`)
+  - `ph_agent/templates/` – Website pages (empty)
+  - `ph_agent/api/` – API endpoints (`chat.py`, `agent_jobs.py`)
+  - `ph_agent/agent/` – AI agent implementation (`deepseek_agent.py`)
 - **Dependencies** are managed via `pyproject.toml`. **Never** add `frappe` as a dependency (it’s installed and managed by bench). Add only app‑specific packages (e.g., `agent‑framework`).
 - **Frappe conventions**: Use `@frappe.whitelist()` for API methods; follow Frappe’s document lifecycle.
+- **Real‑time communication**: Use `frappe.publish_realtime()` for WebSocket events (agent status, new messages).
+- **Background jobs**: Use `frappe.enqueue()` for long‑running tasks (LLM calls, PDF extraction).
 
 ## Build and Test
 - **Installation** (see [README.md](../README.md)):
@@ -36,7 +42,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   ```bash
   bench test‑site --app ph_agent
   ```
-- **Build system**: Flit (PEP 517/518). Python ≥3.14 required.
+- **Build system**: Flit (PEP 517/518). Python 3.11+ required (currently using 3.11.6).
 - **Code quality**: Pre‑commit hooks run Ruff, ESLint, Prettier, pyupgrade, etc. Always run `pre‑commit install` after cloning.
 
 ## Conventions
@@ -44,11 +50,17 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 - **Hooks**: Enable hooks in `hooks.py` only when you have implemented the corresponding methods. Empty hooks will crash the app boot.
 - **Database transactions**: Frappe auto‑commits; use explicit rollback where needed.
 - **Code quality**: Pre‑commit is mandatory; ensure all hooks pass before committing.
+- **Front‑end patterns**:
+  - Use `MutationObserver` for DOM manipulation when integrating with third‑party components (e.g., hiding regenerate button on user messages).
+  - Handle real‑time events with `frappe.realtime.on()`.
+  - Use optimistic UI updates for better user experience.
 - **Avoid pitfalls**:
   - Do **not** add `frappe` to dependencies.
   - Always decorate API methods with `@frappe.whitelist()`.
   - Do not mix spaces and tabs (Ruff will reject).
   - Do not enable empty hooks.
+  - Background jobs should check cancellation flags (`frappe.cache().get_value()`) for cooperative cancellation.
+  - Ensure proper locking (`frappe.cache().set_value()`) for per‑session concurrent processing.
 
 ## Reference Files
 | File | Purpose |
@@ -57,6 +69,11 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 | `ph_agent/hooks.py` | Frappe integration points (examples) |
 | `.pre‑commit‑config.yaml` | Quality gate automation |
 | `.editorconfig` | Indentation rules |
-| `README.md` | Installation and contribution guide |
+| `README.md` | Installation and feature guide |
+| `ph_agent/api/chat.py` | Chat session and message API endpoints |
+| `ph_agent/api/agent_jobs.py` | Background job for LLM calls |
+| `ph_agent/agent/deepseek_agent.py` | LLM agent implementation |
+| `ph_agent/ph_agent/page/chat/chat.js` | Chat UI front‑end |
+| `ph_agent/public/css/chat.css` | Chat UI styles |
 
 **Link, don’t embed**: Consult the existing documentation (README, license) and Frappe framework documentation for broader context.

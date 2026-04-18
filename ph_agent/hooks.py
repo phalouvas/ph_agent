@@ -25,7 +25,7 @@ app_license = "gpl-3.0"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/ph_agent/css/ph_agent.css"
+app_include_css = "/assets/ph_agent/css/chat.css"
 # app_include_js = "/assets/ph_agent/js/ph_agent.js"
 
 # include js, css files in header of web template
@@ -40,7 +40,7 @@ app_license = "gpl-3.0"
 # webform_include_css = {"doctype": "public/css/doctype.css"}
 
 # include js in page
-# page_js = {"page" : "public/js/file.js"}
+page_js = {"chat": "public/js/lib/vue-advanced-chat.umd.js"}
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}

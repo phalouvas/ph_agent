@@ -9,6 +9,7 @@
   "provider_name",
   "is_enabled",
   "is_default",
+  "enable_suggestions",
   "section_api",
   "api_key",
   "api_url",
@@ -38,6 +39,13 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Default"
+  },
+  {
+   "default": "1",
+   "description": "Automatically generate follow-up question suggestions after each agent response.",
+   "fieldname": "enable_suggestions",
+   "fieldtype": "Check",
+   "label": "Enable Follow-up Suggestions"
   },
   {
    "fieldname": "section_api",

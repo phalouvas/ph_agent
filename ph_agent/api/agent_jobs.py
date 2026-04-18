@@ -1,7 +1,7 @@
 import asyncio
 
 import frappe
-from ph_agent.agent.deepseek_agent import generate_session_title, get_agent_response
+from ph_agent.agent.deepseek_agent import generate_followup_suggestions, generate_session_title, get_agent_response
 from ph_agent.utils.pdf import extract_pdf_text
 
 
@@ -160,3 +160,54 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		message=new_msg_payload,
 		user=enqueued_by,
 	)
+
+	# Enqueue follow-up suggestions if enabled for this session
+	session_doc = frappe.get_doc("Chat Session", session)
+	if session_doc.enable_suggestions:
+		frappe.enqueue(
+			"ph_agent.api.agent_jobs._generate_suggestions_background",
+			session=session,
+			agent_message_id=agent_msg.name,
+			enqueued_by=enqueued_by,
+			queue="short",
+			timeout=30,
+		)
+
+
+def _generate_suggestions_background(session, agent_message_id, enqueued_by):
+	"""
+	Background job: generate follow-up question suggestions for the last agent message
+	and publish them via realtime to the user.
+	"""
+	try:
+		# Fetch conversation history up to and including the agent message
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={"chat_session": session},
+			fields=["sender_type", "content"],
+			order_by="creation asc",
+		)
+		history = [
+			{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
+			for m in prior_messages
+		]
+
+		suggestions = generate_followup_suggestions(session, history)
+		if not suggestions:
+			return
+
+		frappe.publish_realtime(
+			event="suggestions_ready",
+			message={
+				"session": session,
+				"message_id": agent_message_id,
+				"suggestions": suggestions,
+			},
+			user=enqueued_by,
+		)
+	except Exception:
+		frappe.log_error(
+			title=f"Suggestion background job failed for session {session}",
+			reference_doctype="Chat Session",
+			reference_name=session,
+		)

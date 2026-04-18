@@ -55,16 +55,66 @@ function initPhChat(container, page, $status) {
 	// firing while the user is typing inside the chat component.
 	container.addEventListener("keydown", (e) => e.stopPropagation());
 
+	// Inject suggestion styles directly into the shadow root so they work inside the shadow DOM
+	const _shadowRoot = chat.shadowRoot || container;
+	const _suggestionStyle = document.createElement("style");
+	_suggestionStyle.textContent = `
+		.ph-suggestions {
+			border-left: 3px solid var(--primary, #4f72b8);
+			background: var(--blue-highlight-color, #e8f0fe);
+			border-radius: 0 8px 8px 0;
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			margin: 4px 16px 10px 16px;
+			padding: 8px 12px 10px 12px;
+		}
+		.ph-suggestions-label {
+			color: var(--primary, #4f72b8);
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+		}
+		.ph-suggestions-btns {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+		}
+		.ph-suggestion-btn {
+			background: var(--card-bg, #fff);
+			border: 1px solid var(--primary, #4f72b8);
+			border-radius: 16px;
+			color: var(--primary, #4f72b8);
+			cursor: pointer;
+			font-size: 12px;
+			line-height: 1.4;
+			padding: 5px 12px;
+			text-align: left;
+			transition: background 0.15s, border-color 0.15s, color 0.15s;
+			white-space: normal;
+			word-break: break-word;
+		}
+		.ph-suggestion-btn:hover {
+			background: var(--primary, #4f72b8);
+			border-color: var(--primary, #4f72b8);
+			color: #fff;
+		}
+	`;
+	_shadowRoot.appendChild(_suggestionStyle);
+
 	// Hide the Regenerate action on the current user's own messages.
 	// The library shows ALL actions for own messages with no built-in exclusion flag.
 	// We use a MutationObserver so this works in both shadow DOM and light DOM.
-	const _regenRoot = chat.shadowRoot || container;
+	const _regenRoot = _shadowRoot;
 	new MutationObserver(() => {
 		_regenRoot.querySelectorAll(".vac-menu-options:not(.vac-menu-left) .vac-menu-item").forEach((el) => {
 			if (el.textContent.trim() === __("Regenerate")) {
 				el.parentElement.style.display = "none";
 			}
 		});
+		// Re-inject any pending suggestions whenever the DOM updates
+		renderPendingSuggestions();
 	}).observe(_regenRoot, { childList: true, subtree: true });
 
 	let rooms = [];
@@ -86,6 +136,7 @@ function initPhChat(container, page, $status) {
 	let messages = [];
 	let activeRoomId = null;
 	let roomProviders = {}; // roomId -> llm_provider
+	let messageSuggestions = {}; // messageId -> suggestions[]
 
 	// ── Helper: format a Chat Message record ──────────────────────
 	function fmtMsg(m) {
@@ -230,6 +281,7 @@ function initPhChat(container, page, $status) {
 	chat.addEventListener("fetch-messages", ({ detail: [{ room }] }) => {
 		if (!room.roomId) return;
 		activeRoomId = room.roomId;
+		messageSuggestions = {}; // Clear suggestions when switching rooms
 		chat.setAttribute("messages-loaded", "false");
 		frappe.call({
 			method: "ph_agent.api.chat.get_history",
@@ -250,6 +302,11 @@ function initPhChat(container, page, $status) {
 			return;
 		}
 		setProcessing(true);
+
+		// Clear all existing suggestions — they are obsolete once the user sends a new message
+		Object.keys(messageSuggestions).forEach((id) => delete messageSuggestions[id]);
+		const container = chat.shadowRoot || chat;
+		container.querySelectorAll(".ph-suggestions").forEach((el) => el.remove());
 
 		// Optimistic user bubble with local file previews
 		const tempId = "temp_" + Date.now();
@@ -465,6 +522,77 @@ function initPhChat(container, page, $status) {
 		document.body.removeChild(textArea);
 	}
 
+	// ── Suggestion helpers ────────────────────────────────────────
+	function insertSuggestionIntoInput(suggestionText) {
+		const root = chat.shadowRoot || container;
+		const textarea = root.querySelector("textarea");
+		if (!textarea) return;
+		// Set the native value and dispatch input event so the Vue component picks it up
+		const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+		nativeInputValueSetter.call(textarea, suggestionText);
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.focus();
+	}
+
+	function removeSuggestionsForMessage(messageId) {
+		const root = chat.shadowRoot || container;
+		const existing = root.querySelector(`.ph-suggestions[data-msg-id="${messageId}"]`);
+		if (existing) existing.remove();
+	}
+
+	function injectSuggestions(messageId, suggestions) {
+		const root = chat.shadowRoot || container;
+
+		// Idempotent: if already injected, skip to avoid MutationObserver loop
+		if (root.querySelector(`.ph-suggestions[data-msg-id="${messageId}"]`)) return true;
+
+		// vue-advanced-chat renders: <div :id="message._id" class="vac-message-wrapper">
+		const msgEl = root.querySelector(`#${messageId}`);
+		if (!msgEl) {
+			return false;
+		}
+
+		const wrapper = document.createElement("div");
+		wrapper.className = "ph-suggestions";
+		wrapper.setAttribute("data-msg-id", messageId);
+
+		const label = document.createElement("span");
+		label.className = "ph-suggestions-label";
+		label.textContent = __("Suggested follow-ups");
+		wrapper.appendChild(label);
+
+		const btnRow = document.createElement("div");
+		btnRow.className = "ph-suggestions-btns";
+		wrapper.appendChild(btnRow);
+
+		suggestions.forEach((text) => {
+			const btn = document.createElement("button");
+			btn.className = "ph-suggestion-btn";
+			btn.textContent = text;
+			btn.addEventListener("click", () => insertSuggestionIntoInput(text));
+			btnRow.appendChild(btn);
+		});
+
+		// Insert after the message wrapper element
+		msgEl.parentNode.insertBefore(wrapper, msgEl.nextSibling);
+
+		// Scroll so the suggestions are visible
+		wrapper.scrollIntoView({ behavior: "smooth", block: "nearest" });
+		return true;
+	}
+
+	function renderPendingSuggestions() {
+		const pendingIds = Object.keys(messageSuggestions);
+		if (pendingIds.length === 0) return;
+		pendingIds.forEach((msgId) => {
+			const injected = injectSuggestions(msgId, messageSuggestions[msgId]);
+			if (injected) {
+				// Remove from map so the observer stops retrying for this message
+				delete messageSuggestions[msgId];
+			}
+		});
+	}
+
 	chat.addEventListener("room-info", ({ detail: [room] }) => {
 		const roomId = room.roomId;
 		frappe.db
@@ -599,6 +727,8 @@ function initPhChat(container, page, $status) {
 	// ── Real-time: single message deleted ─────────────────────────
 	frappe.realtime.on("message_deleted", (data) => {
 		if (data.session !== activeRoomId) return;
+		delete messageSuggestions[data.message_id];
+		removeSuggestionsForMessage(data.message_id);
 		messages = messages.filter((m) => m._id !== data.message_id);
 		chat.messages = messages;
 	});
@@ -630,11 +760,25 @@ function initPhChat(container, page, $status) {
 			saved: true,
 		};
 		if (data.old_message_id) {
+			// Remove suggestions for the old (regenerated) message
+			delete messageSuggestions[data.old_message_id];
+			removeSuggestionsForMessage(data.old_message_id);
 			// Replace the regenerating message in place
 			messages = messages.map((m) => (m._id === data.old_message_id ? newMsg : m));
 		} else {
 			messages = [...messages, newMsg];
 		}
 		chat.messages = messages;
+	});
+
+	// ── Real-time: follow-up suggestions ready ────────────────────
+	frappe.realtime.on("suggestions_ready", (data) => {
+		if (data.session !== activeRoomId) return;
+		if (!data.suggestions || !data.suggestions.length) return;
+		// Try to inject immediately; if the DOM element isn't ready yet, store for retry via MutationObserver
+		const injected = injectSuggestions(data.message_id, data.suggestions);
+		if (!injected) {
+			messageSuggestions[data.message_id] = data.suggestions;
+		}
 	});
 }

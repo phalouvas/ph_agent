@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import frappe
 from agents import Agent, ModelSettings, RunConfig, Runner
@@ -163,3 +164,66 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			reference_name=session_name
 		)
 		return ""
+
+
+def generate_followup_suggestions(session_name: str, conversation_history: list) -> list[str]:
+	"""
+	Ask the LLM to generate 3-5 follow-up question suggestions based on the conversation.
+	Returns a list of suggestion strings, or an empty list on failure.
+	"""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		return []
+
+	openai_client = AsyncOpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url,
+	)
+
+	model = OpenAIChatCompletionsModel(
+		model=provider_doc.default_model,
+		openai_client=openai_client,
+	)
+
+	suggestions_agent = Agent(
+		name="Suggestions Generator",
+		instructions=(
+			"You are a helpful assistant that suggests relevant follow-up questions based on the conversation. "
+			"Provide exactly 3 to 5 concise questions that the user might want to ask next. "
+			"Return only a JSON array of strings — no explanation, no markdown, no extra text. "
+			'Example: ["Question one?", "Question two?", "Question three?"]'
+		),
+		model=model,
+		model_settings=ModelSettings(temperature=1.0),
+	)
+
+	# Build a short summary of the conversation as context
+	context_parts = []
+	for msg in conversation_history[-6:]:  # last 6 messages max for context
+		role = "User" if msg.get("role") == "user" else "Assistant"
+		context_parts.append(f"{role}: {msg.get('content', '')[:500]}")
+	context = "\n".join(context_parts)
+
+	try:
+		result = asyncio.run(
+			Runner.run(
+				suggestions_agent,
+				input=context,
+				run_config=RunConfig(tracing_disabled=True),
+			)
+		)
+		raw = (result.final_output or "").strip()
+		suggestions = json.loads(raw)
+		if isinstance(suggestions, list):
+			return [str(s) for s in suggestions if s][:5]
+		return []
+	except Exception:
+		frappe.log_error(
+			title=f"Suggestion generation failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name
+		)
+		return []

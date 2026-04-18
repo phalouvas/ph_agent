@@ -65,6 +65,8 @@ function initPhChat(container, page, $status) {
 				el.parentElement.style.display = "none";
 			}
 		});
+		// Re-inject any pending suggestions whenever the DOM updates
+		renderPendingSuggestions();
 	}).observe(_regenRoot, { childList: true, subtree: true });
 
 	let rooms = [];
@@ -86,6 +88,7 @@ function initPhChat(container, page, $status) {
 	let messages = [];
 	let activeRoomId = null;
 	let roomProviders = {}; // roomId -> llm_provider
+	let messageSuggestions = {}; // messageId -> suggestions[]
 
 	// ── Helper: format a Chat Message record ──────────────────────
 	function fmtMsg(m) {
@@ -230,6 +233,7 @@ function initPhChat(container, page, $status) {
 	chat.addEventListener("fetch-messages", ({ detail: [{ room }] }) => {
 		if (!room.roomId) return;
 		activeRoomId = room.roomId;
+		messageSuggestions = {}; // Clear suggestions when switching rooms
 		chat.setAttribute("messages-loaded", "false");
 		frappe.call({
 			method: "ph_agent.api.chat.get_history",
@@ -465,6 +469,57 @@ function initPhChat(container, page, $status) {
 		document.body.removeChild(textArea);
 	}
 
+	// ── Suggestion helpers ────────────────────────────────────────
+	function insertSuggestionIntoInput(suggestionText) {
+		const root = chat.shadowRoot || container;
+		const textarea = root.querySelector("textarea");
+		if (!textarea) return;
+		// Set the native value and dispatch input event so the Vue component picks it up
+		const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+		nativeInputValueSetter.call(textarea, suggestionText);
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.focus();
+	}
+
+	function removeSuggestionsForMessage(messageId) {
+		const root = chat.shadowRoot || container;
+		const existing = root.querySelector(`.ph-suggestions[data-msg-id="${messageId}"]`);
+		if (existing) existing.remove();
+	}
+
+	function injectSuggestions(messageId, suggestions) {
+		const root = chat.shadowRoot || container;
+		// Remove any previously injected suggestions for this message
+		removeSuggestionsForMessage(messageId);
+
+		// Find the message container — vue-advanced-chat uses data-message-id or the element with _id
+		// Try common selectors used by the library
+		const msgEl = root.querySelector(`[data-message-id="${messageId}"]`)
+			|| root.querySelector(`[message-id="${messageId}"]`);
+		if (!msgEl) return;
+
+		const wrapper = document.createElement("div");
+		wrapper.className = "ph-suggestions";
+		wrapper.setAttribute("data-msg-id", messageId);
+
+		suggestions.forEach((text) => {
+			const btn = document.createElement("button");
+			btn.className = "ph-suggestion-btn";
+			btn.textContent = text;
+			btn.addEventListener("click", () => insertSuggestionIntoInput(text));
+			wrapper.appendChild(btn);
+		});
+
+		// Insert after the message element (inside its parent)
+		msgEl.parentNode.insertBefore(wrapper, msgEl.nextSibling);
+	}
+
+	function renderPendingSuggestions() {
+		Object.entries(messageSuggestions).forEach(([msgId, suggs]) => {
+			injectSuggestions(msgId, suggs);
+		});
+	}
+
 	chat.addEventListener("room-info", ({ detail: [room] }) => {
 		const roomId = room.roomId;
 		frappe.db
@@ -599,6 +654,8 @@ function initPhChat(container, page, $status) {
 	// ── Real-time: single message deleted ─────────────────────────
 	frappe.realtime.on("message_deleted", (data) => {
 		if (data.session !== activeRoomId) return;
+		delete messageSuggestions[data.message_id];
+		removeSuggestionsForMessage(data.message_id);
 		messages = messages.filter((m) => m._id !== data.message_id);
 		chat.messages = messages;
 	});
@@ -630,11 +687,22 @@ function initPhChat(container, page, $status) {
 			saved: true,
 		};
 		if (data.old_message_id) {
+			// Remove suggestions for the old (regenerated) message
+			delete messageSuggestions[data.old_message_id];
+			removeSuggestionsForMessage(data.old_message_id);
 			// Replace the regenerating message in place
 			messages = messages.map((m) => (m._id === data.old_message_id ? newMsg : m));
 		} else {
 			messages = [...messages, newMsg];
 		}
 		chat.messages = messages;
+	});
+
+	// ── Real-time: follow-up suggestions ready ────────────────────
+	frappe.realtime.on("suggestions_ready", (data) => {
+		if (data.session !== activeRoomId) return;
+		if (!data.suggestions || !data.suggestions.length) return;
+		messageSuggestions[data.message_id] = data.suggestions;
+		injectSuggestions(data.message_id, data.suggestions);
 	});
 }

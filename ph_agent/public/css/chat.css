@@ -20,3 +20,32 @@ vue-advanced-chat {
 	height: 100%;
 	font-family: var(--font-stack);
 }
+
+/* Follow-up suggestion buttons */
+.ph-suggestions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 6px 16px 10px 16px;
+}
+
+.ph-suggestion-btn {
+	background: var(--card-bg, #fff);
+	border: 1px solid var(--border-color, #d1d8dd);
+	border-radius: 16px;
+	color: var(--text-color, #36414c);
+	cursor: pointer;
+	font-size: 12px;
+	line-height: 1.4;
+	padding: 5px 12px;
+	text-align: left;
+	transition: background 0.15s, border-color 0.15s, color 0.15s;
+	white-space: normal;
+	word-break: break-word;
+}
+
+.ph-suggestion-btn:hover {
+	background: var(--blue-highlight-color, #e8f0fe);
+	border-color: var(--primary, #4f72b8);
+	color: var(--primary, #4f72b8);
+}

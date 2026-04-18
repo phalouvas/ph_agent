@@ -17,11 +17,13 @@ class ChatSession(Document):
 				frappe.throw(frappe._("No default LLM Provider configured. Please set up a provider first."))
 			self.llm_provider = default[0]
 		
-		# Set temperature from provider if not explicitly set
+		# Set temperature and suggestions from provider if not explicitly set
 		if (self.temperature is None or self.temperature == "") and self.llm_provider:
 			provider = frappe.get_doc("LLM Provider", self.llm_provider)
 			# Use provider temperature, default to 1.0 if provider temperature is not set
 			self.temperature = provider.temperature if provider.temperature is not None else 1.0
+			# Inherit enable_suggestions from provider
+			self.enable_suggestions = provider.enable_suggestions
 	
 	def validate(self):
 		# Validate temperature range

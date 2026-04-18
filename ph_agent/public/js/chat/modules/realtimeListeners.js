@@ -65,7 +65,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             // Remove any existing listeners first
             this.unregisterAllListeners();
             
-            // Register all 7 real-time listeners
+            // Register all real-time listeners
             frappe.realtime.on("session_renamed", this.handleSessionRenamed.bind(this));
             frappe.realtime.on("agent_status", this.handleAgentStatus.bind(this));
             frappe.realtime.on("generation_cancelled", this.handleGenerationCancelled.bind(this));
@@ -74,6 +74,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.on("messages_deleted", this.handleMessagesDeleted.bind(this));
             frappe.realtime.on("new_message", this.handleNewMessage.bind(this));
             frappe.realtime.on("suggestions_ready", this.handleSuggestionsReady.bind(this));
+            frappe.realtime.on("message_chunk", this.handleMessageChunk.bind(this));
         },
         
         /**
@@ -88,6 +89,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.off("messages_deleted");
             frappe.realtime.off("new_message");
             frappe.realtime.off("suggestions_ready");
+            frappe.realtime.off("message_chunk");
         },
         
         // --- Stop Button Handler ---
@@ -272,18 +274,6 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             const uiHelpers = window.phAgent.uiHelpers;
             const utils = window.phAgent.utils;
             
-            // Clear typing indicator and status
-            const rooms = state.getRooms().map((room) =>
-                room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
-            );
-            state.setRooms(rooms);
-            _chat.rooms = rooms;
-            
-            uiHelpers.setStatus("");
-            
-            // Clear processing state (stop button should now be hidden)
-            state.setIsProcessing(false);
-            
             // Format the new message
             const dt = new Date((data.creation || "").replace(" ", "T"));
             const newMsg = {
@@ -300,22 +290,125 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 saved: true,
             };
             
-            if (data.old_message_id) {
-                // Remove suggestions for the old (regenerated) message
-                state.removeMessageSuggestions(data.old_message_id);
-                uiHelpers.removeSuggestionsForMessage(data.old_message_id);
-                
-                // Replace the regenerating message in place
-                const messages = state.getMessages().map((message) =>
-                    message._id === data.old_message_id ? newMsg : message
-                );
-                state.setMessages(messages);
-            } else {
-                // Add new message
+            if (data.is_streaming_placeholder) {
+                // For streaming placeholder, add message and show typing indicator
                 state.addMessage(newMsg);
+                
+                // Show typing indicator for agent
+                const rooms = state.getRooms().map((room) => {
+                    if (room.roomId !== _activeRoomId) return room;
+                    
+                    const typingUsers = room.typingUsers || [];
+                    if (!typingUsers.includes(_agentId)) {
+                        typingUsers.push(_agentId);
+                    }
+                    
+                    return { ...room, typingUsers };
+                });
+                state.setRooms(rooms);
+                _chat.rooms = rooms;
+                
+                // Keep processing state active (stop button should remain visible)
+                state.setIsProcessing(true);
+            } else {
+                // For regular messages, clear typing indicator and status
+                const rooms = state.getRooms().map((room) =>
+                    room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
+                );
+                state.setRooms(rooms);
+                _chat.rooms = rooms;
+                
+                uiHelpers.setStatus("");
+                
+                // Clear processing state (stop button should now be hidden)
+                state.setIsProcessing(false);
+                
+                if (data.old_message_id) {
+                    // Remove suggestions for the old (regenerated) message
+                    state.removeMessageSuggestions(data.old_message_id);
+                    uiHelpers.removeSuggestionsForMessage(data.old_message_id);
+                    
+                    // Replace the regenerating message in place
+                    const messages = state.getMessages().map((message) =>
+                        message._id === data.old_message_id ? newMsg : message
+                    );
+                    state.setMessages(messages);
+                } else {
+                    // Add new message
+                    state.addMessage(newMsg);
+                }
             }
             
             _chat.messages = state.getMessages();
+        },
+        
+        /**
+         * Handle message_chunk event for streaming responses
+         * @param {Object} data - Event data with session, message_id, chunk, and is_final
+         */
+        handleMessageChunk: function(data) {
+            if (data.session !== _activeRoomId) return;
+            
+            const state = window.phAgent.state;
+            const uiHelpers = window.phAgent.uiHelpers;
+            
+            // Find the message by ID
+            const message = state.getMessageById(data.message_id);
+            if (!message) return;
+            
+            if (data.is_final) {
+                // Final chunk - clear typing indicator and status
+                const rooms = state.getRooms().map((room) =>
+                    room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
+                );
+                state.setRooms(rooms);
+                _chat.rooms = rooms;
+                
+                uiHelpers.setStatus("");
+                
+                // Clear processing state (stop button should now be hidden)
+                state.setIsProcessing(false);
+                
+                // Update chat component with final message
+                const newMessages = state.getMessages();
+                _chat.messages = newMessages;
+            } else {
+                // Content chunk - handle placeholder replacement
+                if (!data.chunk) return;
+                
+                let updatedContent;
+                const currentContent = message.content || "";
+                if (currentContent === "⏳ Generating response..." || currentContent === "") {
+                    // First chunk - replace placeholder with actual content
+                    updatedContent = data.chunk;
+                } else {
+                    // Subsequent chunks - append to existing content
+                    updatedContent = currentContent + data.chunk;
+                }
+                
+                state.updateMessage(data.message_id, { 
+                    content: updatedContent
+                });
+                
+                // Update chat component - force new array reference for Vue reactivity
+                const newMessages = state.getMessages();
+                _chat.messages = newMessages;
+                
+                // Show typing indicator while streaming
+                const rooms = state.getRooms().map((room) => {
+                    if (room.roomId !== _activeRoomId) return room;
+                    
+                    // Add typing indicator for agent
+                    const typingUsers = room.typingUsers || [];
+                    if (!typingUsers.includes(_agentId)) {
+                        typingUsers.push(_agentId);
+                    }
+                    
+                    return { ...room, typingUsers };
+                });
+                state.setRooms(rooms);
+                _chat.rooms = rooms;
+            }
         },
         
         /**

@@ -139,7 +139,8 @@ window.phAgent.utils = window.phAgent.utils || (function() {
             if (root.querySelector(`.ph-suggestions[data-msg-id="${messageId}"]`)) return true;
 
             // vue-advanced-chat renders: <div :id="message._id" class="vac-message-wrapper">
-            const msgEl = root.querySelector(`#${messageId}`);
+            // Use attribute selector to avoid CSS ID validation issues (IDs starting with digits are invalid)
+            const msgEl = root.querySelector(`[id="${messageId}"]`);
             if (!msgEl) {
                 return false;
             }

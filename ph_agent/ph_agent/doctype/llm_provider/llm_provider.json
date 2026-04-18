@@ -10,6 +10,7 @@
   "is_enabled",
   "is_default",
   "enable_suggestions",
+  "supports_streaming",
   "section_api",
   "api_key",
   "api_url",
@@ -46,6 +47,13 @@
    "fieldname": "enable_suggestions",
    "fieldtype": "Check",
    "label": "Enable Follow-up Suggestions"
+  },
+  {
+   "default": "1",
+   "description": "Enable streaming responses for this provider. Requires OpenAI-compatible streaming API.",
+   "fieldname": "supports_streaming",
+   "fieldtype": "Check",
+   "label": "Supports Streaming"
   },
   {
    "fieldname": "section_api",

@@ -4,7 +4,7 @@ import json
 import frappe
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
-from openai import AsyncOpenAI, AuthenticationError, RateLimitError
+from openai import AsyncOpenAI, OpenAI, AuthenticationError, RateLimitError
 
 def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int]:
 	"""
@@ -104,11 +104,119 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		)
 		frappe.throw(frappe._("The AI agent encountered an error: {0}").format(str(e)))
 
-	reply = result.final_output or ""
+	reply = result.final_output or "No response generated."
 	input_tokens = result.raw_responses[-1].usage.input_tokens if result.raw_responses else 0
 	output_tokens = result.raw_responses[-1].usage.output_tokens if result.raw_responses else 0
 
 	return reply, input_tokens, output_tokens
+
+
+def get_agent_response_stream(session_name: str, user_message: str, cancel_check=None):
+	"""
+	Call the LLM via OpenAI streaming API and yield content chunks.
+	Yields (chunk_content, is_final, input_tokens, output_tokens) where is_final is False for content chunks
+	and True for the final chunk containing token usage.
+	Raises frappe.ValidationError with a user-friendly message on failure.
+	If cancel_check() returns True, raises asyncio.CancelledError.
+	"""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key:
+		frappe.throw(
+			frappe._("API key not configured for provider {0}. Please update the LLM Provider record.").format(
+				provider_doc.name
+			)
+		)
+
+	if not provider_doc.is_enabled:
+		frappe.throw(
+			frappe._("LLM Provider {0} is disabled. Please enable it or select a different provider.").format(
+				provider_doc.name
+			)
+		)
+
+	openai_client = OpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url,
+	)
+
+	# Determine temperature: session overrides provider, default to 1.0
+	temperature = session.temperature if session.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
+	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
+	system_prompt = session.system_prompt or provider_doc.system_prompt or None
+
+	# Build full conversation history for context
+	prior_messages = frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session_name},
+		fields=["sender_type", "content"],
+		order_by="creation asc",
+	)
+	messages = [
+		{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
+		for m in prior_messages
+	]
+	messages.append({"role": "user", "content": user_message})
+	
+	# Add system prompt if provided
+	if system_prompt:
+		messages.insert(0, {"role": "system", "content": system_prompt})
+
+	try:
+		# Check cancellation before starting the expensive API call
+		if cancel_check and cancel_check():
+			raise asyncio.CancelledError()
+
+		# Use OpenAI's streaming API directly
+		stream = openai_client.chat.completions.create(
+			model=provider_doc.default_model,
+			messages=messages,
+			temperature=temperature,
+			stream=True,
+		)
+
+		full_content = ""
+		input_tokens = 0
+		output_tokens = 0
+
+		for chunk in stream:
+			# Check cancellation during streaming
+			if cancel_check and cancel_check():
+				raise asyncio.CancelledError()
+
+			if chunk.choices and chunk.choices[0].delta.content is not None:
+				content_chunk = chunk.choices[0].delta.content
+				full_content += content_chunk
+				yield content_chunk, False, 0, 0
+
+			# Check for final chunk with token usage
+			if chunk.usage:
+				input_tokens = chunk.usage.prompt_tokens
+				output_tokens = chunk.usage.completion_tokens
+
+		# Yield final chunk with token usage
+		yield "", True, input_tokens, output_tokens
+
+	except asyncio.CancelledError:
+		raise
+	except AuthenticationError:
+		frappe.throw(
+			frappe._("Authentication failed for provider {0}. Please check the API key.").format(provider_doc.name)
+		)
+	except RateLimitError:
+		frappe.throw(
+			frappe._("Rate limit exceeded for provider {0}. Please try again shortly.").format(provider_doc.name)
+		)
+	except Exception as e:
+		frappe.log_error(
+			title=f"Agent streaming call failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name
+		)
+		frappe.throw(frappe._("The AI agent encountered an error during streaming: {0}").format(str(e)))
 
 
 def generate_session_title(session_name: str, user_message: str, agent_reply: str) -> str:

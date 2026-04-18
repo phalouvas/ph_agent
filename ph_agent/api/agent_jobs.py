@@ -1,7 +1,7 @@
 import asyncio
 
 import frappe
-from ph_agent.agent.deepseek_agent import generate_followup_suggestions, generate_session_title, get_agent_response
+from ph_agent.agent.deepseek_agent import generate_followup_suggestions, generate_session_title, get_agent_response, get_agent_response_stream
 from ph_agent.utils.pdf import extract_pdf_text
 
 
@@ -63,9 +63,127 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 
 	emit_status(frappe._("Calling AI…"))
 
+	# Check if streaming should be used
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming
+
+	# Create placeholder message for streaming or regular message for non-streaming
+	if use_streaming:
+		# Create placeholder message with loading indicator
+		agent_msg = frappe.get_doc(
+			{
+				"doctype": "Chat Message",
+				"chat_session": session,
+				"sender_type": "Agent",
+				"content": "⏳ Generating response...",  # Placeholder content
+			}
+		).insert(ignore_permissions=False)
+		frappe.db.commit()
+		
+		# Publish placeholder message event
+		placeholder_payload = {
+			"session": session,
+			"name": agent_msg.name,
+			"sender_type": "Agent",
+			"content": "",
+			"creation": str(agent_msg.creation),
+			"is_streaming_placeholder": True,
+		}
+		if agent_msg_name:
+			placeholder_payload["old_message_id"] = agent_msg_name
+		frappe.publish_realtime(
+			event="new_message",
+			message=placeholder_payload,
+			user=enqueued_by,
+		)
+	else:
+		# If regenerating, delete the old agent message before storing the new one
+		if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
+			frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
+
 	try:
-		reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+		if use_streaming:
+			# Streaming path
+			full_content = ""
+			input_tokens = 0
+			output_tokens = 0
+			streaming_successful = False
+			
+			try:
+				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled):
+					if is_cancelled():
+						raise asyncio.CancelledError()
+						
+					if is_final:
+						# Final chunk with token usage
+						input_tokens = chunk_input_tokens
+						output_tokens = chunk_output_tokens
+						streaming_successful = True
+					else:
+						# Content chunk
+						full_content += chunk
+						# Publish chunk via realtime
+						frappe.publish_realtime(
+							event="message_chunk",
+							message={
+								"session": session,
+								"message_id": agent_msg.name,
+								"chunk": chunk,
+								"is_final": False
+							},
+							user=enqueued_by,
+						)
+				
+				if streaming_successful:
+					# Update the placeholder message with full content
+					agent_msg.content = full_content
+					agent_msg.save(ignore_permissions=True)
+					frappe.db.commit()
+				else:
+					# Streaming didn't complete successfully, fall back
+					raise Exception("Streaming did not complete successfully")
+				
+			except Exception as stream_error:
+				# If streaming fails, fall back to non-streaming
+				frappe.log_error(
+					title=f"Streaming failed for session {session}, falling back to non-streaming",
+					message=str(stream_error)
+				)
+				# Delete placeholder message
+				if agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
+					frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
+				# Fall back to non-streaming
+				use_streaming = False
+				reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+				# Create regular message
+				agent_msg = frappe.get_doc(
+					{
+						"doctype": "Chat Message",
+						"chat_session": session,
+						"sender_type": "Agent",
+						"content": reply,
+					}
+				).insert(ignore_permissions=False)
+		else:
+			# Non-streaming path
+			reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+			# Store agent response
+			agent_msg = frappe.get_doc(
+				{
+					"doctype": "Chat Message",
+					"chat_session": session,
+					"sender_type": "Agent",
+					"content": reply,
+				}
+			).insert(ignore_permissions=False)
+			
 	except asyncio.CancelledError:
+		# Clean up placeholder message if streaming was used
+		if use_streaming and agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
+			frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
+			frappe.db.commit()
+			
 		release_lock()
 		frappe.cache().delete_value(cancel_key)
 		emit_status("")
@@ -76,6 +194,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		)
 		return
 	except frappe.exceptions.ValidationError as e:
+		# Clean up placeholder message if streaming was used
+		if use_streaming and agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
+			frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
+			frappe.db.commit()
+			
 		failed_msg = frappe.get_doc(
 			{
 				"doctype": "Chat Message",
@@ -103,20 +226,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		)
 		return
 
-	# If regenerating, delete the old agent message before storing the new one
-	if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
-		frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
-
-	# Store agent response
-	agent_msg = frappe.get_doc(
-		{
-			"doctype": "Chat Message",
-			"chat_session": session,
-			"sender_type": "Agent",
-			"content": reply,
-		}
-	).insert(ignore_permissions=False)
-
 	# Update token counts on the session
 	frappe.db.set_value(
 		"Chat Session",
@@ -133,7 +242,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	if current_title == "New Chat":
 		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
 		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
-			new_title = generate_session_title(session, agent_content, reply)
+			# Use agent_msg.content which contains either streaming or non-streaming content
+			agent_reply = agent_msg.content
+			new_title = generate_session_title(session, agent_content, agent_reply)
 			if new_title:
 				frappe.db.set_value("Chat Session", session, "title", new_title)
 				frappe.db.commit()
@@ -146,20 +257,35 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	# Release lock, clear the status indicator and deliver the reply
 	release_lock()
 	emit_status("")
-	new_msg_payload = {
-		"session": session,
-		"name": agent_msg.name,
-		"sender_type": "Agent",
-		"content": reply,
-		"creation": str(agent_msg.creation),
-	}
-	if agent_msg_name:
-		new_msg_payload["old_message_id"] = agent_msg_name
-	frappe.publish_realtime(
-		event="new_message",
-		message=new_msg_payload,
-		user=enqueued_by,
-	)
+	
+	if use_streaming:
+		# For streaming, publish final chunk event
+		frappe.publish_realtime(
+			event="message_chunk",
+			message={
+				"session": session,
+				"message_id": agent_msg.name,
+				"chunk": "",
+				"is_final": True
+			},
+			user=enqueued_by,
+		)
+	else:
+		# For non-streaming, publish the complete message
+		new_msg_payload = {
+			"session": session,
+			"name": agent_msg.name,
+			"sender_type": "Agent",
+			"content": reply,
+			"creation": str(agent_msg.creation),
+		}
+		if agent_msg_name:
+			new_msg_payload["old_message_id"] = agent_msg_name
+		frappe.publish_realtime(
+			event="new_message",
+			message=new_msg_payload,
+			user=enqueued_by,
+		)
 
 	# Enqueue follow-up suggestions if enabled for this session
 	session_doc = frappe.get_doc("Chat Session", session)

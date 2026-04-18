@@ -17,3 +17,8 @@ class LLMProvider(Document):
 						existing[0]
 					)
 				)
+		
+		# Validate temperature range
+		if self.temperature is not None:
+			if self.temperature < 0 or self.temperature > 1.5:
+				frappe.throw(frappe._("Temperature must be between 0 and 1.5"))

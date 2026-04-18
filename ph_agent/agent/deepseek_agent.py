@@ -1,13 +1,9 @@
 import asyncio
-import logging
 
 import frappe
-from agents import Agent, RunConfig, Runner
+from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from openai import AsyncOpenAI, AuthenticationError, RateLimitError
-
-logger = logging.getLogger(__name__)
-
 
 def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int]:
 	"""
@@ -39,6 +35,9 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		base_url=provider_doc.api_url,
 	)
 
+	# Determine temperature: session overrides provider, default to 1.0
+	temperature = session.temperature if session.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -51,6 +50,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		name="PH Agent",
 		instructions=system_prompt,
 		model=model,
+		model_settings=ModelSettings(temperature=temperature),
 	)
 
 	run_config = RunConfig(tracing_disabled=True)
@@ -96,7 +96,11 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			frappe._("Rate limit exceeded for provider {0}. Please try again shortly.").format(provider_doc.name)
 		)
 	except Exception as e:
-		logger.exception("Agent call failed for session %s", session_name)
+		frappe.log_error(
+			title=f"Agent call failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name
+		)
 		frappe.throw(frappe._("The AI agent encountered an error: {0}").format(str(e)))
 
 	reply = result.final_output or ""
@@ -123,6 +127,9 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 		base_url=provider_doc.api_url,
 	)
 
+	# Use provider temperature for title generation (default to 1.0 if not set)
+	title_temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -135,6 +142,7 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			"Return only the title text — no quotes, no punctuation at the end, no explanation."
 		),
 		model=model,
+		model_settings=ModelSettings(temperature=title_temperature),
 	)
 
 	prompt = f"User: {user_message}\nAssistant: {agent_reply}"
@@ -149,5 +157,9 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 		)
 		return (result.final_output or "").strip()
 	except Exception:
-		logger.exception("Title generation failed for session %s", session_name)
+		frappe.log_error(
+			title=f"Title generation failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name
+		)
 		return ""

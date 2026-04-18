@@ -518,6 +518,9 @@ function initPhChat(container, page, $status) {
 
 		// Insert after the message wrapper element
 		msgEl.parentNode.insertBefore(wrapper, msgEl.nextSibling);
+
+		// Scroll so the suggestions are visible
+		wrapper.scrollIntoView({ behavior: "smooth", block: "nearest" });
 		return true;
 	}
 

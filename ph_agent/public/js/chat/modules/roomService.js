@@ -161,6 +161,17 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                                         _chat.rooms = [newRoom, ...currentRooms];
                                         _chat.setAttribute("room-id", session.session);
                                         
+                                        // Set as active room and trigger message loading
+                                        state.setActiveRoomId(session.session);
+                                        // Also update realtime listeners with the new active room
+                                        if (window.phAgent.realtimeListeners) {
+                                            window.phAgent.realtimeListeners.setActiveRoomId(session.session);
+                                        }
+                                        const fetchMessagesEvent = new CustomEvent("fetch-messages", {
+                                            detail: [newRoom]
+                                        });
+                                        _chat.dispatchEvent(fetchMessagesEvent);
+                                        
                                         resolve(newRoom);
                                     },
                                     error: (err) => {

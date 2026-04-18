@@ -84,6 +84,10 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             // Update state
             state.setActiveRoomId(room.roomId);
+            // Also update realtime listeners with the new active room
+            if (window.phAgent.realtimeListeners) {
+                window.phAgent.realtimeListeners.setActiveRoomId(room.roomId);
+            }
             state.clearMessageSuggestions(); // Clear suggestions when switching rooms
             
             _chat.setAttribute("messages-loaded", "false");

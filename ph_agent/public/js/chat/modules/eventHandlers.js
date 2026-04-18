@@ -442,6 +442,11 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             state.setIsProcessing(true);
             
+            // Remove the old message from frontend state immediately
+            state.removeMessage(message._id);
+            // Update chat component to reflect removal
+            _chat.messages = state.getMessages();
+            
             frappe.call({
                 method: "ph_agent.api.chat.regenerate_message",
                 args: { message_id: message._id },

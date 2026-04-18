@@ -347,24 +347,16 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * @param {Object} data - Event data with session, message_id, chunk, and is_final
          */
         handleMessageChunk: function(data) {
-            console.log('handleMessageChunk called:', data);
-            if (data.session !== _activeRoomId) {
-                console.log('Session mismatch:', data.session, '!=', _activeRoomId);
-                return;
-            }
+            if (data.session !== _activeRoomId) return;
             
             const state = window.phAgent.state;
             const uiHelpers = window.phAgent.uiHelpers;
             
             // Find the message by ID
             const message = state.getMessageById(data.message_id);
-            if (!message) {
-                console.log('Message not found:', data.message_id);
-                return;
-            }
+            if (!message) return;
             
             if (data.is_final) {
-                console.log('Final chunk received');
                 // Final chunk - clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
@@ -380,37 +372,27 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Update chat component with final message
                 const newMessages = state.getMessages();
                 _chat.messages = newMessages;
-                console.log('Final chunk - chat messages updated, count:', newMessages?.length);
             } else {
-                console.log('Content chunk received, length:', data.chunk?.length, 'content preview:', data.chunk?.substring(0, 50));
                 // Content chunk - handle placeholder replacement
-                if (!data.chunk) {
-                    // Empty chunk, nothing to update
-                    console.log('Empty chunk, skipping');
-                    return;
-                }
+                if (!data.chunk) return;
                 
                 let updatedContent;
                 const currentContent = message.content || "";
                 if (currentContent === "⏳ Generating response..." || currentContent === "") {
                     // First chunk - replace placeholder with actual content
                     updatedContent = data.chunk;
-                    console.log('First chunk, replacing placeholder. New content preview:', updatedContent.substring(0, 50));
                 } else {
                     // Subsequent chunks - append to existing content
                     updatedContent = currentContent + data.chunk;
-                    console.log('Subsequent chunk, appending. Old length:', currentContent.length, 'New length:', updatedContent.length);
                 }
                 
-                const updated = state.updateMessage(data.message_id, { 
+                state.updateMessage(data.message_id, { 
                     content: updatedContent
                 });
-                console.log('Message updated:', updated);
                 
                 // Update chat component - force new array reference for Vue reactivity
                 const newMessages = state.getMessages();
                 _chat.messages = newMessages;
-                console.log('Chat messages updated, count:', newMessages?.length);
                 
                 // Show typing indicator while streaming
                 const rooms = state.getRooms().map((room) => {
@@ -426,7 +408,6 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 });
                 state.setRooms(rooms);
                 _chat.rooms = rooms;
-                console.log('Typing indicator updated');
             }
         },
         

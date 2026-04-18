@@ -96,31 +96,41 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * Setup stop button click handler
          */
         setupStopButtonHandler: function() {
+            console.log("Setting up stop button handler, stop button element:", _$stopBtn, "length:", _$stopBtn.length);
             // Remove existing handler first
             _$stopBtn.off("click");
             
             // Add new handler
             _$stopBtn.on("click", this.handleStopButtonClick.bind(this));
+            console.log("Stop button handler attached");
         },
         
         /**
          * Handle stop button click
          */
         handleStopButtonClick: function() {
+            console.log("Stop button clicked!");
             const state = window.phAgent.state;
             const isProcessing = state.getIsProcessing();
+            console.log("Active room ID:", _activeRoomId, "Is processing:", isProcessing);
             
-            if (!_activeRoomId || !isProcessing) return;
+            if (!_activeRoomId || !isProcessing) {
+                console.log("Cannot stop: no active room or not processing");
+                return;
+            }
             
+            console.log("Calling cancel_generation API for session:", _activeRoomId);
             _$stopBtn.prop("disabled", true);
             
             frappe.call({
                 method: "ph_agent.api.chat.cancel_generation",
                 args: { session: _activeRoomId },
-                callback: () => {
+                callback: (r) => {
+                    console.log("cancel_generation API response:", r);
                     _$stopBtn.prop("disabled", false);
                 },
-                error: () => {
+                error: (err) => {
+                    console.error("cancel_generation API error:", err);
                     _$stopBtn.prop("disabled", false);
                 }
             });
@@ -280,6 +290,9 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             _chat.rooms = rooms;
             
             uiHelpers.setStatus("");
+            
+            // Clear processing state (stop button should now be hidden)
+            state.setIsProcessing(false);
             
             // Format the new message
             const dt = new Date((data.creation || "").replace(" ", "T"));

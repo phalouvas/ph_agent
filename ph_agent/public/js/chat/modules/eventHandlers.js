@@ -129,6 +129,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const utils = window.phAgent.utils;
             
             // Check if already processing
+            console.log("handleSendMessage: Checking if already processing:", state.getIsProcessing());
             if (state.getIsProcessing()) {
                 frappe.show_alert({ 
                     message: __("Please wait for the current response to finish."), 
@@ -138,6 +139,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             }
             
             // Set processing state
+            console.log("handleSendMessage: Setting isProcessing to true");
             state.setIsProcessing(true);
             
             // Clear all existing suggestions
@@ -208,9 +210,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 return;
                             }
                             
-                            // The real implementation would handle the agent response
-                            // This is simplified - in reality, we'd wait for agent response
-                            state.setIsProcessing(false);
+                            // The agent response will come via real-time event (new_message)
+                            // Processing state will be cleared in handleNewMessage
+                            // DO NOT set setIsProcessing(false) here
                             
                             // Remove typing indicator
                             const updatedRooms = state.getRooms().map((r) =>

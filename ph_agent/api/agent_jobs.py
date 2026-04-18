@@ -82,6 +82,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		frappe.db.commit()
 		
 		# Publish placeholder message event
+		# If regenerating, delete the old agent message before creating the new one
+		if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
+			frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
+			frappe.db.commit()
+		
 		placeholder_payload = {
 			"session": session,
 			"name": agent_msg.name,
@@ -101,6 +106,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		# If regenerating, delete the old agent message before storing the new one
 		if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
 			frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
+			frappe.db.commit()
 
 	try:
 		if use_streaming:

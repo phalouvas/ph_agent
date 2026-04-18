@@ -500,10 +500,7 @@ function initPhChat(container, page, $status) {
 
 		// vue-advanced-chat renders: <div :id="message._id" class="vac-message-wrapper">
 		const msgEl = root.querySelector(`#${messageId}`);
-		console.log("[ph_agent suggestions] injectSuggestions for", messageId, "found el:", msgEl, "root:", root);
 		if (!msgEl) {
-			console.warn("[ph_agent suggestions] message element not found in DOM for id:", messageId);
-			console.log("[ph_agent suggestions] shadow root available:", !!chat.shadowRoot);
 			return false;
 		}
 
@@ -527,7 +524,6 @@ function initPhChat(container, page, $status) {
 	function renderPendingSuggestions() {
 		const pendingIds = Object.keys(messageSuggestions);
 		if (pendingIds.length === 0) return;
-		console.log("[ph_agent suggestions] renderPendingSuggestions — pending:", pendingIds);
 		pendingIds.forEach((msgId) => {
 			const injected = injectSuggestions(msgId, messageSuggestions[msgId]);
 			if (injected) {
@@ -717,22 +713,12 @@ function initPhChat(container, page, $status) {
 
 	// ── Real-time: follow-up suggestions ready ────────────────────
 	frappe.realtime.on("suggestions_ready", (data) => {
-		console.log("[ph_agent suggestions] suggestions_ready received:", data);
-		if (data.session !== activeRoomId) {
-			console.log("[ph_agent suggestions] ignored — session mismatch. active:", activeRoomId, "received:", data.session);
-			return;
-		}
-		if (!data.suggestions || !data.suggestions.length) {
-			console.log("[ph_agent suggestions] ignored — empty suggestions array");
-			return;
-		}
+		if (data.session !== activeRoomId) return;
+		if (!data.suggestions || !data.suggestions.length) return;
 		// Try to inject immediately; if the DOM element isn't ready yet, store for retry via MutationObserver
 		const injected = injectSuggestions(data.message_id, data.suggestions);
 		if (!injected) {
-			console.log("[ph_agent suggestions] element not in DOM yet, storing for retry via MutationObserver");
 			messageSuggestions[data.message_id] = data.suggestions;
-		} else {
-			console.log("[ph_agent suggestions] injected immediately for message_id:", data.message_id);
 		}
 	});
 }

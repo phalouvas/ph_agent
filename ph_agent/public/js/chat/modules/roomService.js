@@ -202,10 +202,10 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         deleteRoom: function(roomId) {
             return new Promise((resolve, reject) => {
                 frappe.call({
-                    method: "ph_agent.api.chat.archive_session",
-                    args: { session_name: roomId },
+                    method: "ph_agent.api.chat.delete_session",
+                    args: { session: roomId },
                     callback: (r) => {
-                        if (r.message && r.message.success) {
+                        if (r.message && r.message.status === "ok") {
                             // Remove room from state
                             const state = window.phAgent.state;
                             state.removeRoom(roomId);

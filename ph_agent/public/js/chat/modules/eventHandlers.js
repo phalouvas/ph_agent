@@ -324,7 +324,10 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
         handleMessageSelectionAction: function(event) {
             const { roomId, action, messages: selectedMsgs } = event.detail[0];
             
-            if (action === "deleteMessages") {
+            // Extract action name from action object (action is {name: 'deleteMessages', title: 'Delete'})
+            const actionName = action.name || action;
+            
+            if (actionName === "deleteMessages") {
                 // Delete all selected messages
                 const deletePromises = selectedMsgs.map(msg =>
                     new Promise((resolve, reject) => {
@@ -372,7 +375,10 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const state = window.phAgent.state;
             const utils = window.phAgent.utils;
             
-            switch (action) {
+            // Extract action name from action object (action is {name: 'editMessage', title: 'Edit', ...})
+            const actionName = action.name || action;
+            
+            switch (actionName) {
                 case "editMessage":
                     // The chat component handles the edit UI
                     // We just need to update the message when done (handled by edit-message event)
@@ -535,7 +541,10 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const { roomId, action } = event.detail[0];
             const roomService = window.phAgent.roomService;
             
-            switch (action) {
+            // Extract action name from action object (action is {name: 'deleteRoom', title: 'Delete'})
+            const actionName = action.name || action;
+            
+            switch (actionName) {
                 case "deleteRoom":
                     frappe.confirm(
                         __("Are you sure you want to delete this chat session? This action cannot be undone."),

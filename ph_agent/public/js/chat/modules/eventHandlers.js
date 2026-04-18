@@ -255,9 +255,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             frappe.call({
                 method: "ph_agent.api.chat.edit_message",
-                args: { message_name: messageId, new_content: newContent },
+                args: { message_id: messageId, content: newContent },
                 callback: (r) => {
-                    if (r.message && r.message.success) {
+                    if (r.message && (r.message.status === "ok" || r.message.status === "queued")) {
                         // Update message in state
                         const state = window.phAgent.state;
                         state.updateMessage(messageId, { 

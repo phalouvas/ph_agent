@@ -55,10 +55,58 @@ function initPhChat(container, page, $status) {
 	// firing while the user is typing inside the chat component.
 	container.addEventListener("keydown", (e) => e.stopPropagation());
 
+	// Inject suggestion styles directly into the shadow root so they work inside the shadow DOM
+	const _shadowRoot = chat.shadowRoot || container;
+	const _suggestionStyle = document.createElement("style");
+	_suggestionStyle.textContent = `
+		.ph-suggestions {
+			border-left: 3px solid var(--primary, #4f72b8);
+			background: var(--blue-highlight-color, #e8f0fe);
+			border-radius: 0 8px 8px 0;
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			margin: 4px 16px 10px 16px;
+			padding: 8px 12px 10px 12px;
+		}
+		.ph-suggestions-label {
+			color: var(--primary, #4f72b8);
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+		}
+		.ph-suggestions-btns {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+		}
+		.ph-suggestion-btn {
+			background: var(--card-bg, #fff);
+			border: 1px solid var(--primary, #4f72b8);
+			border-radius: 16px;
+			color: var(--primary, #4f72b8);
+			cursor: pointer;
+			font-size: 12px;
+			line-height: 1.4;
+			padding: 5px 12px;
+			text-align: left;
+			transition: background 0.15s, border-color 0.15s, color 0.15s;
+			white-space: normal;
+			word-break: break-word;
+		}
+		.ph-suggestion-btn:hover {
+			background: var(--primary, #4f72b8);
+			border-color: var(--primary, #4f72b8);
+			color: #fff;
+		}
+	`;
+	_shadowRoot.appendChild(_suggestionStyle);
+
 	// Hide the Regenerate action on the current user's own messages.
 	// The library shows ALL actions for own messages with no built-in exclusion flag.
 	// We use a MutationObserver so this works in both shadow DOM and light DOM.
-	const _regenRoot = chat.shadowRoot || container;
+	const _regenRoot = _shadowRoot;
 	new MutationObserver(() => {
 		_regenRoot.querySelectorAll(".vac-menu-options:not(.vac-menu-left) .vac-menu-item").forEach((el) => {
 			if (el.textContent.trim() === __("Regenerate")) {
@@ -508,12 +556,21 @@ function initPhChat(container, page, $status) {
 		wrapper.className = "ph-suggestions";
 		wrapper.setAttribute("data-msg-id", messageId);
 
+		const label = document.createElement("span");
+		label.className = "ph-suggestions-label";
+		label.textContent = __("Suggested follow-ups");
+		wrapper.appendChild(label);
+
+		const btnRow = document.createElement("div");
+		btnRow.className = "ph-suggestions-btns";
+		wrapper.appendChild(btnRow);
+
 		suggestions.forEach((text) => {
 			const btn = document.createElement("button");
 			btn.className = "ph-suggestion-btn";
 			btn.textContent = text;
 			btn.addEventListener("click", () => insertSuggestionIntoInput(text));
-			wrapper.appendChild(btn);
+			btnRow.appendChild(btn);
 		});
 
 		// Insert after the message wrapper element

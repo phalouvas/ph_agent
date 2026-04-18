@@ -133,13 +133,14 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * @param {Object} data - Event data with session and title
          */
         handleSessionRenamed: function(data) {
+            console.log("session_renamed event received:", data);
             const state = window.phAgent.state;
-            const roomService = window.phAgent.roomService;
             
             const rooms = state.getRooms().map((room) => {
                 if (room.roomId !== data.session) return room;
                 
-                const provider = roomService.getRoomProvider(room.roomId) || "";
+                const provider = state.getRoomProvider(room.roomId) || "";
+                console.log("Updating room name for session:", data.session, "title:", data.title, "provider:", provider);
                 return { 
                     ...room, 
                     roomName: data.title + (provider ? " — " + provider : "") 
@@ -148,6 +149,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             
             state.setRooms(rooms);
             _chat.rooms = rooms;
+            console.log("Rooms after update:", rooms);
         },
         
         /**

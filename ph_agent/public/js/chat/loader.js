@@ -61,8 +61,8 @@ window.phAgent.moduleLoadOrder = [
     'state.js',
     'utils.js',
     'roomService.js',
-    'eventHandlers.js'
-    // 'uiHelpers.js',        // Will be added in Step 3.2
+    'eventHandlers.js',
+    'uiHelpers.js'
     // 'realtimeListeners.js' // Will be added in Step 3.3
 ];
 

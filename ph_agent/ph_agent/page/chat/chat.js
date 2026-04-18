@@ -15,19 +15,54 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	$(page.main).append($container);
 	$(page.main).append($status);
 
-	// Load vue-advanced-chat locally (via page_js hook) with CDN fallback
-	if (window["vue-advanced-chat"]) {
-		window["vue-advanced-chat"].register();
-		initPhChat($container[0], page, $status);
-	} else {
-		// Fallback in case page_js didn't load the script
-		$.getScript(
-			"/assets/ph_agent/js/lib/vue-advanced-chat.umd.js",
-			() => {
+	// Load chat modules before initializing the chat
+	if (window.phAgent && window.phAgent.loadAllModules) {
+		window.phAgent.loadAllModules().then(() => {
+			// Load vue-advanced-chat locally (via page_js hook) with CDN fallback
+			if (window["vue-advanced-chat"]) {
 				window["vue-advanced-chat"].register();
 				initPhChat($container[0], page, $status);
+			} else {
+				// Fallback in case page_js didn't load the script
+				$.getScript(
+					"/assets/ph_agent/js/lib/vue-advanced-chat.umd.js",
+					() => {
+						window["vue-advanced-chat"].register();
+						initPhChat($container[0], page, $status);
+					}
+				);
 			}
-		);
+		}).catch(error => {
+			console.error("Failed to load chat modules:", error);
+			// Fallback to original initialization even if modules fail to load
+			if (window["vue-advanced-chat"]) {
+				window["vue-advanced-chat"].register();
+				initPhChat($container[0], page, $status);
+			} else {
+				$.getScript(
+					"/assets/ph_agent/js/lib/vue-advanced-chat.umd.js",
+					() => {
+						window["vue-advanced-chat"].register();
+						initPhChat($container[0], page, $status);
+					}
+				);
+			}
+		});
+	} else {
+		// Fallback if loader.js didn't load properly
+		console.warn("phAgent loader not available, falling back to direct initialization");
+		if (window["vue-advanced-chat"]) {
+			window["vue-advanced-chat"].register();
+			initPhChat($container[0], page, $status);
+		} else {
+			$.getScript(
+				"/assets/ph_agent/js/lib/vue-advanced-chat.umd.js",
+				() => {
+					window["vue-advanced-chat"].register();
+					initPhChat($container[0], page, $status);
+				}
+			);
+		}
 	}
 };
 

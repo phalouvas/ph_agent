@@ -163,7 +163,15 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 
 	# Enqueue follow-up suggestions if enabled for this session
 	session_doc = frappe.get_doc("Chat Session", session)
+	frappe.log_error(
+		title="[DEBUG] suggestions check",
+		message=f"session={session} enable_suggestions={session_doc.enable_suggestions} agent_msg={agent_msg.name}",
+	)
 	if session_doc.enable_suggestions:
+		frappe.log_error(
+			title="[DEBUG] suggestions enqueuing",
+			message=f"enqueuing _generate_suggestions_background for msg {agent_msg.name}",
+		)
 		frappe.enqueue(
 			"ph_agent.api.agent_jobs._generate_suggestions_background",
 			session=session,
@@ -172,6 +180,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			queue="short",
 			timeout=30,
 		)
+	else:
+		frappe.log_error(
+			title="[DEBUG] suggestions skipped",
+			message=f"enable_suggestions is disabled for session {session}",
+		)
 
 
 def _generate_suggestions_background(session, agent_message_id, enqueued_by):
@@ -179,6 +192,10 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 	Background job: generate follow-up question suggestions for the last agent message
 	and publish them via realtime to the user.
 	"""
+	frappe.log_error(
+		title="[DEBUG] suggestions background started",
+		message=f"session={session} msg={agent_message_id} user={enqueued_by}",
+	)
 	try:
 		# Fetch conversation history up to and including the agent message
 		prior_messages = frappe.get_all(
@@ -187,15 +204,31 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 			fields=["sender_type", "content"],
 			order_by="creation asc",
 		)
+		frappe.log_error(
+			title="[DEBUG] suggestions history",
+			message=f"history length: {len(prior_messages)}",
+		)
 		history = [
 			{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
 			for m in prior_messages
 		]
 
 		suggestions = generate_followup_suggestions(session, history)
+		frappe.log_error(
+			title="[DEBUG] suggestions generated",
+			message=f"suggestions={suggestions}",
+		)
 		if not suggestions:
+			frappe.log_error(
+				title="[DEBUG] suggestions empty",
+				message="LLM returned empty suggestions — not publishing",
+			)
 			return
 
+		frappe.log_error(
+			title="[DEBUG] suggestions publishing",
+			message=f"publishing suggestions_ready to user={enqueued_by}",
+		)
 		frappe.publish_realtime(
 			event="suggestions_ready",
 			message={
@@ -204,6 +237,10 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 				"suggestions": suggestions,
 			},
 			user=enqueued_by,
+		)
+		frappe.log_error(
+			title="[DEBUG] suggestions published",
+			message="suggestions_ready event published successfully",
 		)
 	except Exception:
 		frappe.log_error(

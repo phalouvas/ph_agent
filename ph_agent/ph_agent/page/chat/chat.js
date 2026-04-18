@@ -255,6 +255,11 @@ function initPhChat(container, page, $status) {
 		}
 		setProcessing(true);
 
+		// Clear all existing suggestions — they are obsolete once the user sends a new message
+		Object.keys(messageSuggestions).forEach((id) => delete messageSuggestions[id]);
+		const container = chat.shadowRoot || chat;
+		container.querySelectorAll(".ph-suggestions").forEach((el) => el.remove());
+
 		// Optimistic user bubble with local file previews
 		const tempId = "temp_" + Date.now();
 		const localFiles = (files || []).map((f) => ({
@@ -489,14 +494,18 @@ function initPhChat(container, page, $status) {
 
 	function injectSuggestions(messageId, suggestions) {
 		const root = chat.shadowRoot || container;
-		// Remove any previously injected suggestions for this message
-		removeSuggestionsForMessage(messageId);
 
-		// Find the message container — vue-advanced-chat uses data-message-id or the element with _id
-		// Try common selectors used by the library
-		const msgEl = root.querySelector(`[data-message-id="${messageId}"]`)
-			|| root.querySelector(`[message-id="${messageId}"]`);
-		if (!msgEl) return;
+		// Idempotent: if already injected, skip to avoid MutationObserver loop
+		if (root.querySelector(`.ph-suggestions[data-msg-id="${messageId}"]`)) return true;
+
+		// vue-advanced-chat renders: <div :id="message._id" class="vac-message-wrapper">
+		const msgEl = root.querySelector(`#${messageId}`);
+		console.log("[ph_agent suggestions] injectSuggestions for", messageId, "found el:", msgEl, "root:", root);
+		if (!msgEl) {
+			console.warn("[ph_agent suggestions] message element not found in DOM for id:", messageId);
+			console.log("[ph_agent suggestions] shadow root available:", !!chat.shadowRoot);
+			return false;
+		}
 
 		const wrapper = document.createElement("div");
 		wrapper.className = "ph-suggestions";
@@ -510,13 +519,21 @@ function initPhChat(container, page, $status) {
 			wrapper.appendChild(btn);
 		});
 
-		// Insert after the message element (inside its parent)
+		// Insert after the message wrapper element
 		msgEl.parentNode.insertBefore(wrapper, msgEl.nextSibling);
+		return true;
 	}
 
 	function renderPendingSuggestions() {
-		Object.entries(messageSuggestions).forEach(([msgId, suggs]) => {
-			injectSuggestions(msgId, suggs);
+		const pendingIds = Object.keys(messageSuggestions);
+		if (pendingIds.length === 0) return;
+		console.log("[ph_agent suggestions] renderPendingSuggestions — pending:", pendingIds);
+		pendingIds.forEach((msgId) => {
+			const injected = injectSuggestions(msgId, messageSuggestions[msgId]);
+			if (injected) {
+				// Remove from map so the observer stops retrying for this message
+				delete messageSuggestions[msgId];
+			}
 		});
 	}
 
@@ -700,9 +717,22 @@ function initPhChat(container, page, $status) {
 
 	// ── Real-time: follow-up suggestions ready ────────────────────
 	frappe.realtime.on("suggestions_ready", (data) => {
-		if (data.session !== activeRoomId) return;
-		if (!data.suggestions || !data.suggestions.length) return;
-		messageSuggestions[data.message_id] = data.suggestions;
-		injectSuggestions(data.message_id, data.suggestions);
+		console.log("[ph_agent suggestions] suggestions_ready received:", data);
+		if (data.session !== activeRoomId) {
+			console.log("[ph_agent suggestions] ignored — session mismatch. active:", activeRoomId, "received:", data.session);
+			return;
+		}
+		if (!data.suggestions || !data.suggestions.length) {
+			console.log("[ph_agent suggestions] ignored — empty suggestions array");
+			return;
+		}
+		// Try to inject immediately; if the DOM element isn't ready yet, store for retry via MutationObserver
+		const injected = injectSuggestions(data.message_id, data.suggestions);
+		if (!injected) {
+			console.log("[ph_agent suggestions] element not in DOM yet, storing for retry via MutationObserver");
+			messageSuggestions[data.message_id] = data.suggestions;
+		} else {
+			console.log("[ph_agent suggestions] injected immediately for message_id:", data.message_id);
+		}
 	});
 }

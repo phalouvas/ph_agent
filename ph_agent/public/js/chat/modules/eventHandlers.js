@@ -293,9 +293,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             frappe.call({
                 method: "ph_agent.api.chat.delete_message",
-                args: { message_name: message._id },
+                args: { message_id: message._id },
                 callback: (r) => {
-                    if (r.message && r.message.success) {
+                    if (r.message && r.message.status === "ok") {
                         // Remove message from state
                         const state = window.phAgent.state;
                         state.removeMessage(message._id);
@@ -335,8 +335,8 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     new Promise((resolve, reject) => {
                         frappe.call({
                             method: "ph_agent.api.chat.delete_message",
-                            args: { message_name: msg._id },
-                            callback: (r) => resolve(r.message && r.message.success),
+                            args: { message_id: msg._id },
+                            callback: (r) => resolve(r.message && r.message.status === "ok"),
                             error: reject
                         });
                     })

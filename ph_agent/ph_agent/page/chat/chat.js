@@ -46,6 +46,7 @@ function initPhChat(container, page, $status) {
 		{ name: "editMessage", title: __("Edit"), onlyMe: true },
 		{ name: "deleteMessage", title: __("Delete") },
 		{ name: "selectMessages", title: __("Select") },
+		{ name: "copyMessage", title: __("Copy") },
 		{ name: "regenerateMessage", title: __("Regenerate") },
 	]));
 	chat.setAttribute("message-selection-actions", JSON.stringify([{ name: "deleteMessages", title: __("Delete") }]));	chat.setAttribute("room-info-enabled", "true");	container.appendChild(chat);
@@ -386,13 +387,30 @@ function initPhChat(container, page, $status) {
 
 	// ── Event: custom message action (regenerate) ─────────────────
 	chat.addEventListener("message-action-handler", ({ detail: [{ roomId, action, message }] }) => {
-		if (action.name === "regenerateMessage") {
+		if (action.name === "copyMessage") {
+			// Copy message content to clipboard
+			const textToCopy = message.content || "";
+			if (navigator.clipboard && window.isSecureContext) {
+				// Modern clipboard API (requires HTTPS or localhost)
+				navigator.clipboard.writeText(textToCopy)
+					.then(() => {
+						frappe.show_alert({ message: __("Copied to clipboard"), indicator: "green" });
+					})
+					.catch((err) => {
+						// Fallback to execCommand for older browsers or permission issues
+						fallbackCopyTextToClipboard(textToCopy);
+					});
+			} else {
+				// Fallback for older browsers
+				fallbackCopyTextToClipboard(textToCopy);
+			}
+		} else if (action.name === "regenerateMessage") {
 			if (message.senderId !== agentId) return;
 			if (isProcessing) {
 				frappe.show_alert({ message: __("Please wait for the current response to finish."), indicator: "orange" });
 				return;
 			}
-                        			// Show spinner in place immediately
+                         			// Show spinner in place immediately
 			const originalContent = message.content;
 			messages = messages.map((m) =>
 				m._id === message._id ? { ...m, content: "🔄 Regenerating…", regenerating: true } : m
@@ -422,6 +440,30 @@ function initPhChat(container, page, $status) {
 			});
 		}
 	});
+
+	// Fallback copy function using document.execCommand
+	function fallbackCopyTextToClipboard(text) {
+		const textArea = document.createElement("textarea");
+		textArea.value = text;
+		// Make the textarea out of viewport
+		textArea.style.position = "fixed";
+		textArea.style.left = "-999999px";
+		textArea.style.top = "-999999px";
+		document.body.appendChild(textArea);
+		textArea.focus();
+		textArea.select();
+		try {
+			const successful = document.execCommand("copy");
+			if (successful) {
+				frappe.show_alert({ message: __("Copied to clipboard"), indicator: "green" });
+			} else {
+				frappe.show_alert({ message: __("Failed to copy to clipboard"), indicator: "red" });
+			}
+		} catch (err) {
+			frappe.show_alert({ message: __("Failed to copy to clipboard"), indicator: "red" });
+		}
+		document.body.removeChild(textArea);
+	}
 
 	chat.addEventListener("room-info", ({ detail: [room] }) => {
 		const roomId = room.roomId;

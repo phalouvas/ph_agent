@@ -96,37 +96,30 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * Setup stop button click handler
          */
         setupStopButtonHandler: function() {
-            console.log("Setting up stop button handler, stop button element:", _$stopBtn, "length:", _$stopBtn.length);
             // Remove existing handler first
             _$stopBtn.off("click");
             
             // Add new handler
             _$stopBtn.on("click", this.handleStopButtonClick.bind(this));
-            console.log("Stop button handler attached");
         },
         
         /**
          * Handle stop button click
          */
         handleStopButtonClick: function() {
-            console.log("Stop button clicked!");
             const state = window.phAgent.state;
             const isProcessing = state.getIsProcessing();
-            console.log("Active room ID:", _activeRoomId, "Is processing:", isProcessing);
             
             if (!_activeRoomId || !isProcessing) {
-                console.log("Cannot stop: no active room or not processing");
                 return;
             }
             
-            console.log("Calling cancel_generation API for session:", _activeRoomId);
             _$stopBtn.prop("disabled", true);
             
             frappe.call({
                 method: "ph_agent.api.chat.cancel_generation",
                 args: { session: _activeRoomId },
                 callback: (r) => {
-                    console.log("cancel_generation API response:", r);
                     _$stopBtn.prop("disabled", false);
                 },
                 error: (err) => {
@@ -143,14 +136,12 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * @param {Object} data - Event data with session and title
          */
         handleSessionRenamed: function(data) {
-            console.log("session_renamed event received:", data);
             const state = window.phAgent.state;
             
             const rooms = state.getRooms().map((room) => {
                 if (room.roomId !== data.session) return room;
                 
                 const provider = state.getRoomProvider(room.roomId) || "";
-                console.log("Updating room name for session:", data.session, "title:", data.title, "provider:", provider);
                 return { 
                     ...room, 
                     roomName: data.title + (provider ? " — " + provider : "") 
@@ -159,7 +150,6 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             
             state.setRooms(rooms);
             _chat.rooms = rooms;
-            console.log("Rooms after update:", rooms);
         },
         
         /**

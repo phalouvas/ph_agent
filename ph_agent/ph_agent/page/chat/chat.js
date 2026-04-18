@@ -78,13 +78,11 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
  * @param {jQuery} $status - Status bar jQuery element
  */
 function initPhChat(container, page, $status) {
-	console.log("initPhChat called");
 	const currentUserId = frappe.session.user;
 	const agentId = "ph_agent";
 
 	// ── Create Vue Advanced Chat web component ──────────────────────
 	const chat = document.createElement("vue-advanced-chat");
-	console.log("Chat element created:", chat);
 	chat.setAttribute("height", "100%");
 	chat.setAttribute("current-user-id", currentUserId);
 	chat.setAttribute("show-audio", "false");
@@ -101,7 +99,6 @@ function initPhChat(container, page, $status) {
 	chat.setAttribute("message-selection-actions", JSON.stringify([{ name: "deleteMessages", title: __("Delete") }]));
 	chat.setAttribute("room-info-enabled", "true");
 	container.appendChild(chat);
-	console.log("Chat element appended to container");
 
 	// Prevent Frappe global keyboard shortcuts (e.g. Shift+/ = "?") from
 	// firing while the user is typing inside the chat component.
@@ -111,67 +108,49 @@ function initPhChat(container, page, $status) {
 	
 	// Initialize state manager
 	const state = window.phAgent.state;
-	console.log("State manager initialized:", state);
 	
 	// Initialize room service with current user and agent IDs
 	const roomService = window.phAgent.roomService;
 	roomService.init(chat, currentUserId, agentId);
-	console.log("Room service initialized");
 	
 	// Initialize UI helpers
 	const uiHelpers = window.phAgent.uiHelpers;
 	uiHelpers.init(chat, container, $status);
-	console.log("UI helpers initialized");
 	
 	// Initialize event handlers
 	const eventHandlers = window.phAgent.eventHandlers;
 	eventHandlers.init(chat, container, page, $status);
-	console.log("Event handlers initialized");
 	
 	// Initialize real-time listeners
 	const realtimeListeners = window.phAgent.realtimeListeners;
 	realtimeListeners.init(chat, container, $status, agentId);
-	console.log("Real-time listeners initialized");
 	
 	// Bind event handlers to the chat component
 	eventHandlers.bindAll();
-	console.log("Event handlers bound");
 	
 	// Register real-time listeners
 	realtimeListeners.registerAllListeners();
-	console.log("Real-time listeners registered");
 	
 	// Set up global function for creating new sessions (for backward compatibility)
 	window._phChatCreateSession = () => roomService.createNewSession();
 	
 	// ── Load initial rooms ──────────────────────────────────────────
-	console.log("Starting to load rooms...");
 	roomService.loadRooms().then((rooms) => {
-		console.log("Rooms loaded successfully:", rooms);
 		// Set initial active room if rooms exist
 		const stateRooms = state.getRooms();
-		console.log("State rooms:", stateRooms);
-		console.log("Chat rooms property:", chat.rooms);
-		console.log("Chat element:", chat);
 		if (stateRooms.length > 0) {
 			realtimeListeners.setActiveRoomId(stateRooms[0].roomId);
-			console.log("Set active room ID:", stateRooms[0].roomId);
 			
 			// Trigger fetch-messages event for the first room
-			console.log("Triggering fetch-messages for first room:", stateRooms[0]);
 			const fetchMessagesEvent = new CustomEvent("fetch-messages", {
 				detail: [stateRooms[0]]
 			});
 			chat.dispatchEvent(fetchMessagesEvent);
-			console.log("fetch-messages event dispatched");
-		} else {
-			console.log("No rooms found in state");
 		}
 	}).catch(error => {
 		console.error("Failed to load initial rooms:", error);
 		// Still mark rooms as loaded to avoid infinite loading spinner
 		chat.setAttribute("rooms-loaded", "true");
-		console.log("Set rooms-loaded to true due to error");
 	});
 	
 	// ── Set up periodic suggestion rendering ────────────────────────

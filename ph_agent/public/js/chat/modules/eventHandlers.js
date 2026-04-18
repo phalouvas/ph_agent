@@ -129,7 +129,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const utils = window.phAgent.utils;
             
             // Check if already processing
-            console.log("handleSendMessage: Checking if already processing:", state.getIsProcessing());
             if (state.getIsProcessing()) {
                 frappe.show_alert({ 
                     message: __("Please wait for the current response to finish."), 
@@ -139,7 +138,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             }
             
             // Set processing state
-            console.log("handleSendMessage: Setting isProcessing to true");
             state.setIsProcessing(true);
             
             // Clear all existing suggestions

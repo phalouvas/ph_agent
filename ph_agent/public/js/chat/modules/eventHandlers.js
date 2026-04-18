@@ -208,6 +208,15 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 return;
                             }
                             
+                            // Update the temporary message ID with the real database ID
+                            if (r.message.user_message) {
+                                const messages = state.getMessages().map((msg) =>
+                                    msg._id === tempId ? { ...msg, _id: r.message.user_message, saved: true } : msg
+                                );
+                                state.setMessages(messages);
+                                _chat.messages = messages;
+                            }
+                            
                             // The agent response will come via real-time event (new_message)
                             // Processing state will be cleared in handleNewMessage
                             // DO NOT set setIsProcessing(false) here
@@ -250,6 +259,15 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
          */
         handleEditMessage: function(event) {
             const { roomId, messageId, newContent } = event.detail[0];
+            
+            // Check if trying to edit a temporary message (not yet saved to database)
+            if (messageId.startsWith("temp_")) {
+                frappe.show_alert({ 
+                    message: __("Cannot edit message while it's being sent. Please wait a moment and try again."), 
+                    indicator: "orange" 
+                });
+                return;
+            }
             
             frappe.call({
                 method: "ph_agent.api.chat.edit_message",

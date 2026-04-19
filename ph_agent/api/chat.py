@@ -328,14 +328,14 @@ def summarize_conversation(session, message_ids=None):
 		)
 		frappe.throw(frappe._("Failed to generate summary: {0}").format(str(e)))
 	
-	# Create summary message
+	# Create summary message with *📋 Summary* prefix
 	summary_msg = frappe.get_doc(
 		{
 			"doctype": "Chat Message",
 			"chat_session": session,
 			"sender_type": "Agent",
 			"message_type": "Summary",
-			"content": summary,
+			"content": "*📋 Summary*\n\n" + summary,
 		}
 	).insert(ignore_permissions=False)
 	frappe.db.commit()
@@ -375,7 +375,7 @@ def summarize_conversation(session, message_ids=None):
 			"name": summary_msg.name,
 			"sender_type": "Agent",
 			"message_type": "Summary",
-			"content": summary,
+			"content": "*📋 Summary*\n\n" + summary,
 			"creation": str(summary_msg.creation),
 		},
 		user=frappe.session.user,

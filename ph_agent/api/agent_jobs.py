@@ -156,14 +156,14 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			try:
 				summary = generate_conversation_summary(session, conversation_history)
 				if summary:
-					# Create summary message
+					# Create summary message with *📋 Summary* prefix
 					summary_msg = frappe.get_doc(
 						{
 							"doctype": "Chat Message",
 							"chat_session": session,
 							"sender_type": "Agent",
 							"message_type": "Summary",
-							"content": summary,
+							"content": "*📋 Summary*\n\n" + summary,
 						}
 					).insert(ignore_permissions=False)
 					frappe.db.commit()
@@ -200,7 +200,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 							"name": summary_msg.name,
 							"sender_type": "Agent",
 							"message_type": "Summary",
-							"content": summary,
+							"content": "*📋 Summary*\n\n" + summary,
 							"creation": str(summary_msg.creation),
 						},
 						user=enqueued_by,

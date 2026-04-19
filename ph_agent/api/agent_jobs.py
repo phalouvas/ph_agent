@@ -97,9 +97,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	if agent_msg_name:
 		placeholder_payload["old_message_id"] = agent_msg_name
 	
-	# Debug logging
-	print(f"[DEBUG] Publishing placeholder - session: {session}, msg_id: {agent_msg.name}, is_streaming: {use_streaming}, old_msg_id: {agent_msg_name}")
-	
 	frappe.publish_realtime(
 		event="new_message",
 		message=placeholder_payload,
@@ -454,9 +451,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		}
 		# Don't include old_message_id in final response - only placeholder needs it
 		# The final response updates the placeholder message (same ID)
-		
-		# Debug logging
-		print(f"[DEBUG] Publishing non-streaming final message - session: {session}, msg_id: {agent_msg.name}, content preview: {reply[:50]}...")
 		
 		frappe.publish_realtime(
 			event="new_message",

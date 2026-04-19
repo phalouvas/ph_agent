@@ -135,9 +135,6 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	if not user_message_added:
 		history.append({"role": "user", "content": user_message})
 	
-	# Debug logging - only log errors, not normal operation
-	# Remove verbose debug logging to reduce noise in error logs
-
 	try:
 		# Check cancellation before starting the expensive API call
 		if cancel_check and cancel_check():
@@ -285,10 +282,7 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	# Only add user_message if it wasn't already in prior_messages
 	if not user_message_added:
 		messages.append({"role": "user", "content": user_message})
-	
-	# Debug logging - only log errors, not normal operation
-	# Remove verbose debug logging to reduce noise in error logs
-	
+		
 	# Add system prompt if provided
 	if system_prompt:
 		messages.insert(0, {"role": "system", "content": system_prompt})

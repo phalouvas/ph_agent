@@ -270,10 +270,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * @param {Object} data - Event data with session, name, content, creation, old_message_id
          */
         handleNewMessage: function(data) {
-            console.log("[DEBUG] handleNewMessage called with data:", data);
-            
             if (data.session !== _activeRoomId) {
-                console.log("[DEBUG] Event filtered out - session mismatch. Active room:", _activeRoomId, "Event session:", data.session);
                 return;
             }
             
@@ -297,13 +294,9 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 saved: true,
             };
             
-            console.log("[DEBUG] is_streaming_placeholder:", data.is_streaming_placeholder, "old_message_id:", data.old_message_id);
-            
             if (data.is_streaming_placeholder || data.content === "⏳ Generating response...") {
-                console.log("[DEBUG] Handling placeholder (streaming or with placeholder content)");
                 
                 if (data.old_message_id) {
-                    console.log("[DEBUG] Placeholder for regeneration - old_message_id:", data.old_message_id);
                     // Remove suggestions for the old (regenerated) message
                     state.removeMessageSuggestions(data.old_message_id);
                     uiHelpers.removeSuggestionsForMessage(data.old_message_id);
@@ -339,9 +332,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 
                 // Keep processing state active (stop button should remain visible)
                 state.setIsProcessing(true);
-                console.log("[DEBUG] Processing state set to:", state.getIsProcessing());
             } else {
-                console.log("[DEBUG] Handling final/regular message");
                 // For final/regular messages (with actual content)ssages (with actual content), clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
@@ -353,10 +344,8 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 
                 // Clear processing state (stop button should now be hidden)
                 state.setIsProcessing(false);
-                console.log("[DEBUG] Processing state cleared to:", state.getIsProcessing());
                 
                 if (data.old_message_id) {
-                    console.log("[DEBUG] Handling regeneration - old_message_id:", data.old_message_id);
                     // Remove suggestions for the old (regenerated) message
                     state.removeMessageSuggestions(data.old_message_id);
                     uiHelpers.removeSuggestionsForMessage(data.old_message_id);
@@ -369,20 +358,16 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 } else {
                     // Check if message already exists (e.g., placeholder was sent)
                     const existingIndex = state.getMessages().findIndex(m => m._id === data.name);
-                    console.log("[DEBUG] Checking if message exists - ID:", data.name, "Found at index:", existingIndex);
                     if (existingIndex !== -1) {
-                        console.log("[DEBUG] Updating existing message with new content");
                         // Update existing message
                         state.updateMessage(data.name, { content: data.content });
                     } else {
-                        console.log("[DEBUG] Adding new message");
                         // Add new message
                         state.addMessage(newMsg);
                     }
                 }
             }
             
-            console.log("[DEBUG] Final message count:", state.getMessages().length);
             _chat.messages = state.getMessages();
         },
         

@@ -108,7 +108,105 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
 			frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
 			frappe.db.commit()
-
+	# Check if we need to auto-summarize before making the API call
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	
+	# Get context length and auto-summary threshold
+	context_length = provider_doc.context_length or 128000
+	auto_summary_threshold = provider_doc.auto_summary_threshold or 85
+	
+	# Calculate current percentage
+	current_tokens = session_doc.estimated_conversation_tokens or 0
+	token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
+	
+	# Auto-summarize if threshold exceeded
+	if token_percentage > auto_summary_threshold:
+		emit_status(frappe._("Summarizing conversation..."))
+		
+		# Get messages since last summary
+		last_summary = session_doc.last_summary_message
+		if last_summary:
+			last_summary_doc = frappe.get_doc("Chat Message", last_summary)
+			messages = frappe.get_all(
+				"Chat Message",
+				filters={
+					"chat_session": session,
+					"creation": [">", last_summary_doc.creation],
+					"message_type": ["!=", "Summary"]
+				},
+				fields=["name", "sender_type", "content", "creation"],
+				order_by="creation asc",
+			)
+		else:
+			# No previous summary, get all non-summary messages
+			messages = frappe.get_all(
+				"Chat Message",
+				filters={
+					"chat_session": session,
+					"message_type": ["!=", "Summary"]
+				},
+				fields=["name", "sender_type", "content", "creation"],
+				order_by="creation asc",
+			)
+		
+		if messages:
+			# Format conversation history
+			conversation_history = []
+			for msg in messages:
+				role = "user" if msg.sender_type == "User" else "assistant"
+				conversation_history.append({"role": role, "content": msg.content or ""})
+			
+			# Generate summary
+			from ph_agent.agent.deepseek_agent import generate_conversation_summary
+			try:
+				summary = generate_conversation_summary(session, conversation_history)
+				if summary:
+					# Create summary message
+					summary_msg = frappe.get_doc(
+						{
+							"doctype": "Chat Message",
+							"chat_session": session,
+							"sender_type": "Agent",
+							"message_type": "Summary",
+							"content": summary,
+						}
+					).insert(ignore_permissions=False)
+					frappe.db.commit()
+					
+					# Update session with summary reference and reset token count
+					frappe.db.set_value(
+						"Chat Session",
+						session,
+						{
+							"last_summary_message": summary_msg.name,
+							"estimated_conversation_tokens": 0,
+							"token_warning_sent": 0,
+						}
+					)
+					frappe.db.commit()
+					
+					# Publish realtime event for new summary message
+					frappe.publish_realtime(
+						event="new_message",
+						message={
+							"session": session,
+							"name": summary_msg.name,
+							"sender_type": "Agent",
+							"message_type": "Summary",
+							"content": summary,
+							"creation": str(summary_msg.creation),
+						},
+						user=enqueued_by,
+					)
+					
+					emit_status(frappe._("Conversation summarized. Continuing..."))
+			except Exception as e:
+				frappe.log_error(
+					title=f"Auto-summarization failed for session {session}",
+					message=str(e)
+				)
+				# Continue without summary if generation fails
 	try:
 		if use_streaming:
 			# Streaming path

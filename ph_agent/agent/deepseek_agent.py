@@ -351,6 +351,85 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 		return ""
 
 
+def generate_conversation_summary(session_name: str, conversation_history: list) -> str:
+	"""
+	Generate a concise summary of a conversation.
+	Returns the summary text, or an empty string on failure.
+	"""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		return ""
+
+	openai_client = AsyncOpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url,
+	)
+
+	# Use provider temperature for summary generation (default to 1.0 if not set)
+	summary_temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
+	model = OpenAIChatCompletionsModel(
+		model=provider_doc.default_model,
+		openai_client=openai_client,
+	)
+
+	summary_agent = Agent(
+		name="Conversation Summarizer",
+		instructions=(
+			"You are a helpful assistant that summarizes conversations concisely. "
+			"Create a clear, concise summary that captures the main points, key decisions, "
+			"and important information from the conversation. "
+			"Focus on the most important information that would be useful for future reference. "
+			"Keep the summary to 3-5 sentences maximum. "
+			"Return only the summary text — no introductory phrases, no markdown, no extra text."
+		),
+		model=model,
+		model_settings=ModelSettings(temperature=summary_temperature, max_tokens=max_tokens),
+	)
+
+	# Format conversation for summarization
+	formatted_conversation = []
+	for msg in conversation_history:
+		role = msg.get("role", "user")
+		content = msg.get("content", "")
+		if role == "user":
+			formatted_conversation.append(f"User: {content}")
+		else:
+			formatted_conversation.append(f"Assistant: {content}")
+	
+	conversation_text = "\n".join(formatted_conversation)
+
+	try:
+		result = asyncio.run(
+			Runner.run(
+				summary_agent,
+				input=conversation_text,
+				run_config=RunConfig(tracing_disabled=True),
+			)
+		)
+		return (result.final_output or "").strip()
+	except Exception:
+		frappe.log_error(
+			title=f"Conversation summarization failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name
+		)
+		return ""
+
+
 def generate_followup_suggestions(session_name: str, conversation_history: list) -> list[str]:
 	"""
 	Ask the LLM to generate 3-5 follow-up question suggestions based on the conversation.

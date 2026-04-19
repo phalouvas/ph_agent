@@ -251,6 +251,125 @@ def edit_message(message_id, content):
 
 
 @frappe.whitelist()
+def summarize_conversation(session, message_ids=None):
+	"""
+	Summarize a conversation or selected messages.
+	
+	Args:
+		session: Chat Session name
+		message_ids: Optional list of message IDs to summarize. If None, summarizes all messages since last summary.
+	
+	Returns:
+		Dictionary with summary message ID
+	"""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+	
+	# Import here to avoid circular imports
+	from ph_agent.agent.deepseek_agent import generate_conversation_summary
+	
+	# Get session and provider
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	
+	# Get messages to summarize
+	if message_ids:
+		# Summarize specific messages
+		message_ids = frappe.parse_json(message_ids) if isinstance(message_ids, str) else message_ids
+		messages = frappe.get_all(
+			"Chat Message",
+			filters={"name": ["in", message_ids], "chat_session": session},
+			fields=["name", "sender_type", "content", "creation"],
+			order_by="creation asc",
+		)
+	else:
+		# Summarize all messages since last summary
+		last_summary = session_doc.last_summary_message
+		if last_summary:
+			# Get messages after the last summary
+			last_summary_doc = frappe.get_doc("Chat Message", last_summary)
+			messages = frappe.get_all(
+				"Chat Message",
+				filters={
+					"chat_session": session,
+					"creation": [">", last_summary_doc.creation],
+					"message_type": ["!=", "Summary"]  # Don't include other summaries
+				},
+				fields=["name", "sender_type", "content", "creation"],
+				order_by="creation asc",
+			)
+		else:
+			# No previous summary, get all non-summary messages
+			messages = frappe.get_all(
+				"Chat Message",
+				filters={
+					"chat_session": session,
+					"message_type": ["!=", "Summary"]
+				},
+				fields=["name", "sender_type", "content", "creation"],
+				order_by="creation asc",
+			)
+	
+	if not messages:
+		frappe.throw(frappe._("No messages to summarize"))
+	
+	# Format conversation history for summarization
+	conversation_history = []
+	for msg in messages:
+		role = "user" if msg.sender_type == "User" else "assistant"
+		conversation_history.append({"role": role, "content": msg.content or ""})
+	
+	# Generate summary
+	try:
+		summary = generate_conversation_summary(session, conversation_history)
+	except Exception as e:
+		frappe.log_error(
+			title=f"Summarization failed for session {session}",
+			message=str(e)
+		)
+		frappe.throw(frappe._("Failed to generate summary: {0}").format(str(e)))
+	
+	# Create summary message
+	summary_msg = frappe.get_doc(
+		{
+			"doctype": "Chat Message",
+			"chat_session": session,
+			"sender_type": "Agent",
+			"message_type": "Summary",
+			"content": summary,
+		}
+	).insert(ignore_permissions=False)
+	frappe.db.commit()
+	
+	# Update session with summary reference and reset token count
+	frappe.db.set_value(
+		"Chat Session",
+		session,
+		{
+			"last_summary_message": summary_msg.name,
+			"estimated_conversation_tokens": 0,
+			"token_warning_sent": 0,  # Reset warning flag
+		}
+	)
+	frappe.db.commit()
+	
+	# Publish realtime event for new summary message
+	frappe.publish_realtime(
+		event="new_message",
+		message={
+			"session": session,
+			"name": summary_msg.name,
+			"sender_type": "Agent",
+			"message_type": "Summary",
+			"content": summary,
+			"creation": str(summary_msg.creation),
+		},
+		user=frappe.session.user,
+	)
+	
+	return {"status": "success", "summary_message_id": summary_msg.name}
+
+
+@frappe.whitelist()
 def delete_message(message_id):
 	"""Delete a Chat Message. Users can delete their own messages; agent messages can be deleted by anyone with session access."""
 	msg = frappe.get_doc("Chat Message", message_id)

@@ -89,13 +89,30 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 
 	run_config = RunConfig(tracing_disabled=True)
 
-	# Build full conversation history for context
-	prior_messages = frappe.get_all(
-		"Chat Message",
-		filters={"chat_session": session_name},
-		fields=["sender_type", "content"],
-		order_by="creation asc",
-	)
+	# Build conversation history for context (only messages after last summary)
+	# Get last summary message if exists
+	last_summary_message = frappe.db.get_value("Chat Session", session_name, "last_summary_message")
+	
+	if last_summary_message:
+		# Get messages created after the last summary
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={
+				"chat_session": session_name,
+				"creation": [">", frappe.db.get_value("Chat Message", last_summary_message, "creation")]
+			},
+			fields=["sender_type", "content"],
+			order_by="creation asc",
+		)
+	else:
+		# No summary yet, get all messages
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={"chat_session": session_name},
+			fields=["sender_type", "content"],
+			order_by="creation asc",
+		)
+	
 	history = [
 		{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
 		for m in prior_messages
@@ -204,13 +221,30 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
 	system_prompt = session.system_prompt or provider_doc.system_prompt or None
 
-	# Build full conversation history for context
-	prior_messages = frappe.get_all(
-		"Chat Message",
-		filters={"chat_session": session_name},
-		fields=["sender_type", "content"],
-		order_by="creation asc",
-	)
+	# Build conversation history for context (only messages after last summary)
+	# Get last summary message if exists
+	last_summary_message = frappe.db.get_value("Chat Session", session_name, "last_summary_message")
+	
+	if last_summary_message:
+		# Get messages created after the last summary
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={
+				"chat_session": session_name,
+				"creation": [">", frappe.db.get_value("Chat Message", last_summary_message, "creation")]
+			},
+			fields=["sender_type", "content"],
+			order_by="creation asc",
+		)
+	else:
+		# No summary yet, get all messages
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={"chat_session": session_name},
+			fields=["sender_type", "content"],
+			order_by="creation asc",
+		)
+	
 	messages = [
 		{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
 		for m in prior_messages

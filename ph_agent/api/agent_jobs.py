@@ -250,9 +250,40 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		{
 			"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
 			"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
+			"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
 		},
 	)
 	frappe.db.commit()
+
+	# Check if we need to send a token warning
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	
+	# Get context length from provider, default to 128000 if not set
+	context_length = provider_doc.context_length or 128000
+	
+	# Calculate current percentage
+	current_tokens = frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens")
+	token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
+	
+	# Send warning if over 75% and warning hasn't been sent yet
+	if token_percentage > 75 and not frappe.db.get_value("Chat Session", session, "token_warning_sent"):
+		# Publish warning event
+		frappe.publish_realtime(
+			event="token_warning",
+			message={
+				"session": session,
+				"current_tokens": current_tokens,
+				"context_length": context_length,
+				"percentage": round(token_percentage, 1),
+				"message": f"Conversation is using {round(token_percentage, 1)}% of context window ({current_tokens:,}/{context_length:,} tokens). Consider summarizing the conversation."
+			},
+			user=enqueued_by,
+		)
+		
+		# Mark warning as sent
+		frappe.db.set_value("Chat Session", session, "token_warning_sent", 1)
+		frappe.db.commit()
 
 	# Auto-generate a title after the first exchange (title is still default "New Chat")
 	current_title = frappe.db.get_value("Chat Session", session, "title")

@@ -31,6 +31,29 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			)
 		)
 
+	# Check context limit before making API call
+	context_length = provider_doc.context_length or 128000  # Default to 128K
+	estimated_tokens = session.estimated_conversation_tokens or 0
+	
+	# Get max_tokens for this call
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
+	# Check if this call would exceed context limit
+	if estimated_tokens + max_tokens > context_length:
+		frappe.throw(
+			frappe._(
+				"Conversation would exceed context limit. Current: {0:,} tokens, Limit: {1:,} tokens, This call needs: ~{2:,} tokens. "
+				"Please summarize the conversation first."
+			).format(estimated_tokens, context_length, max_tokens)
+		)
+
 	openai_client = AsyncOpenAI(
 		api_key=api_key,
 		base_url=provider_doc.api_url,
@@ -145,6 +168,29 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 			frappe._("LLM Provider {0} is disabled. Please enable it or select a different provider.").format(
 				provider_doc.name
 			)
+		)
+
+	# Check context limit before making API call
+	context_length = provider_doc.context_length or 128000  # Default to 128K
+	estimated_tokens = session.estimated_conversation_tokens or 0
+	
+	# Get max_tokens for this call
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
+	# Check if this call would exceed context limit
+	if estimated_tokens + max_tokens > context_length:
+		frappe.throw(
+			frappe._(
+				"Conversation would exceed context limit. Current: {0:,} tokens, Limit: {1:,} tokens, This call needs: ~{2:,} tokens. "
+				"Please summarize the conversation first."
+			).format(estimated_tokens, context_length, max_tokens)
 		)
 
 	openai_client = OpenAI(

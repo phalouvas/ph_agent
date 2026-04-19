@@ -39,6 +39,16 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	# Determine temperature: session overrides provider, default to 1.0
 	temperature = session.temperature if session.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
 	
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -51,7 +61,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		name="PH Agent",
 		instructions=system_prompt,
 		model=model,
-		model_settings=ModelSettings(temperature=temperature),
+		model_settings=ModelSettings(temperature=temperature, max_tokens=max_tokens),
 	)
 
 	run_config = RunConfig(tracing_disabled=True)
@@ -170,11 +180,22 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 		if cancel_check and cancel_check():
 			raise asyncio.CancelledError()
 
+		# Get max_tokens from provider, use model-specific defaults if not set
+		max_tokens = provider_doc.max_output_tokens
+		if not max_tokens:
+			# Fallback to model-specific defaults
+			model_name = (provider_doc.default_model or "").lower()
+			if "reasoner" in model_name:
+				max_tokens = 32768  # 32K for DeepSeek Reasoner
+			else:
+				max_tokens = 4096   # 4K for DeepSeek Chat and other models
+		
 		# Use OpenAI's streaming API directly
 		stream = openai_client.chat.completions.create(
 			model=provider_doc.default_model,
 			messages=messages,
 			temperature=temperature,
+			max_tokens=max_tokens,
 			stream=True,
 		)
 
@@ -239,6 +260,16 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 	# Use provider temperature for title generation (default to 1.0 if not set)
 	title_temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
 	
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -251,7 +282,7 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			"Return only the title text — no quotes, no punctuation at the end, no explanation."
 		),
 		model=model,
-		model_settings=ModelSettings(temperature=title_temperature),
+		model_settings=ModelSettings(temperature=title_temperature, max_tokens=max_tokens),
 	)
 
 	prompt = f"User: {user_message}\nAssistant: {agent_reply}"
@@ -291,6 +322,16 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 		base_url=provider_doc.api_url,
 	)
 
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -305,7 +346,7 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 			'Example: ["Question one?", "Question two?", "Question three?"]'
 		),
 		model=model,
-		model_settings=ModelSettings(temperature=1.0),
+		model_settings=ModelSettings(temperature=1.0, max_tokens=max_tokens),
 	)
 
 	# Build a short summary of the conversation as context

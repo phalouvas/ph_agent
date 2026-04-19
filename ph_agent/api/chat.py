@@ -72,6 +72,7 @@ def send_message(session, content, file_names=None):
 			"doctype": "Chat Message",
 			"chat_session": session,
 			"sender_type": "User",
+			"message_type": "User",
 			"content": content,
 		}
 	).insert(ignore_permissions=False)

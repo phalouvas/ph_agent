@@ -16,6 +16,10 @@
   "api_url",
   "default_model",
   "temperature",
+  "section_token_limits",
+  "max_output_tokens",
+  "context_length",
+  "auto_summary_threshold",
   "system_prompt"
  ],
  "fields": [
@@ -93,6 +97,32 @@
    "fieldname": "system_prompt",
    "fieldtype": "Long Text",
    "label": "System Prompt"
+  },
+  {
+   "fieldname": "section_token_limits",
+   "fieldtype": "Section Break",
+   "label": "Token Limits"
+  },
+  {
+   "default": "4096",
+   "description": "Maximum tokens the model can generate per response. Default: 4096 for deepseek-chat, 32768 for deepseek-reasoner.",
+   "fieldname": "max_output_tokens",
+   "fieldtype": "Int",
+   "label": "Max Output Tokens"
+  },
+  {
+   "default": "128000",
+   "description": "Maximum total tokens (prompt + completion) the model supports. Default: 128000 (DeepSeek's 128K context).",
+   "fieldname": "context_length",
+   "fieldtype": "Int",
+   "label": "Context Length"
+  },
+  {
+   "default": "85",
+   "description": "Percentage of context length at which to automatically summarize conversation (50-95). Default: 85%.",
+   "fieldname": "auto_summary_threshold",
+   "fieldtype": "Int",
+   "label": "Auto Summary Threshold (%)"
   }
  ],
  "links": [],

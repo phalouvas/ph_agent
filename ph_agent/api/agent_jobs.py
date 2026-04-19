@@ -76,6 +76,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				"doctype": "Chat Message",
 				"chat_session": session,
 				"sender_type": "Agent",
+				"message_type": "Agent",
 				"content": "⏳ Generating response...",  # Placeholder content
 			}
 		).insert(ignore_permissions=False)
@@ -142,8 +143,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						)
 				
 				if streaming_successful:
-					# Update the placeholder message with full content
+					# Update the placeholder message with full content and token counts
 					agent_msg.content = full_content
+					agent_msg.input_tokens = input_tokens
+					agent_msg.output_tokens = output_tokens
+					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
 				else:
@@ -162,25 +166,31 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				# Fall back to non-streaming
 				use_streaming = False
 				reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
-				# Create regular message
+				# Create regular message with token counts
 				agent_msg = frappe.get_doc(
 					{
 						"doctype": "Chat Message",
 						"chat_session": session,
 						"sender_type": "Agent",
+						"message_type": "Agent",
 						"content": reply,
+						"input_tokens": input_tokens,
+						"output_tokens": output_tokens,
 					}
 				).insert(ignore_permissions=False)
 		else:
 			# Non-streaming path
 			reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
-			# Store agent response
+			# Store agent response with token counts
 			agent_msg = frappe.get_doc(
 				{
 					"doctype": "Chat Message",
 					"chat_session": session,
 					"sender_type": "Agent",
+					"message_type": "Agent",
 					"content": reply,
+					"input_tokens": input_tokens,
+					"output_tokens": output_tokens,
 				}
 			).insert(ignore_permissions=False)
 			
@@ -210,6 +220,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				"doctype": "Chat Message",
 				"chat_session": session,
 				"sender_type": "Agent",
+				"message_type": "Agent",
 				"content": str(e),
 			}
 		).insert(ignore_permissions=False)

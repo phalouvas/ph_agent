@@ -75,6 +75,8 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.on("new_message", this.handleNewMessage.bind(this));
             frappe.realtime.on("suggestions_ready", this.handleSuggestionsReady.bind(this));
             frappe.realtime.on("message_chunk", this.handleMessageChunk.bind(this));
+            frappe.realtime.on("token_update", this.handleTokenUpdate.bind(this));
+            frappe.realtime.on("token_warning", this.handleTokenWarning.bind(this));
         },
         
         /**
@@ -268,7 +270,9 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          * @param {Object} data - Event data with session, name, content, creation, old_message_id
          */
         handleNewMessage: function(data) {
-            if (data.session !== _activeRoomId) return;
+            if (data.session !== _activeRoomId) {
+                return;
+            }
             
             const state = window.phAgent.state;
             const uiHelpers = window.phAgent.uiHelpers;
@@ -290,9 +294,27 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 saved: true,
             };
             
-            if (data.is_streaming_placeholder) {
-                // For streaming placeholder, add message and show typing indicator
-                state.addMessage(newMsg);
+            if (data.is_streaming_placeholder || data.content === "⏳ Generating response...") {
+                
+                if (data.old_message_id) {
+                    // Remove suggestions for the old (regenerated) message
+                    state.removeMessageSuggestions(data.old_message_id);
+                    uiHelpers.removeSuggestionsForMessage(data.old_message_id);
+                    
+                    // Replace the old message with placeholder
+                    const messages = state.getMessages().map((message) =>
+                        message._id === data.old_message_id ? newMsg : message
+                    );
+                    // If old message wasn't found (already removed), add the placeholder
+                    const oldMessageExists = state.getMessages().some(m => m._id === data.old_message_id);
+                    if (!oldMessageExists) {
+                        messages.push(newMsg);
+                    }
+                    state.setMessages(messages);
+                } else {
+                    // For new message placeholder, add message
+                    state.addMessage(newMsg);
+                }
                 
                 // Show typing indicator for agent
                 const rooms = state.getRooms().map((room) => {
@@ -311,7 +333,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Keep processing state active (stop button should remain visible)
                 state.setIsProcessing(true);
             } else {
-                // For regular messages, clear typing indicator and status
+                // For final/regular messages (with actual content)ssages (with actual content), clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
                 );
@@ -334,8 +356,15 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                     );
                     state.setMessages(messages);
                 } else {
-                    // Add new message
-                    state.addMessage(newMsg);
+                    // Check if message already exists (e.g., placeholder was sent)
+                    const existingIndex = state.getMessages().findIndex(m => m._id === data.name);
+                    if (existingIndex !== -1) {
+                        // Update existing message
+                        state.updateMessage(data.name, { content: data.content });
+                    } else {
+                        // Add new message
+                        state.addMessage(newMsg);
+                    }
                 }
             }
             
@@ -428,6 +457,60 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Store for later retry via MutationObserver
                 state.setMessageSuggestions(data.message_id, data.suggestions);
             }
+        },
+        
+        /**
+         * Handle token_update event
+         * @param {Object} data - Event data with session, current_tokens, context_length, etc.
+         */
+        handleTokenUpdate: function(data) {
+            if (data.session !== _activeRoomId) return;
+            
+            // Update token counter in status bar
+            const $tokenCounter = _$status.find(".ph-token-counter");
+            const $tokenCount = _$status.find(".ph-token-count");
+            const $tokenLimit = _$status.find(".ph-token-limit");
+            const $tokenPercent = _$status.find(".ph-token-percent");
+            
+            if (data.current_tokens !== undefined && data.context_length !== undefined) {
+                const percentage = data.context_length > 0 ? Math.round((data.current_tokens / data.context_length) * 100) : 0;
+                
+                // Format numbers with commas
+                const formattedCurrent = data.current_tokens.toLocaleString();
+                const formattedLimit = data.context_length.toLocaleString();
+                
+                $tokenCount.text(formattedCurrent);
+                $tokenLimit.text(formattedLimit);
+                $tokenPercent.text(percentage);
+                
+                // Token counter already visible with display: flex
+                
+                // Add warning class if over 75%
+                if (percentage > 75) {
+                    $tokenCounter.css("color", "#f59e0b"); // Amber color for warning
+                } else if (percentage > 90) {
+                    $tokenCounter.css("color", "#ef4444"); // Red color for critical
+                } else {
+                    $tokenCounter.css("color", "#6b7280"); // Gray color for normal
+                }
+            }
+        },
+        
+        /**
+         * Handle token_warning event
+         * @param {Object} data - Event data with session, current_tokens, context_length, percentage, message
+         */
+        handleTokenWarning: function(data) {
+            if (data.session !== _activeRoomId) return;
+            
+            // Show warning toast
+            frappe.show_alert({
+                message: data.message || `Conversation is using ${data.percentage}% of context window. Consider summarizing.`,
+                indicator: "orange"
+            }, 10); // Show for 10 seconds
+            
+            // Also update token counter
+            this.handleTokenUpdate(data);
         },
         
         // --- Utility Methods ---

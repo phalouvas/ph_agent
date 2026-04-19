@@ -15,7 +15,11 @@
   "enable_streaming",
   "column_break_1",
   "input_tokens",
-  "output_tokens"
+  "output_tokens",
+  "section_token_tracking",
+  "estimated_conversation_tokens",
+  "last_summary_message",
+  "token_warning_sent"
  ],
  "fields": [
   {
@@ -94,6 +98,37 @@
    "fieldname": "output_tokens",
    "fieldtype": "Int",
    "label": "Output Tokens"
+  },
+  {
+   "fieldname": "section_token_tracking",
+   "fieldtype": "Section Break",
+   "label": "Token Tracking",
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.estimated_conversation_tokens > 0"
+  },
+  {
+   "default": "0",
+   "fieldname": "estimated_conversation_tokens",
+   "fieldtype": "Int",
+   "label": "Estimated Conversation Tokens",
+   "read_only": 1,
+   "description": "Running total of tokens in current conversation context (since last summary)"
+  },
+  {
+   "fieldname": "last_summary_message",
+   "fieldtype": "Link",
+   "label": "Last Summary Message",
+   "options": "Chat Message",
+   "read_only": 1,
+   "description": "Reference to the most recent summary message"
+  },
+  {
+   "default": "0",
+   "fieldname": "token_warning_sent",
+   "fieldtype": "Check",
+   "label": "Token Warning Sent",
+   "read_only": 1,
+   "description": "Whether 75% context limit warning has been shown"
   }
  ],
  "links": [],

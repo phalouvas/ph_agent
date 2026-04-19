@@ -69,14 +69,18 @@ window.phAgent.state = window.phAgent.state || (function() {
         
         // --- Mutation methods ---
         addRoom: function(room) {
-            rooms.push(room);
+            rooms = [...rooms, room];
             return rooms.length - 1; // Return index of added room
         },
         
         updateRoom: function(roomId, updates) {
             const index = rooms.findIndex(r => r.roomId === roomId);
             if (index !== -1) {
-                rooms[index] = {...rooms[index], ...updates};
+                rooms = [
+                    ...rooms.slice(0, index),
+                    {...rooms[index], ...updates},
+                    ...rooms.slice(index + 1)
+                ];
                 return true;
             }
             return false;
@@ -85,7 +89,7 @@ window.phAgent.state = window.phAgent.state || (function() {
         removeRoom: function(roomId) {
             const index = rooms.findIndex(r => r.roomId === roomId);
             if (index !== -1) {
-                rooms.splice(index, 1);
+                rooms = rooms.filter((_, i) => i !== index);
                 delete roomProviders[roomId];
                 return true;
             }
@@ -93,14 +97,19 @@ window.phAgent.state = window.phAgent.state || (function() {
         },
         
         addMessage: function(message) {
-            messages.push(message);
+            messages = [...messages, message];
             return messages.length - 1; // Return index of added message
         },
         
         updateMessage: function(messageId, updates) {
             const index = messages.findIndex(m => m._id === messageId);
             if (index !== -1) {
-                messages[index] = {...messages[index], ...updates};
+                // Create new array for Vue reactivity
+                messages = [
+                    ...messages.slice(0, index),
+                    {...messages[index], ...updates},
+                    ...messages.slice(index + 1)
+                ];
                 return true;
             }
             return false;
@@ -109,7 +118,7 @@ window.phAgent.state = window.phAgent.state || (function() {
         removeMessage: function(messageId) {
             const index = messages.findIndex(m => m._id === messageId);
             if (index !== -1) {
-                messages.splice(index, 1);
+                messages = messages.filter((_, i) => i !== index);
                 delete messageSuggestions[messageId];
                 return true;
             }

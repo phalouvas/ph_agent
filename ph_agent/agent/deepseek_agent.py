@@ -31,6 +31,29 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			)
 		)
 
+	# Check context limit before making API call
+	context_length = provider_doc.context_length or 128000  # Default to 128K
+	estimated_tokens = session.estimated_conversation_tokens or 0
+	
+	# Get max_tokens for this call
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
+	# Check if this call would exceed context limit
+	if estimated_tokens + max_tokens > context_length:
+		frappe.throw(
+			frappe._(
+				"Conversation would exceed context limit. Current: {0:,} tokens, Limit: {1:,} tokens, This call needs: ~{2:,} tokens. "
+				"Please summarize the conversation first."
+			).format(estimated_tokens, context_length, max_tokens)
+		)
+
 	openai_client = AsyncOpenAI(
 		api_key=api_key,
 		base_url=provider_doc.api_url,
@@ -38,6 +61,16 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 
 	# Determine temperature: session overrides provider, default to 1.0
 	temperature = session.temperature if session.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
@@ -51,24 +84,57 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		name="PH Agent",
 		instructions=system_prompt,
 		model=model,
-		model_settings=ModelSettings(temperature=temperature),
+		model_settings=ModelSettings(temperature=temperature, max_tokens=max_tokens),
 	)
 
 	run_config = RunConfig(tracing_disabled=True)
 
-	# Build full conversation history for context
-	prior_messages = frappe.get_all(
-		"Chat Message",
-		filters={"chat_session": session_name},
-		fields=["sender_type", "content"],
-		order_by="creation asc",
-	)
-	history = [
-		{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
-		for m in prior_messages
-	]
-	history.append({"role": "user", "content": user_message})
-
+	# Build conversation history for context (only messages after last summary, INCLUDING the summary as system message)
+	# Get last summary message if exists
+	last_summary_message = frappe.db.get_value("Chat Session", session_name, "last_summary_message")
+	
+	if last_summary_message:
+		# Get messages created AFTER the last summary (including the summary itself)
+		last_summary_doc = frappe.get_doc("Chat Message", last_summary_message)
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={
+				"chat_session": session_name,
+				"creation": [">=", last_summary_doc.creation],  # Include the summary
+			},
+			fields=["name", "sender_type", "content", "message_type", "creation"],
+			order_by="creation asc",
+		)
+	else:
+		# No summary yet, get all messages
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={"chat_session": session_name},
+			fields=["name", "sender_type", "content", "message_type", "creation"],
+			order_by="creation asc",
+		)
+	
+	history = []
+	user_message_added = False
+	for m in prior_messages:
+		# Skip placeholder messages
+		if m.content and "⏳ Generating response" in m.content:
+			continue
+		if m.message_type == "Summary":
+			# Format summary messages specially
+			history.append({"role": "system", "content": f"Conversation summary: {m.content or ''}"})
+		elif m.sender_type == "User":
+			history.append({"role": "user", "content": m.content or ""})
+			# Check if this is the user_message we're processing
+			if m.content == user_message:
+				user_message_added = True
+		else:
+			history.append({"role": "assistant", "content": m.content or ""})
+	
+	# Only add user_message if it wasn't already in prior_messages
+	if not user_message_added:
+		history.append({"role": "user", "content": user_message})
+	
 	try:
 		# Check cancellation before starting the expensive API call
 		if cancel_check and cancel_check():
@@ -137,6 +203,29 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 			)
 		)
 
+	# Check context limit before making API call
+	context_length = provider_doc.context_length or 128000  # Default to 128K
+	estimated_tokens = session.estimated_conversation_tokens or 0
+	
+	# Get max_tokens for this call
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
+	# Check if this call would exceed context limit
+	if estimated_tokens + max_tokens > context_length:
+		frappe.throw(
+			frappe._(
+				"Conversation would exceed context limit. Current: {0:,} tokens, Limit: {1:,} tokens, This call needs: ~{2:,} tokens. "
+				"Please summarize the conversation first."
+			).format(estimated_tokens, context_length, max_tokens)
+		)
+
 	openai_client = OpenAI(
 		api_key=api_key,
 		base_url=provider_doc.api_url,
@@ -148,19 +237,52 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
 	system_prompt = session.system_prompt or provider_doc.system_prompt or None
 
-	# Build full conversation history for context
-	prior_messages = frappe.get_all(
-		"Chat Message",
-		filters={"chat_session": session_name},
-		fields=["sender_type", "content"],
-		order_by="creation asc",
-	)
-	messages = [
-		{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
-		for m in prior_messages
-	]
-	messages.append({"role": "user", "content": user_message})
+	# Build conversation history for context (only messages after last summary, INCLUDING the summary as system message)
+	# Get last summary message if exists
+	last_summary_message = frappe.db.get_value("Chat Session", session_name, "last_summary_message")
 	
+	if last_summary_message:
+		# Get messages created AFTER the last summary (including the summary itself)
+		last_summary_doc = frappe.get_doc("Chat Message", last_summary_message)
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={
+				"chat_session": session_name,
+				"creation": [">=", last_summary_doc.creation],  # Include the summary
+			},
+			fields=["name", "sender_type", "content", "message_type", "creation"],
+			order_by="creation asc",
+		)
+	else:
+		# No summary yet, get all messages
+		prior_messages = frappe.get_all(
+			"Chat Message",
+			filters={"chat_session": session_name},
+			fields=["name", "sender_type", "content", "message_type", "creation"],
+			order_by="creation asc",
+		)
+	
+	messages = []
+	user_message_added = False
+	for m in prior_messages:
+		# Skip placeholder messages
+		if m.content and "⏳ Generating response" in m.content:
+			continue
+		if m.message_type == "Summary":
+			# Format summary messages specially
+			messages.append({"role": "system", "content": f"Conversation summary: {m.content or ''}"})
+		elif m.sender_type == "User":
+			messages.append({"role": "user", "content": m.content or ""})
+			# Check if this is the user_message we're processing
+			if m.content == user_message:
+				user_message_added = True
+		else:
+			messages.append({"role": "assistant", "content": m.content or ""})
+	
+	# Only add user_message if it wasn't already in prior_messages
+	if not user_message_added:
+		messages.append({"role": "user", "content": user_message})
+		
 	# Add system prompt if provided
 	if system_prompt:
 		messages.insert(0, {"role": "system", "content": system_prompt})
@@ -170,11 +292,22 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 		if cancel_check and cancel_check():
 			raise asyncio.CancelledError()
 
+		# Get max_tokens from provider, use model-specific defaults if not set
+		max_tokens = provider_doc.max_output_tokens
+		if not max_tokens:
+			# Fallback to model-specific defaults
+			model_name = (provider_doc.default_model or "").lower()
+			if "reasoner" in model_name:
+				max_tokens = 32768  # 32K for DeepSeek Reasoner
+			else:
+				max_tokens = 4096   # 4K for DeepSeek Chat and other models
+		
 		# Use OpenAI's streaming API directly
 		stream = openai_client.chat.completions.create(
 			model=provider_doc.default_model,
 			messages=messages,
 			temperature=temperature,
+			max_tokens=max_tokens,
 			stream=True,
 		)
 
@@ -239,6 +372,16 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 	# Use provider temperature for title generation (default to 1.0 if not set)
 	title_temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
 	
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -251,7 +394,7 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			"Return only the title text — no quotes, no punctuation at the end, no explanation."
 		),
 		model=model,
-		model_settings=ModelSettings(temperature=title_temperature),
+		model_settings=ModelSettings(temperature=title_temperature, max_tokens=max_tokens),
 	)
 
 	prompt = f"User: {user_message}\nAssistant: {agent_reply}"
@@ -268,6 +411,85 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 	except Exception:
 		frappe.log_error(
 			title=f"Title generation failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name
+		)
+		return ""
+
+
+def generate_conversation_summary(session_name: str, conversation_history: list) -> str:
+	"""
+	Generate a concise summary of a conversation.
+	Returns the summary text, or an empty string on failure.
+	"""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		return ""
+
+	openai_client = AsyncOpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url,
+	)
+
+	# Use provider temperature for summary generation (default to 1.0 if not set)
+	summary_temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
+	model = OpenAIChatCompletionsModel(
+		model=provider_doc.default_model,
+		openai_client=openai_client,
+	)
+
+	summary_agent = Agent(
+		name="Conversation Summarizer",
+		instructions=(
+			"You are a conversation summarizer. Your task is to create a concise summary of a chat conversation. "
+			"Focus on summarizing the FLOW of the conversation - who said what, what questions were asked, what answers were given. "
+			"DO NOT just repeat factual information from the conversation. Instead, summarize the conversation structure. "
+			"Example format: 'The user asked about [topic]. I explained [key points]. We discussed [main topics].' "
+			"Keep the summary to 2-3 sentences maximum. "
+			"Return only the summary text — no introductory phrases, no markdown, no extra text."
+		),
+		model=model,
+		model_settings=ModelSettings(temperature=summary_temperature, max_tokens=max_tokens),
+	)
+
+	# Format conversation for summarization
+	formatted_conversation = []
+	for msg in conversation_history:
+		role = msg.get("role", "user")
+		content = msg.get("content", "")
+		if role == "user":
+			formatted_conversation.append(f"User: {content}")
+		else:
+			formatted_conversation.append(f"Assistant: {content}")
+	
+	conversation_text = "\n".join(formatted_conversation)
+
+	try:
+		result = asyncio.run(
+			Runner.run(
+				summary_agent,
+				input=conversation_text,
+				run_config=RunConfig(tracing_disabled=True),
+			)
+		)
+		return (result.final_output or "").strip()
+	except Exception:
+		frappe.log_error(
+			title=f"Conversation summarization failed for session {session_name}",
 			reference_doctype="Chat Session",
 			reference_name=session_name
 		)
@@ -291,6 +513,16 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 		base_url=provider_doc.api_url,
 	)
 
+	# Get max_tokens from provider, use model-specific defaults if not set
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		# Fallback to model-specific defaults
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768  # 32K for DeepSeek Reasoner
+		else:
+			max_tokens = 4096   # 4K for DeepSeek Chat and other models
+	
 	model = OpenAIChatCompletionsModel(
 		model=provider_doc.default_model,
 		openai_client=openai_client,
@@ -305,7 +537,7 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 			'Example: ["Question one?", "Question two?", "Question three?"]'
 		),
 		model=model,
-		model_settings=ModelSettings(temperature=1.0),
+		model_settings=ModelSettings(temperature=1.0, max_tokens=max_tokens),
 	)
 
 	# Build a short summary of the conversation as context

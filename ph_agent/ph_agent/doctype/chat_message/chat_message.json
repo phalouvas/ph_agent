@@ -7,10 +7,13 @@
  "field_order": [
   "chat_session",
   "sender_type",
+  "message_type",
   "content",
   "is_edited",
   "edited_at",
-  "edited_by"
+  "edited_by",
+  "input_tokens",
+  "output_tokens"
  ],
  "fields": [
   {
@@ -30,6 +33,14 @@
    "label": "Sender Type",
    "options": "User\nAgent",
    "reqd": 1
+  },
+  {
+   "default": "User",
+   "fieldname": "message_type",
+   "fieldtype": "Select",
+   "label": "Message Type",
+   "options": "User\nAgent\nSummary",
+   "hidden": 1
   },
   {
    "fieldname": "content",
@@ -54,6 +65,20 @@
    "fieldtype": "Link",
    "label": "Edited By",
    "options": "User",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "input_tokens",
+   "fieldtype": "Int",
+   "label": "Input Tokens",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "output_tokens",
+   "fieldtype": "Int",
+   "label": "Output Tokens",
    "read_only": 1
   }
  ],

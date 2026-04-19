@@ -257,6 +257,41 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         },
         
         /**
+         * Get token information for a chat session
+         * @param {string} roomId - ID of the room
+         * @returns {Promise} Promise that resolves with token info
+         */
+        getTokenInfo: function(roomId) {
+            return frappe.db.get_value("Chat Session", roomId, [
+                "estimated_conversation_tokens", 
+                "input_tokens", 
+                "output_tokens",
+                "llm_provider"
+            ])
+                .then((r) => {
+                    if (!r.message) {
+                        throw new Error("Room not found");
+                    }
+                    
+                    const session = r.message;
+                    
+                    // Get provider context length
+                    return frappe.db.get_value("LLM Provider", session.llm_provider, ["context_length"])
+                        .then((providerRes) => {
+                            const context_length = providerRes.message?.context_length || 128000;
+                            
+                            return {
+                                current_tokens: session.estimated_conversation_tokens || 0,
+                                input_tokens: session.input_tokens || 0,
+                                output_tokens: session.output_tokens || 0,
+                                context_length: context_length,
+                                percentage: context_length > 0 ? Math.round(((session.estimated_conversation_tokens || 0) / context_length) * 100) : 0
+                            };
+                        });
+                });
+        },
+        
+        /**
          * Update room title
          * @param {string} roomId - ID of the room
          * @param {string} newTitle - New title for the room

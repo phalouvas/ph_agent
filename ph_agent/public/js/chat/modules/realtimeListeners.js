@@ -423,6 +423,17 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 const newMessages = state.getMessages();
                 _chat.messages = newMessages;
                 
+                // Auto-scroll during streaming if user is near bottom
+                // Wait for Vue to update DOM before checking scroll position
+                setTimeout(() => {
+                    const uiHelpers = window.phAgent.uiHelpers;
+                    const scrolled = uiHelpers.scrollToBottomIfNear(200);
+                    if (!scrolled) {
+                        // User is scrolled up - trigger scroll detection to show down-arrow
+                        uiHelpers.triggerScrollDetection();
+                    }
+                }, 50);
+                
                 // Show typing indicator while streaming
                 const rooms = state.getRooms().map((room) => {
                     if (room.roomId !== _activeRoomId) return room;

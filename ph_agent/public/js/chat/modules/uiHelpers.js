@@ -361,7 +361,75 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
          */
         getRoot: function() {
             return _chat.shadowRoot || _container;
-        }
+        },
+        
+        // --- Scroll Management ---
+        
+        /**
+         * Get the scrollable chat container element
+         * @returns {HTMLElement|null} Scroll container element or null if not found
+         */
+        getScrollContainer: function() {
+            const root = this.getRoot();
+            // Try to find the Vue Advanced Chat scroll container
+            const scrollContainer = root.querySelector('.vac-container-scroll');
+            if (scrollContainer) return scrollContainer;
+            
+            // Fallback to the container element
+            return _container;
+        },
+        
+        /**
+         * Check if the user is near the bottom of the chat
+         * @param {number} threshold - Distance from bottom in pixels (default: 200)
+         * @returns {boolean} True if near bottom, false otherwise
+         */
+        isNearBottom: function(threshold = 200) {
+            const scrollContainer = this.getScrollContainer();
+            if (!scrollContainer) return false;
+            
+            const scrollTop = scrollContainer.scrollTop;
+            const scrollHeight = scrollContainer.scrollHeight;
+            const clientHeight = scrollContainer.clientHeight;
+            
+            // Calculate distance from bottom
+            const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+            return distanceFromBottom <= threshold;
+        },
+        
+        /**
+         * Scroll to bottom if user is near the bottom
+         * @param {number} threshold - Distance from bottom in pixels (default: 200)
+         * @returns {boolean} True if scrolled, false otherwise
+         */
+        scrollToBottomIfNear: function(threshold = 200) {
+            const scrollContainer = this.getScrollContainer();
+            if (!scrollContainer) return false;
+            
+            if (this.isNearBottom(threshold)) {
+                scrollContainer.scrollTo({
+                    top: scrollContainer.scrollHeight,
+                    behavior: 'smooth'
+                });
+                return true;
+            }
+            return false;
+        },
+        
+        /**
+         * Trigger scroll detection to update down-arrow button visibility
+         * This dispatches a synthetic scroll event to make Vue Advanced Chat
+         * update its scrollIcon state
+         */
+        triggerScrollDetection: function() {
+            const scrollContainer = this.getScrollContainer();
+            if (!scrollContainer) return;
+            
+            // Dispatch a synthetic scroll event
+            scrollContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+        },
+        
+
     };
 })();
 

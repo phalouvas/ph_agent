@@ -19,7 +19,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	
 	// Create summary button
 	const summaryButton = $(`
-		<button class="btn btn-default btn-sm" style="margin-left: 8px;">
+		<button class="btn btn-default btn-sm btn-summary-conversation" style="margin-left: 8px;">
 			<i class="fa fa-refresh" style="margin-right: 4px;"></i>
 			${__("Summarize")}
 		</button>
@@ -31,12 +31,25 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		const session = window.phAgent?.state?.getActiveRoomId?.();
 		
 		if (session) {
+			// Get the summary button to show loading state
+			const $summaryBtn = $(".page-actions .btn-summary-conversation");
+			const originalText = $summaryBtn.text();
+			
+			// Show loading state
+			$summaryBtn.prop("disabled", true).html(`
+				<span class="fa fa-spinner fa-spin"></span>
+				<span>${__("Summarizing...")}</span>
+			`);
+			
 			frappe.call({
 				method: "ph_agent.api.chat.summarize_conversation",
 				args: {
 					session: session
 				},
 				callback: function(response) {
+					// Restore button state
+					$summaryBtn.prop("disabled", false).html(originalText);
+					
 					if (response.message && response.message.status === "success") {
 						frappe.show_alert({
 							message: __("Conversation summarized successfully"),
@@ -45,6 +58,9 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 					}
 				},
 				error: function(err) {
+					// Restore button state
+					$summaryBtn.prop("disabled", false).html(originalText);
+					
 					console.error("Failed to summarize conversation:", err);
 					frappe.show_alert({
 						message: __("Failed to summarize conversation"),

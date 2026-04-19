@@ -89,17 +89,18 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 
 	run_config = RunConfig(tracing_disabled=True)
 
-	# Build conversation history for context (only messages after last summary)
+	# Build conversation history for context (only messages after last summary, INCLUDING the summary itself)
 	# Get last summary message if exists
 	last_summary_message = frappe.db.get_value("Chat Session", session_name, "last_summary_message")
 	
 	if last_summary_message:
-		# Get messages created after the last summary
+		# Get messages created on or after the last summary (INCLUDING the summary)
+		last_summary_creation = frappe.db.get_value("Chat Message", last_summary_message, "creation")
 		prior_messages = frappe.get_all(
 			"Chat Message",
 			filters={
 				"chat_session": session_name,
-				"creation": [">", frappe.db.get_value("Chat Message", last_summary_message, "creation")]
+				"creation": [">=", last_summary_creation]
 			},
 			fields=["sender_type", "content"],
 			order_by="creation asc",
@@ -221,17 +222,18 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
 	system_prompt = session.system_prompt or provider_doc.system_prompt or None
 
-	# Build conversation history for context (only messages after last summary)
+	# Build conversation history for context (only messages after last summary, INCLUDING the summary itself)
 	# Get last summary message if exists
 	last_summary_message = frappe.db.get_value("Chat Session", session_name, "last_summary_message")
 	
 	if last_summary_message:
-		# Get messages created after the last summary
+		# Get messages created on or after the last summary (INCLUDING the summary)
+		last_summary_creation = frappe.db.get_value("Chat Message", last_summary_message, "creation")
 		prior_messages = frappe.get_all(
 			"Chat Message",
 			filters={
 				"chat_session": session_name,
-				"creation": [">", frappe.db.get_value("Chat Message", last_summary_message, "creation")]
+				"creation": [">=", last_summary_creation]
 			},
 			fields=["sender_type", "content"],
 			order_by="creation asc",

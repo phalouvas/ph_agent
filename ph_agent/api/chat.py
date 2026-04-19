@@ -395,6 +395,14 @@ def delete_message(message_id):
 		frappe.has_permission("Chat Session", ptype="write", doc=msg.chat_session, throw=True)
 
 	session = msg.chat_session
+	
+	# Check if this is a summary message that's referenced as last_summary_message
+	session_doc = frappe.get_doc("Chat Session", session)
+	if session_doc.last_summary_message == message_id:
+		# Clear the reference before deleting the message
+		frappe.db.set_value("Chat Session", session, "last_summary_message", None)
+		frappe.db.commit()
+	
 	frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
 	frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 	frappe.db.commit()
@@ -419,8 +427,17 @@ def delete_messages(message_ids):
 		frappe.has_permission("Chat Session", doc=msg.chat_session, throw=True)
 		if msg.sender_type == "User" and msg.owner != frappe.session.user:
 			frappe.has_permission("Chat Session", ptype="write", doc=msg.chat_session, throw=True)
-		sessions_affected.add(msg.chat_session)
-		deleted_by_session.setdefault(msg.chat_session, []).append(message_id)
+		
+		session = msg.chat_session
+		sessions_affected.add(session)
+		deleted_by_session.setdefault(session, []).append(message_id)
+		
+		# Check if this is a summary message that's referenced as last_summary_message
+		session_doc = frappe.get_doc("Chat Session", session)
+		if session_doc.last_summary_message == message_id:
+			# Clear the reference before deleting the message
+			frappe.db.set_value("Chat Session", session, "last_summary_message", None)
+		
 		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
 		frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 

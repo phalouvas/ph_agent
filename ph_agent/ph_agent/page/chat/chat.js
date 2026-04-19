@@ -14,9 +14,59 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		}
 	}, "add");
 
+	// Add summary button as a custom button in the page actions area
+	// First, let's add it manually to the page actions container
+	
+	// Create summary button
+	const summaryButton = $(`
+		<button class="btn btn-default btn-sm" style="margin-left: 8px;">
+			<i class="fa fa-refresh" style="margin-right: 4px;"></i>
+			${__("Summarize")}
+		</button>
+	`);
+	
+	// Add click handler
+	summaryButton.on("click", () => {
+		// Get active session from state module
+		const session = window.phAgent?.state?.getActiveRoomId?.();
+		
+		if (session) {
+			frappe.call({
+				method: "ph_agent.api.chat.summarize_conversation",
+				args: {
+					session: session
+				},
+				callback: function(response) {
+					if (response.message && response.message.status === "success") {
+						frappe.show_alert({
+							message: __("Conversation summarized successfully"),
+							indicator: "green"
+						});
+					}
+				},
+				error: function(err) {
+					console.error("Failed to summarize conversation:", err);
+					frappe.show_alert({
+						message: __("Failed to summarize conversation"),
+						indicator: "red"
+					});
+				}
+			});
+		} else {
+			frappe.show_alert({
+				message: __("No active chat session. Please create or select a chat first."),
+				indicator: "orange"
+			});
+		}
+	});
+	
+	// Add button to page actions (after the primary action)
+	$(page.page_actions).append(summaryButton);
+
 	// Mount container inside page main area
 	const $container = $('<div style="height: calc(100vh - 120px);"></div>');
-	const $status = $('<div id="ph-chat-status" style="height:24px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:24px;display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span><button class="ph-stop-btn" title="Stop generation" style="display:none;margin-left:4px;padding:2px 8px;font-size:11px;font-weight:600;line-height:16px;border:none;border-radius:3px;background:#e53e3e;color:#fff;cursor:pointer;flex-shrink:0;">&#9632; Stop</button></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}.ph-stop-btn:hover{background:#c53030!important}</style>');
+	const $status = $('<div id="ph-chat-status" style="height:24px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:24px;display:flex;align-items:center;gap:6px;justify-content:space-between;"><div style="display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span><button class="ph-stop-btn" title="Stop generation" style="display:none;margin-left:4px;padding:2px 8px;font-size:11px;font-weight:600;line-height:16px;border:none;border-radius:3px;background:#e53e3e;color:#fff;cursor:pointer;flex-shrink:0;">&#9632; Stop</button></div><div class="ph-token-counter" style="font-size:11px;color:#6b7280;display:flex;align-items:center;">Tokens: <span class="ph-token-count">0</span>/<span class="ph-token-limit">0</span> (<span class="ph-token-percent">0</span>%)</div></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}.ph-stop-btn:hover{background:#c53030!important}</style>');
+	
 	$(page.main).append($container);
 	$(page.main).append($status);
 

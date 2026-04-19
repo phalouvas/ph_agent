@@ -26,7 +26,7 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                 type: (f.file_name || "").split(".").pop().toLowerCase(),
                 url: f.file_url,
             }));
-            return {
+            const formattedMsg = {
                 _id: m.name,
                 content: m.content,
                 senderId: m.sender_type === "User" ? currentUserId : agentId,
@@ -37,6 +37,13 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                 edited: !!m.is_edited,
                 files: files.length ? files : undefined,
             };
+            
+            // Add message_type for styling (Summary messages get special styling)
+            if (m.message_type) {
+                formattedMsg.message_type = m.message_type;
+            }
+            
+            return formattedMsg;
         },
         
         // --- File Operations ---

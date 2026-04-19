@@ -92,6 +92,36 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             _chat.setAttribute("messages-loaded", "false");
             
+            // Load token information for this session
+            roomService.getTokenInfo(room.roomId)
+                .then((tokenInfo) => {
+                    // Update token counter in status bar
+                    const $tokenCounter = _$status.find(".ph-token-counter");
+                    const $tokenCount = _$status.find(".ph-token-count");
+                    const $tokenLimit = _$status.find(".ph-token-limit");
+                    const $tokenPercent = _$status.find(".ph-token-percent");
+                    
+                    // Format numbers with commas
+                    const formattedCurrent = tokenInfo.current_tokens.toLocaleString();
+                    const formattedLimit = tokenInfo.context_length.toLocaleString();
+                    
+                    $tokenCount.text(formattedCurrent);
+                    $tokenLimit.text(formattedLimit);
+                    $tokenPercent.text(tokenInfo.percentage);
+                    
+                    // Add warning class if over 75%
+                    if (tokenInfo.percentage > 75) {
+                        $tokenCounter.css("color", "#f59e0b"); // Amber color for warning
+                    } else if (tokenInfo.percentage > 90) {
+                        $tokenCounter.css("color", "#ef4444"); // Red color for critical
+                    } else {
+                        $tokenCounter.css("color", "#6b7280"); // Gray color for normal
+                    }
+                })
+                .catch((err) => {
+                    console.error("Failed to load token info:", err);
+                });
+            
             frappe.call({
                 method: "ph_agent.api.chat.get_history",
                 args: { session: room.roomId },

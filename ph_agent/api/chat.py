@@ -352,6 +352,21 @@ def summarize_conversation(session, message_ids=None):
 	)
 	frappe.db.commit()
 	
+	# Get context length for token update
+	context_length = provider_doc.context_length or 128000
+	
+	# Publish token update event (tokens reset to 0)
+	frappe.publish_realtime(
+		event="token_update",
+		message={
+			"session": session,
+			"current_tokens": 0,
+			"context_length": context_length,
+			"percentage": 0,
+		},
+		user=frappe.session.user,
+	)
+	
 	# Publish realtime event for new summary message
 	frappe.publish_realtime(
 		event="new_message",

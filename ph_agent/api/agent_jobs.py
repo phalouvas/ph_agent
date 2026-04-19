@@ -186,6 +186,18 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					)
 					frappe.db.commit()
 					
+					# Publish token update event (tokens reset to 0)
+					frappe.publish_realtime(
+						event="token_update",
+						message={
+							"session": session,
+							"current_tokens": 0,
+							"context_length": context_length,
+							"percentage": 0,
+						},
+						user=enqueued_by,
+					)
+					
 					# Publish realtime event for new summary message
 					frappe.publish_realtime(
 						event="new_message",
@@ -353,7 +365,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	)
 	frappe.db.commit()
 
-	# Check if we need to send a token warning
+	# Get updated token counts for realtime update
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	
@@ -363,6 +375,18 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	# Calculate current percentage
 	current_tokens = frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens")
 	token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
+	
+	# Publish token update event
+	frappe.publish_realtime(
+		event="token_update",
+		message={
+			"session": session,
+			"current_tokens": current_tokens,
+			"context_length": context_length,
+			"percentage": round(token_percentage, 1),
+		},
+		user=enqueued_by,
+	)
 	
 	# Send warning if over 75% and warning hasn't been sent yet
 	if token_percentage > 75 and not frappe.db.get_value("Chat Session", session, "token_warning_sent"):

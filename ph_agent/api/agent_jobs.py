@@ -68,46 +68,43 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming
 
-	# Create placeholder message for streaming or regular message for non-streaming
-	if use_streaming:
-		# Create placeholder message with loading indicator
-		agent_msg = frappe.get_doc(
-			{
-				"doctype": "Chat Message",
-				"chat_session": session,
-				"sender_type": "Agent",
-				"message_type": "Agent",
-				"content": "⏳ Generating response...",  # Placeholder content
-			}
-		).insert(ignore_permissions=False)
-		frappe.db.commit()
-		
-		# Publish placeholder message event
-		# If regenerating, delete the old agent message before creating the new one
-		if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
-			frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
-			frappe.db.commit()
-		
-		placeholder_payload = {
-			"session": session,
-			"name": agent_msg.name,
+	# Create placeholder message for both streaming and non-streaming
+	# This ensures the frontend shows a spinner immediately
+	agent_msg = frappe.get_doc(
+		{
+			"doctype": "Chat Message",
+			"chat_session": session,
 			"sender_type": "Agent",
-			"content": "",
-			"creation": str(agent_msg.creation),
-			"is_streaming_placeholder": True,
+			"message_type": "Agent",
+			"content": "⏳ Generating response...",  # Placeholder content
 		}
-		if agent_msg_name:
-			placeholder_payload["old_message_id"] = agent_msg_name
-		frappe.publish_realtime(
-			event="new_message",
-			message=placeholder_payload,
-			user=enqueued_by,
-		)
-	else:
-		# If regenerating, delete the old agent message before storing the new one
-		if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
-			frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
-			frappe.db.commit()
+	).insert(ignore_permissions=False)
+	frappe.db.commit()
+	
+	# If regenerating, delete the old agent message before creating the new one
+	if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
+		frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
+		frappe.db.commit()
+	
+	placeholder_payload = {
+		"session": session,
+		"name": agent_msg.name,
+		"sender_type": "Agent",
+		"content": "⏳ Generating response...",  # Show placeholder content in UI
+		"creation": str(agent_msg.creation),
+		"is_streaming_placeholder": use_streaming,  # True for streaming, False for non-streaming
+	}
+	if agent_msg_name:
+		placeholder_payload["old_message_id"] = agent_msg_name
+	
+	# Debug logging
+	print(f"[DEBUG] Publishing placeholder - session: {session}, msg_id: {agent_msg.name}, is_streaming: {use_streaming}, old_msg_id: {agent_msg_name}")
+	
+	frappe.publish_realtime(
+		event="new_message",
+		message=placeholder_payload,
+		user=enqueued_by,
+	)
 	# Check if we need to auto-summarize before making the API call
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
@@ -270,43 +267,28 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					title=f"Streaming failed for session {session}, falling back to non-streaming",
 					message=str(stream_error)
 				)
-				# Delete placeholder message
-				if agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
-					frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
-				# Fall back to non-streaming
+				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
 				reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
-				# Create regular message with token counts
-				agent_msg = frappe.get_doc(
-					{
-						"doctype": "Chat Message",
-						"chat_session": session,
-						"sender_type": "Agent",
-						"message_type": "Agent",
-						"content": reply,
-						"input_tokens": input_tokens,
-						"output_tokens": output_tokens,
-					}
-				).insert(ignore_permissions=False)
+				# Update placeholder message with actual content and token counts
+				agent_msg.content = reply
+				agent_msg.input_tokens = input_tokens
+				agent_msg.output_tokens = output_tokens
+				agent_msg.save(ignore_permissions=True)
+				frappe.db.commit()
 		else:
-			# Non-streaming path
+			# Non-streaming path - update the existing placeholder message
 			reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
-			# Store agent response with token counts
-			agent_msg = frappe.get_doc(
-				{
-					"doctype": "Chat Message",
-					"chat_session": session,
-					"sender_type": "Agent",
-					"message_type": "Agent",
-					"content": reply,
-					"input_tokens": input_tokens,
-					"output_tokens": output_tokens,
-				}
-			).insert(ignore_permissions=False)
+			# Update the placeholder message with actual content and token counts
+			agent_msg.content = reply
+			agent_msg.input_tokens = input_tokens
+			agent_msg.output_tokens = output_tokens
+			agent_msg.save(ignore_permissions=True)
+			frappe.db.commit()
 			
 	except asyncio.CancelledError:
-		# Clean up placeholder message if streaming was used
-		if use_streaming and agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
+		# Clean up placeholder message
+		if agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
 			frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
 			frappe.db.commit()
 			
@@ -320,37 +302,56 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		)
 		return
 	except frappe.exceptions.ValidationError as e:
-		# Clean up placeholder message if streaming was used
-		if use_streaming and agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
-			frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
+		# Update placeholder message with error
+		if agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
+			agent_msg.content = "⚠️ " + str(e)
+			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
 			
-		failed_msg = frappe.get_doc(
-			{
-				"doctype": "Chat Message",
-				"chat_session": session,
+			release_lock()
+			emit_status("")
+			error_payload = {
+				"session": session,
+				"name": agent_msg.name,
 				"sender_type": "Agent",
-				"message_type": "Agent",
-				"content": str(e),
+				"content": "⚠️ " + str(e),
+				"creation": str(agent_msg.creation),
 			}
-		).insert(ignore_permissions=False)
-		frappe.db.commit()
-		release_lock()
-		emit_status("")
-		error_payload = {
-			"session": session,
-			"name": failed_msg.name,
-			"sender_type": "Agent",
-			"content": "⚠️ " + str(e),
-			"creation": str(failed_msg.creation),
-		}
-		if agent_msg_name:
-			error_payload["old_message_id"] = agent_msg_name
-		frappe.publish_realtime(
-			event="new_message",
-			message=error_payload,
-			user=enqueued_by,
-		)
+			if agent_msg_name:
+				error_payload["old_message_id"] = agent_msg_name
+			frappe.publish_realtime(
+				event="new_message",
+				message=error_payload,
+				user=enqueued_by,
+			)
+		else:
+			# Fallback if placeholder doesn't exist
+			failed_msg = frappe.get_doc(
+				{
+					"doctype": "Chat Message",
+					"chat_session": session,
+					"sender_type": "Agent",
+					"message_type": "Agent",
+					"content": str(e),
+				}
+			).insert(ignore_permissions=False)
+			frappe.db.commit()
+			release_lock()
+			emit_status("")
+			error_payload = {
+				"session": session,
+				"name": failed_msg.name,
+				"sender_type": "Agent",
+				"content": "⚠️ " + str(e),
+				"creation": str(failed_msg.creation),
+			}
+			if agent_msg_name:
+				error_payload["old_message_id"] = agent_msg_name
+			frappe.publish_realtime(
+				event="new_message",
+				message=error_payload,
+				user=enqueued_by,
+			)
 		return
 
 	# Update token counts on the session
@@ -441,7 +442,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			user=enqueued_by,
 		)
 	else:
-		# For non-streaming, publish the complete message
+		# For non-streaming, publish the updated message
+		# The placeholder was already published, now we need to update it
+		# We publish a new_message event with the same ID to trigger an update
 		new_msg_payload = {
 			"session": session,
 			"name": agent_msg.name,
@@ -449,8 +452,12 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			"content": reply,
 			"creation": str(agent_msg.creation),
 		}
-		if agent_msg_name:
-			new_msg_payload["old_message_id"] = agent_msg_name
+		# Don't include old_message_id in final response - only placeholder needs it
+		# The final response updates the placeholder message (same ID)
+		
+		# Debug logging
+		print(f"[DEBUG] Publishing non-streaming final message - session: {session}, msg_id: {agent_msg.name}, content preview: {reply[:50]}...")
+		
 		frappe.publish_realtime(
 			event="new_message",
 			message=new_msg_payload,

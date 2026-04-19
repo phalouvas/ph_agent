@@ -135,36 +135,8 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	if not user_message_added:
 		history.append({"role": "user", "content": user_message})
 	
-	# Debug logging - use frappe.log_error so it appears in Error Log UI
-	debug_info = []
-	debug_info.append(f"Agent history for session {session_name}:")
-	debug_info.append(f"Last summary message: {last_summary_message}")
-	if last_summary_message:
-		# Get full summary message details for debugging
-		summary_msg = frappe.get_doc("Chat Message", last_summary_message)
-		debug_info.append(f"Last summary creation: {summary_msg.creation}")
-		debug_info.append(f"Last summary content preview: {summary_msg.content[:100] if summary_msg.content else 'EMPTY'}...")
-		debug_info.append(f"Last summary message_type: {summary_msg.message_type}")
-	
-	debug_info.append(f"Number of prior messages: {len(prior_messages)}")
-	debug_info.append(f"History length: {len(history)}")
-	
-	# Get full message details for each prior message
-	for i, msg_doc in enumerate(prior_messages):
-		# Get full message document
-		full_msg = frappe.get_doc("Chat Message", msg_doc.name) if hasattr(msg_doc, 'name') else msg_doc
-		msg_id = full_msg.name if hasattr(full_msg, 'name') else 'unknown'
-		msg_type = full_msg.message_type if hasattr(full_msg, 'message_type') else 'unknown'
-		msg_creation = full_msg.creation if hasattr(full_msg, 'creation') else 'unknown'
-		debug_info.append(f"  Prior message [{i}] ID:{msg_id} Type:{msg_type} Created:{msg_creation} {full_msg.sender_type}: {full_msg.content[:100] if full_msg.content else 'EMPTY'}...")
-	
-	for i, msg in enumerate(history):
-		debug_info.append(f"  History [{i}] {msg['role']}: {msg['content'][:100]}...")
-	
-	frappe.log_error(
-		title=f"Agent Debug - Session {session_name}",
-		message="\n".join(debug_info)
-	)
+	# Debug logging - only log errors, not normal operation
+	# Remove verbose debug logging to reduce noise in error logs
 
 	try:
 		# Check cancellation before starting the expensive API call
@@ -314,25 +286,8 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	if not user_message_added:
 		messages.append({"role": "user", "content": user_message})
 	
-	# Debug logging - use frappe.log_error so it appears in Error Log UI
-	debug_info = []
-	debug_info.append(f"Agent streaming history for session {session_name}:")
-	debug_info.append(f"Last summary message: {last_summary_message}")
-	if last_summary_message:
-		last_summary_doc = frappe.get_doc("Chat Message", last_summary_message)
-		debug_info.append(f"Last summary creation: {last_summary_doc.creation}")
-		debug_info.append(f"Last summary message_type: {last_summary_doc.message_type}")
-	debug_info.append(f"Number of prior messages: {len(prior_messages)}")
-	debug_info.append(f"Messages length: {len(messages)}")
-	for i, msg in enumerate(prior_messages):
-		debug_info.append(f"  Prior message [{i}] Type:{msg.message_type} {msg.sender_type}: {msg.content[:100] if msg.content else 'EMPTY'}...")
-	for i, msg in enumerate(messages):
-		debug_info.append(f"  History [{i}] {msg['role']}: {msg['content'][:100]}...")
-	
-	frappe.log_error(
-		title=f"Agent Streaming Debug - Session {session_name}",
-		message="\n".join(debug_info)
-	)
+	# Debug logging - only log errors, not normal operation
+	# Remove verbose debug logging to reduce noise in error logs
 	
 	# Add system prompt if provided
 	if system_prompt:

@@ -1,6 +1,6 @@
 # PH Agent Implementation Progress
 
-*Document Version: 1.0*  
+*Document Version: 1.1*  
 *Last Updated: 2026-04-20*  
 *Maintainer: PH Agent Development Team*
 
@@ -10,6 +10,10 @@
 
 This document tracks the implementation progress of PH Agent features as outlined in [`FEATURES.md`](FEATURES.md). It serves as a living record of completed work, current tasks, and future plans, while capturing key architectural decisions and technical notes.
 
+## Revised Implementation Plan (Microsoft Agent Framework Integration)
+
+**Note:** This plan has been updated to leverage the Microsoft Agent Framework's built‑in capabilities for tools, workflows, memory, and multi‑agent orchestration. The original phase structure is preserved, but tasks have been revised to use framework components where appropriate.
+
 ## Phase 1: Foundation
 
 **Status:** ⏳ **Not Started** (Target completion: Weeks 1‑2)
@@ -17,35 +21,61 @@ This document tracks the implementation progress of PH Agent features as outline
 ### 1.1 Tool Framework
 **Goal:** Enable the agent to call ERPNext functions via a registry of whitelisted tools.
 
+**Detailed Breakdown:**
+- **Tool Registry DocType**: Create JSON file in `ph_agent/ph_agent/doctype/tool_registry/`, define fields: `tool_name`, `description`, `python_function`, `parameters_json`, `permission_doctype`, `requires_approval`. Add validation hooks.
+- **Tool Registry Access Control**: Add child table `tool_registry_doc_type_access` to link tools with DocTypes and permissions.
+- **ToolManager Class**: Create `tool_manager.py` with methods `load_tools()`, `register_tool()`, `validate_schema()`. Integrate with `agents.function_tool`.
+- **Tool Approval Middleware**: Implement a middleware that intercepts tool calls marked as `requires_approval` and creates a `Tool Approval` document for human review.
+- **MCP Server Integration**: Set up a Model Context Protocol server using `agents.mcp` module, expose web search, file search tools.
+- **Sample ERPNext Tools**: Implement five functions in `ph_agent/agent/tools/erpnext_tools.py` using `@function_tool` decorator.
+- **Logging Middleware**: Use Microsoft Agent Framework's `FunctionCallingMiddleware` to capture tool invocations and store in `Chat Message` child table.
+
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
 | 1.1.1 | Create `Tool Registry` DocType | ⬜ Not Started | | JSON schema: `tool_name`, `description`, `python_function`, `parameters_json`, `permission_doctype` |
-| 1.1.2 | Implement `execute_tool` API endpoint | ⬜ Not Started | | `@frappe.whitelist()` method that validates permissions and calls registered function |
-| 1.1.3 | Build `ToolManager` class | ⬜ Not Started | | Loads tools from DB, registers them with agent‑framework's `function_tool` |
-| 1.1.4 | Create 5 sample ERPNext tools | ⬜ Not Started | | `get_customer_details`, `list_sales_orders`, `fetch_stock_levels`, `create_quotation`, `send_email` |
-| 1.1.5 | Integrate tools into agent prompt | ⬜ Not Started | | Update agent instructions to include available tool descriptions |
-| 1.1.6 | Add tool‑call logging | ⬜ Not Started | | Store tool invocation details in `Chat Message` child table |
+| 1.1.2 | Implement `ToolManager` class with `function_tool` registration | ⬜ Not Started | | Loads tools from DB, registers with agent‑framework's `function_tool` decorator, validates schemas |
+| 1.1.3 | Add Tool Approval middleware for sensitive actions | ⬜ Not Started | | Human‑in‑the‑loop approval workflow for tools marked as `requires_approval` |
+| 1.1.4 | Integrate MCP server for external tools (web search, file search) | ⬜ Not Started | | Use Microsoft Agent Framework's MCP integration for hosted/local tools |
+| 1.1.5 | Create 5 sample ERPNext tools using `function_tool` | ⬜ Not Started | | `get_customer_details`, `list_sales_orders`, `fetch_stock_levels`, `create_quotation`, `send_email` |
+| 1.1.6 | Add tool‑call logging via Function Calling Middleware | ⬜ Not Started | | Store tool invocation details in `Chat Message` using framework middleware |
+| 1.1.7 | Implement Tool Registry Access Control using child table `tool_registry_doc_type_access` | ⬜ Not Started | | Link tools with DocTypes and permissions for fine‑grained access control |
 
 ### 1.2 Planning Agent
 **Goal:** Add multi‑step reasoning and explicit task decomposition.
 
+**Detailed Breakdown:**
+- **PlanningWorkflow Class**: Create `planning_workflow.py` that defines a `Workflow` with `Executors` for decomposition, using `agents.workflows.Workflow`. Integrate with agent's `run` method.
+- **Skills Implementation**: Define a `Skill` class that bundles system prompts, scripts, and resources. Register skills with the workflow.
+- **Intermediate Steps Storage**: Add `intermediate_steps` JSON field to `Chat Message` DocType, store each step's reasoning, tool calls, results.
+- **UI Toggle Component**: Create a Vue component in `public/js/chat/modules/` that shows/hides reasoning steps with a toggle button.
+- **Timeout Handling**: Use Workflow checkpointing to limit max steps and implement timeout detection using `asyncio` or framework's timeout middleware.
+
+
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
-| 1.2.1 | Integrate `agents.Plan` into `deepseek_agent.py` | ⬜ Not Started | | Use `Plan(max_steps=5)` for complex queries |
-| 1.2.2 | Update agent instructions for step‑by‑step reasoning | ⬜ Not Started | | Prompt engineering: "Break down the problem into subtasks" |
+| 1.2.1 | Create `PlanningWorkflow` using Microsoft Agent Framework's Workflow engine | ⬜ Not Started | | Use `agents.workflows.Workflow` with Executors for decomposition |
+| 1.2.2 | Implement Skills for progressive disclosure of planning instructions | ⬜ Not Started | | Skills bundle system prompts, scripts, and resources for planning |
 | 1.2.3 | Store intermediate steps in `Chat Message` | ⬜ Not Started | | Add `intermediate_steps` field (JSON) to capture planning trace |
 | 1.2.4 | Create UI toggle for showing/hiding reasoning | ⬜ Not Started | | Frontend component in Vue Advanced Chat |
-| 1.2.5 | Add planning timeout handling | ⬜ Not Started | | Prevent infinite loops in recursive planning |
+| 1.2.5 | Add timeout handling using Workflow checkpointing | ⬜ Not Started | | Prevent infinite loops using workflow checkpointing and max steps |
 
 ### 1.3 Enhanced Memory
 **Goal:** Move beyond simple conversation history to vector‑based semantic memory.
 
+**Detailed Breakdown:**
+- **Vector Store Dependency**: Add `chromadb` or `qdrant-client` to `pyproject.toml`. Install Microsoft Agent Framework's vector store integration (`agents.vectorstores`).
+- **VectorMemory Class**: Implement `VectorMemory` in `vector_memory.py` using framework's `VectorStore` abstraction. Methods: `add_conversation()`, `search_similar()`, `delete_old()`.
+- **Memory Storage Hook**: Use `AgentSession` and `Context Providers` to automatically embed new chat messages and store them in the vector store.
+- **Retrieval Integration**: Use AI Context Providers to inject top‑k relevant past conversations into the agent's context via RAG.
+- **Memory Management UI**: Create a Frappe Desk page to view and delete stored memory vectors, with search and filtering.
+- **Performance Benchmark**: Measure retrieval latency with synthetic load, ensure <100ms.
+
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
-| 1.3.1 | Install ChromaDB dependency | ⬜ Not Started | | Add to `pyproject.toml` under `[project.dependencies]` |
-| 1.3.2 | Create `VectorMemory` class | ⬜ Not Started | | Methods: `add_conversation()`, `search_similar()`, `delete_old()` |
-| 1.3.3 | Hook memory storage into Chat‑Message save | ⬜ Not Started | | Automatically embed new messages on `on_update` |
-| 1.3.4 | Integrate memory retrieval into agent prompt | ⬜ Not Started | | Inject top‑3 relevant past conversations into context |
+| 1.3.1 | Install vector store dependency (ChromaDB/Qdrant) and framework integration | ⬜ Not Started | | Add to `pyproject.toml` under `[project.dependencies]` |
+| 1.3.2 | Implement `VectorMemory` class using Microsoft Agent Framework's VectorStore abstraction | ⬜ Not Started | | Use framework's `VectorStore` for embeddings and similarity search |
+| 1.3.3 | Hook memory storage via AgentSession and Context Providers | ⬜ Not Started | | Automatically embed new messages using AI Context Providers |
+| 1.3.4 | Integrate memory retrieval via AI Context Providers for RAG | ⬜ Not Started | | Inject top‑3 relevant past conversations using framework's context injection |
 | 1.3.5 | Build memory‑management UI | ⬜ Not Started | | Allow users to view/delete stored memory vectors |
 | 1.3.6 | Performance benchmark | ⬜ Not Started | | Measure retrieval latency (<100ms target) |
 
@@ -61,35 +91,35 @@ This document tracks the implementation progress of PH Agent features as outline
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
 | 2.1.1 | Create `Agent Profile` DocType | ⬜ Not Started | | Fields: `specialty`, `instructions`, `allowed_tools`, `model_preferences` |
-| 2.1.2 | Implement `Orchestrator` class | ⬜ Not Started | | Routes queries to appropriate specialist based on intent classification |
-| 2.1.3 | Build 3 specialist agents | ⬜ Not Started | | `SalesAgent`, `SupportAgent`, `AccountingAgent` with domain‑specific prompts |
-| 2.1.4 | Add inter‑agent communication | ⬜ Not Started | | Use Frappe realtime events for agent‑to‑agent messaging |
+| 2.1.2 | Implement `Orchestrator` class using Microsoft Agent Framework's Teams/AgentGroup | ⬜ Not Started | | Routes queries to appropriate specialist using framework's team routing |
+| 2.1.3 | Build 3 specialist agents using `AIAgent` with domain-specific prompts and Skills | ⬜ Not Started | | `SalesAgent`, `SupportAgent`, `AccountingAgent` with Skills for domain knowledge |
+| 2.1.4 | Add inter‑agent communication via A2A protocol and Frappe realtime events | ⬜ Not Started | | Use A2A for agent-to-agent calls, Frappe events for UI updates |
 | 2.1.5 | Create agent‑selection UI | ⬜ Not Started | | Dropdown in chat interface to pick specialist manually/auto |
-| 2.1.6 | Implement load balancing | ⬜ Not Started | | Distribute concurrent requests across available agents |
+| 2.1.6 | Implement load balancing using framework's agent routing policies | ⬜ Not Started | | Distribute concurrent requests across available agents with round‑robin or least‑loaded |
 
 ### 2.2 Workflow Engine
 **Goal:** Support state‑based guided conversations with conditional branching.
 
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
-| 2.2.1 | Design `Workflow` DocType | ⬜ Not Started | | States, transitions, conditions, entry/exit actions |
-| 2.2.2 | Implement `WorkflowRunner` | ⬜ Not Started | | Manages state, triggers agent steps, pauses for human approval |
-| 2.2.3 | Create sample workflow: Customer Onboarding | ⬜ Not Started | | 5 states: welcome → collect details → verify → setup → notify |
-| 2.2.4 | Add workflow visualization | ⬜ Not Started | | Mermaid.js diagrams showing current state and possible transitions |
-| 2.2.5 | Build workflow editor UI | ⬜ Not Started | | Drag‑and‑drop state designer for admins |
-| 2.2.6 | Integrate with agent tools | ⬜ Not Started | | Workflow steps can invoke any registered tool |
+| 2.2.1 | Design `Workflow` DocType compatible with Microsoft Agent Framework's Workflow engine | ⬜ Not Started | | Store workflow definition as JSON compatible with framework's `Workflow` |
+| 2.2.2 | Implement `WorkflowRunner` that converts DocType to framework's `Workflow` and executes | ⬜ Not Started | | Manages state, triggers agent steps, pauses for human approval using framework's Executors and Edges |
+| 2.2.3 | Create sample workflow: Customer Onboarding using framework's Executors and Edges | ⬜ Not Started | | 5 states: welcome → collect details → verify → setup → notify with conditional transitions |
+| 2.2.4 | Add workflow visualization using Mermaid.js | ⬜ Not Started | | Mermaid.js diagrams showing current state and possible transitions |
+| 2.2.5 | Build workflow editor UI that generates framework-compatible workflow definitions | ⬜ Not Started | | Drag‑and‑drop state designer for admins |
+| 2.2.6 | Integrate with agent tools using framework's tool integration | ⬜ Not Started | | Workflow steps can invoke any registered tool via framework's tool calling |
 
 ### 2.3 Evaluation & Observability
 **Goal:** Comprehensive monitoring, tracing, and quality assessment.
 
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
-| 2.3.1 | Add OpenTelemetry instrumentation | ⬜ Not Started | | Trace agent reasoning, tool calls, LLM latency |
+| 2.3.1 | Add OpenTelemetry instrumentation using Microsoft Agent Framework's Middleware | ⬜ Not Started | | Trace agent reasoning, tool calls, LLM latency via Agent Run Middleware and Function Calling Middleware |
 | 2.3.2 | Create `Agent Metrics` DocType | ⬜ Not Started | | Store response time, token usage, tool success rate, cost |
-| 2.3.3 | Build real‑time dashboard | ⬜ Not Started | | Frappe Desk page showing key metrics and alerts |
-| 2.3.4 | Implement automated quality scoring | ⬜ Not Started | | Heuristics for relevance, accuracy, helpfulness |
-| 2.3.5 | Set up A/B testing framework | ⬜ Not Started | | Compare different agent configurations |
-| 2.3.6 | Create anomaly detection | ⬜ Not Started | | Flag unusual token usage or repeated tool failures |
+| 2.3.3 | Build real‑time dashboard using framework's events system | ⬜ Not Started | | Frappe Desk page showing key metrics and alerts from framework telemetry |
+| 2.3.4 | Implement automated quality scoring using framework's evaluation hooks | ⬜ Not Started | | Heuristics for relevance, accuracy, helpfulness using framework's evaluation APIs |
+| 2.3.5 | Set up A/B testing framework using framework's provider switching | ⬜ Not Started | | Compare different agent configurations using framework's provider routing |
+| 2.3.6 | Create anomaly detection using framework's telemetry data | ⬜ Not Started | | Flag unusual token usage or repeated tool failures using framework's metrics |
 
 ---
 
@@ -199,7 +229,7 @@ The following features are **already implemented** and form the foundation for t
 
 **Technical Stack in Place:**
 - **Frontend**: Vue Advanced Chat web component + modular JavaScript
-- **Backend**: Frappe Framework (Python) with `agents` library
+- **Backend**: Frappe Framework (Python) with Microsoft Agent Framework (`agents` library)
 - **LLM Integration**: OpenAI SDK compatible with multiple providers
 - **Storage**: Frappe MariaDB for structured data, File storage for attachments
 - **Real‑time**: Frappe Socket.IO server

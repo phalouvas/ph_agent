@@ -136,126 +136,154 @@ graph TB
 
 | Aspect | Current State | Future State with Microsoft Agent Framework |
 |--------|---------------|---------------------------------------------|
-| **Reasoning** | Single-step response | Multi-step planning with decomposition using Microsoft Agent Framework's planning middleware |
-| **Tools** | PDF extraction only | Rich ERPNext integration & custom tools via Microsoft Agent Framework's tool registry and MCP server integration |
-| **Memory** | Conversation history | Vector store + entity memory using Microsoft Agent Framework's session management |
-| **Agents** | Single general-purpose agent | Multi-agent collaboration system leveraging Microsoft Agent Framework's orchestration capabilities |
-| **Workflows** | Linear conversations | State-based workflow engine using Microsoft Agent Framework's workflow middleware |
-| **Observability** | Basic logging | Comprehensive tracing & evaluation with Microsoft Agent Framework's observability features |
+| **Reasoning** | Single‑step response | Multi‑step planning using Workflow engine with Executors and conditional edges, plus Skills for progressive disclosure |
+| **Tools** | PDF extraction only | Function Tools with schema validation, MCP server integration, Tool Approval middleware, Code Interpreter, File Search, Web Search |
+| **Memory** | Conversation history | AgentSession persistence, Vector Store integrations (15+ providers), AI Context Providers for RAG and memory injection |
+| **Agents** | Single general‑purpose agent | Simple inference agents, Complex custom agents, Remote agents via A2A protocol, Specialist agents with Skills |
+| **Workflows** | Linear conversations | Graph‑based orchestration with Executors and Edges, Checkpointing, Human‑in‑the‑loop patterns |
+| **Observability** | Basic logging | Agent Run, Function Calling, and IChatClient middleware for telemetry, Events system, OpenTelemetry integration |
 
-## Agent Framework Integration Opportunities
+## Microsoft Agent Framework Capabilities Overview
 
-### 1. Multi-Step Reasoning & Planning
+Microsoft Agent Framework provides a comprehensive set of building blocks for creating AI agents and workflows. Based on the official documentation, here are the key capabilities available:
+
+| Capability Category | Key Features | Description |
+|---------------------|--------------|-------------|
+| **Agents** | Simple inference agents, Complex custom agents, Remote agents (A2A) | Support for multiple agent types derived from `AIAgent` (C#) / `BaseAgent` (Python) base class. Simple agents use `IChatClient` for inference; complex agents can subclass `AIAgent` with custom logic. A2A protocol enables proxy agents that call remote endpoints. |
+| **Tools** | Function Tools, Tool Approval, Code Interpreter, File Search, Web Search, Hosted/Local MCP Tools | Rich tool ecosystem with human‑in‑the‑loop approval, MCP (Model Context Protocol) integration, and pre‑built tools for common tasks. Agents can also be used as tools for composition. |
+| **Skills** | Portable packages (instructions, scripts, resources), Progressive disclosure | Skills bundle system prompts, scripts, and resources that can be advertised, loaded, and executed. Supports file‑based, code‑defined, and class‑based skill definitions with filtering and security controls. |
+| **Conversations & Memory** | AgentSession (state serialization), Context Providers, Context Compaction | Built‑in conversation state management with serialization/rehydration. Context providers feed external data into agent memory; compaction reduces token usage. |
+| **Providers** | Azure OpenAI, OpenAI, Microsoft Foundry, Anthropic, Ollama, GitHub Copilot, Copilot Studio, Custom | Broad provider support with a comparison matrix covering chat completion, responses API, tool calling, streaming, and more. Custom provider implementation via `IChatClient`. |
+| **Workflows** | Graph‑based orchestration, Executors, Edges, Events, Checkpointing | Type‑safe workflow engine for multi‑step processes. Executors are AI agents or custom logic; edges define conditional routing; events provide observability; checkpointing enables long‑running workflow recovery. |
+| **Integrations** | Microsoft Foundry Hosted Agents, UI frameworks, Chat History Providers, Memory AI Context Providers, RAG AI Context Providers, Vector Stores | Integration with Azure Functions, Durable Task, A2A protocol, DevUI, M365, and multiple vector stores (Azure AI Search, Cosmos DB, PostgreSQL, Qdrant, Redis, etc.). |
+| **Middleware** | Agent Run Middleware, Function Calling Middleware, IChatClient Middleware | Intercept and modify agent runs, function calls, and inference service requests. Enables cross‑cutting concerns like logging, security validation, and result transformation. |
+
+### Agent Framework Integration Opportunities
+
+#### 1. Multi‑Step Reasoning & Planning
 
 **Current Limitation**: The agent responds to single messages without explicit planning or decomposition of complex tasks.
 
 **Microsoft Agent Framework Capabilities**:
-- **Planning Middleware**: Built‑in planning pipeline with step decomposition and dependency resolution
-- **Reasoning Engine**: Chain‑of‑thought reasoning with intermediate step tracking and validation
-- **Self‑Correction**: Automatic error detection and recovery through framework‑provided correction loops
+- **Agent Session with Context Providers**: Use `AgentSession` to maintain conversation state across multiple turns and integrate context providers for dynamic memory.
+- **Skills for Progressive Disclosure**: Package planning instructions and scripts as Skills that can be loaded on‑demand.
+- **Workflow Engine for Explicit Orchestration**: Model planning steps as a Workflow graph with Executors for each sub‑task and conditional edges.
 
 **Implementation Approach**:
 ```python
-from agents import Agent, Runner, function_tool
-from agents.planning import Plan
+# Example using Agent Framework's workflow capabilities
+from agents import AIAgent, AgentSession
+from agents.workflows import Workflow, Executor, Edge
 
-class PlanningAgent:
+class PlanningWorkflow:
     def __init__(self, provider_doc):
-        self.agent = Agent(
-            name="Planner",
-            instructions="Break down complex queries into executable steps",
-            model=provider_doc.default_model,
-            planning=Plan(max_steps=10)
+        self.agent = AIAgent.from_provider(provider_doc)
+        self.session = AgentSession()
+        self.workflow = Workflow(
+            executors=[
+                Executor("analyzer", self.agent, instructions="Analyze the problem"),
+                Executor("planner", self.agent, instructions="Break down into steps"),
+                Executor("executor", self.agent, instructions="Execute each step")
+            ],
+            edges=[
+                Edge("analyzer", "planner"),
+                Edge("planner", "executor")
+            ]
         )
 ```
 
-### 2. Tool Integration & ERPNext Actions
+#### 2. Tool Integration & ERPNext Actions
 
 **Current Limitation**: Limited to PDF extraction; no integration with ERPNext data or actions.
 
 **Microsoft Agent Framework Capabilities**:
-- **Tool Registry & MCP Server Integration**: Declarative tool definitions with schema validation and automatic discovery via Model Context Protocol (MCP) servers
-- **ERPNext Tools**: Query customers, create sales orders, fetch reports with built‑in permission checking
-- **Custom Tools**: Python functions as tools with automatic documentation and type validation using Microsoft Agent Framework's SDK
+- **Function Tools with Schema Validation**: Declarative tool definitions using `function_tool` decorator, automatically exposed to agents with parameter validation.
+- **MCP Server Integration**: Connect to Model Context Protocol servers for tool discovery and execution (supports hosted and local MCP servers).
+- **Tool Approval Middleware**: Human‑in‑the‑loop approval workflow for sensitive tool calls using the framework’s `ToolApproval` feature.
 
 **Proposed Tool Categories**:
 
-| Tool Category | Example Tools | Business Value |
-|---------------|---------------|----------------|
-| **Data Query** | `get_customer_details`, `list_open_orders`, `fetch_stock_levels` | Real-time business intelligence |
-| **Document Actions** | `create_quotation`, `update_lead_status`, `post_journal_entry` | Workflow automation |
-| **Analytics** | `calculate_margin`, `forecast_sales`, `analyze_customer_segments` | Decision support |
-| **System Actions** | `send_email`, `create_calendar_event`, `generate_report` | Cross-system automation |
+| Tool Category | Example Tools | Framework Feature Used |
+|---------------|---------------|------------------------|
+| **Data Query** | `get_customer_details`, `list_open_orders` | Function Tools + ERPNext Python API |
+| **Document Actions** | `create_quotation`, `update_lead_status` | MCP Server integration for Frappe DocType methods |
+| **Analytics** | `calculate_margin`, `forecast_sales` | Code Interpreter tool for Python scripts |
+| **System Actions** | `send_email`, `create_calendar_event` | Hosted MCP tools (e.g., Microsoft Graph connector) |
 
-### 3. Memory & Context Management
+#### 3. Memory & Context Management
 
-**Current Limitation**: Simple conversation history with token limits; no long-term memory.
+**Current Limitation**: Simple conversation history with token limits; no long‑term memory.
 
 **Microsoft Agent Framework Capabilities**:
-- **Session Management**: Built‑in session handling with automatic context window management and persistence
-- **Vector Memory**: Semantic search over past conversations using integrated vector store support
-- **Entity Memory**: Track people, companies, products across sessions with relationship mapping
+- **AgentSession Persistence**: Built‑in serialization and storage of conversation state with automatic rehydration.
+- **Vector Store Integrations**: Native support for 15+ vector stores (Azure AI Search, PostgreSQL, Qdrant, Redis, etc.) via `Microsoft.Extensions.VectorData.Abstractions`.
+- **AI Context Providers**: Plug‑ins for `ChatClientAgent` that inject memories or RAG results into the conversation context.
 
 **Implementation Architecture**:
-- **Short-term**: Current conversation window (existing)
-- **Medium-term**: Vector store (ChromaDB/FAISS) for semantic search
-- **Long-term**: Structured entity database with relationships
+- **Short‑term**: `AgentSession` with in‑memory chat history provider (existing)
+- **Medium‑term**: Vector store (Azure AI Search / PostgreSQL) for semantic search across past conversations
+- **Long‑term**: Structured entity memory using Frappe DocTypes with relationship mapping
 
-### 4. Multi-Agent Collaboration
+#### 4. Multi‑Agent Collaboration
 
 **Current Limitation**: Single agent architecture; no specialist collaboration.
 
 **Microsoft Agent Framework Capabilities**:
-- **Orchestration Middleware**: Built‑in agent orchestration with intelligent routing and load balancing
-- **Specialist Agents**: Dedicated agents for specific domains (sales, support, accounting) with framework‑managed lifecycle
-- **Parallel Processing**: Concurrent agent execution with coordination and result aggregation
+- **Workflow‑Based Orchestration**: Use the Workflow engine to coordinate multiple agents as Executors, with edges controlling message flow.
+- **A2A Protocol for Remote Agents**: Proxy agents can call remote endpoints, enabling distributed multi‑agent systems.
+- **Specialist Skills**: Package domain‑specific knowledge as Skills that can be dynamically loaded by specialist agents.
 
-**Example Multi-Agent Workflow**:
+**Example Multi‑Agent Workflow**:
 ```
 User: "I need help with a customer complaint and creating a refund"
-└── Orchestrator Agent
-    ├── Customer Support Agent: Handle complaint resolution
-    └── Accounting Agent: Process refund and update ledger
+└── Workflow Orchestrator
+    ├── Support Agent (Skill: complaint‑resolution)
+    └── Accounting Agent (Skill: refund‑processing)
 ```
 
-### 5. Workflow Engine & State Management
+#### 5. Workflow Engine & State Management
 
 **Current Limitation**: Linear conversation flow; no support for structured workflows.
 
 **Microsoft Agent Framework Capabilities**:
-- **Workflow Middleware**: Built‑in workflow engine with state machine support and transition management
-- **Conditional Logic**: Branching based on user responses or system conditions using framework‑provided decision nodes
-- **Human‑in‑the‑Loop**: Integrated approval workflows with notification and escalation mechanisms
+- **Graph‑Based Workflows**: Define workflows as directed graphs of Executors (AI agents or custom logic) and Edges (conditional routing).
+- **Checkpointing**: Save workflow state to durable storage, allowing long‑running processes to be paused and resumed.
+- **Human‑in‑the‑Loop Patterns**: Built‑in request/response patterns for integrating human approvals and interventions.
 
 **Use Case Example**:
 ```python
-from agents.workflows import Workflow, State, Transition
+from agents.workflows import Workflow, Executor, Edge, Condition
 
 refund_workflow = Workflow(
-    states=[
-        State("collect_details", "Gather refund details"),
-        State("verify_eligibility", "Check refund policy"),
-        State("manager_approval", "Await manager approval"),
-        State("process_refund", "Execute refund in ERP"),
-        State("notify_customer", "Send confirmation")
+    executors=[
+        Executor("collect", agent, instructions="Gather refund details"),
+        Executor("verify", agent, instructions="Check refund policy"),
+        Executor("approve", agent, instructions="Await manager approval"),
+        Executor("process", agent, instructions="Execute refund in ERP"),
+        Executor("notify", agent, instructions="Send confirmation")
     ],
-    initial_state="collect_details"
+    edges=[
+        Edge("collect", "verify"),
+        Edge("verify", "approve", condition=Condition("amount > 1000")),
+        Edge("approve", "process"),
+        Edge("process", "notify")
+    ]
 )
 ```
 
-### 6. Evaluation & Observability
+#### 6. Evaluation & Observability
 
 **Current Limitation**: Limited logging; no performance metrics or quality evaluation.
 
 **Microsoft Agent Framework Capabilities**:
-- **Observability Middleware**: Built‑in tracing, metrics collection, and logging with OpenTelemetry integration
-- **Execution Tracing**: Detailed logs of agent reasoning and tool calls with visualization support
-- **Quality Evaluation**: Automated scoring of response relevance and accuracy using framework‑provided evaluators
+- **Middleware for Telemetry**: Agent Run, Function Calling, and IChatClient middleware enable detailed tracing of every step.
+- **Events System**: Workflow and executor lifecycle events provide observability hooks.
+- **Integration with OpenTelemetry**: Built‑in support for distributed tracing and metrics export.
 
 **Implementation Strategy**:
-- **OpenTelemetry Integration**: Distributed tracing across agents and tools
-- **Dashboard**: Real-time monitoring of agent performance
-- **A/B Testing**: Compare different agent configurations
+- **Agent Run Middleware**: Log input/output of every agent invocation.
+- **Function Calling Middleware**: Record tool usage and results for auditing.
+- **Workflow Events**: Monitor workflow progression and capture performance metrics.
 
 ## Implementation Roadmap
 

@@ -14,6 +14,28 @@ This document tracks the implementation progress of PH Agent features as outline
 
 **Note:** This plan has been updated to leverage the Microsoft Agent Framework's built‑in capabilities for tools, workflows, memory, and multi‑agent orchestration. The original phase structure is preserved, but tasks have been revised to use framework components where appropriate.
 
+## Microsoft Agent Framework Documentation Links
+
+To assist developers implementing these features, here are key documentation links for the Microsoft Agent Framework:
+
+- **Main Documentation**: [Microsoft Agent Framework Overview (Python)](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python)
+- **Python SDK API Reference**: [Python SDK Overview](https://learn.microsoft.com/en-us/python/api/agent-sdk-python/agents-overview?view=agent-sdk-python-latest)
+- **Quickstart (Python)**: [Quickstart: Build your first agent with Python](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/quickstart-python)
+- **GitHub Repository (Python)**: [microsoft/agents-for-python](https://github.com/microsoft/agents-for-python)
+- **GitHub Repository (Main)**: [microsoft/Agents](https://github.com/microsoft/Agents)
+
+**Key Modules Referenced in This Document**:
+- `agents.function_tool` – Function tools with schema validation
+- `agents.mcp` – Model Context Protocol server integration  
+- `agents.workflows.Workflow` – Graph‑based workflow orchestration
+- `agents.vectorstores` – Vector store integrations for memory
+- `agents.AIAgent` – Base class for AI agents
+- `agents.Skill` – Skills for progressive disclosure
+
+For detailed API documentation, refer to the Python SDK reference and the samples in the GitHub repositories. The main overview page serves as the primary entry point for Python developers.
+
+---
+
 ## Phase 1: Foundation
 
 **Status:** ⏳ **Not Started** (Target completion: Weeks 1‑2)

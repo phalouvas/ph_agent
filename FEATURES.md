@@ -200,6 +200,7 @@ class PlanningWorkflow:
 - **Function Tools with Schema Validation**: Declarative tool definitions using `function_tool` decorator, automatically exposed to agents with parameter validation.
 - **MCP Server Integration**: Connect to Model Context Protocol servers for tool discovery and execution (supports hosted and local MCP servers).
 - **Tool Approval Middleware**: Human‑in‑the‑loop approval workflow for sensitive tool calls using the framework’s `ToolApproval` feature.
+- **Tool Registry Access Control**: Fine‑grained permission mapping using Frappe DocType‑level permissions via child table linking.
 
 **Proposed Tool Categories**:
 

@@ -31,8 +31,33 @@ To assist developers implementing these features, here are key documentation lin
 - `agents.vectorstores` – Vector store integrations for memory
 - `agents.AIAgent` – Base class for AI agents
 - `agents.Skill` – Skills for progressive disclosure
+- `AgentSession` – Conversation state persistence
+- `IContextProvider` – Memory and RAG context injection
+- `ToolApprovalMiddleware` – Human‑in‑the‑loop approval workflow
+- `AgentRunMiddleware` – Telemetry and tracing middleware
+- `VectorStore` – Vector database abstraction
+- `IChatClient` – LLM provider interface
+- `HostedAgent` – Pre‑built agent integrations
+- `DevUI` – UI framework components
+
+*For a complete mapping of capabilities to framework components, see the [Capabilities Reference](#microsoft-agent-framework-capabilities-reference) table above.*
 
 For detailed API documentation, refer to the Python SDK reference and the samples in the GitHub repositories. The main overview page serves as the primary entry point for Python developers.
+
+## Microsoft Agent Framework Capabilities Reference {#microsoft-agent-framework-capabilities-reference}
+
+The table below maps each major capability area to specific Microsoft Agent Framework components and documentation links. Use this as a quick reference when implementing features.
+
+| Capability Area | Framework Component | Key Classes/Modules | Documentation Link |
+|-----------------|---------------------|---------------------|-------------------|
+| **Agents** | Default Agent Runtime, AIAgent/BaseAgent | `AIAgent`, `BaseAgent`, `AgentSession` | [Agents Overview](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#agents) |
+| **Tools** | Function Tools, MCP Integration, Tool Approval | `function_tool`, `agents.mcp`, `ToolApprovalMiddleware` | [Tools & MCP](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#tools) |
+| **Skills** | Skills Framework | `Skill`, `SkillRegistry`, `SkillLoader` | [Skills](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#skills) |
+| **Conversations & Memory** | AgentSession, Context Providers, Vector Stores | `AgentSession`, `IContextProvider`, `VectorStore` | [Memory & Context](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#conversations--memory) |
+| **Providers** | Provider Abstraction | `IChatClient`, `OpenAIChatClient`, `AzureOpenAIChatClient` | [Providers](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#providers) |
+| **Workflows** | Workflow Engine | `Workflow`, `Executor`, `Edge`, `Condition` | [Workflows](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#workflows) |
+| **Integrations** | UI Framework, Hosted Agents, Vector Stores | `DevUI`, `HostedAgent`, `VectorStore` | [Integrations](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#integrations) |
+| **Middleware** | Agent Run, Function Calling, IChatClient Middleware | `AgentRunMiddleware`, `FunctionCallingMiddleware`, `IChatClientMiddleware` | [Middleware](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python#middleware) |
 
 ---
 
@@ -49,6 +74,7 @@ For detailed API documentation, refer to the Python SDK reference and the sample
 - **ToolManager Class**: Create `tool_manager.py` with methods `load_tools()`, `register_tool()`, `validate_schema()`. Integrate with `agents.function_tool`.
 - **Tool Approval Middleware**: Implement a middleware that intercepts tool calls marked as `requires_approval` and creates a `Tool Approval` document for human review.
 - **MCP Server Integration**: Set up a Model Context Protocol server using `agents.mcp` module, expose web search, file search tools.
+- **Built‑in Tools Integration**: Utilize Microsoft Agent Framework's built‑in tools: Code Interpreter, File Search, Web Search, and Hosted/Local MCP tools.
 - **Sample ERPNext Tools**: Implement five functions in `ph_agent/agent/tools/erpnext_tools.py` using `@function_tool` decorator.
 - **Logging Middleware**: Use Microsoft Agent Framework's `FunctionCallingMiddleware` to capture tool invocations and store in `Chat Message` child table.
 
@@ -68,6 +94,7 @@ For detailed API documentation, refer to the Python SDK reference and the sample
 **Detailed Breakdown:**
 - **PlanningWorkflow Class**: Create `planning_workflow.py` that defines a `Workflow` with `Executors` for decomposition, using `agents.workflows.Workflow`. Integrate with agent's `run` method.
 - **Skills Implementation**: Define a `Skill` class that bundles system prompts, scripts, and resources. Register skills with the workflow.
+- **Skills Framework**: Leverage Microsoft Agent Framework's Skills system for progressive disclosure, script approval, custom system prompts, and caching behavior.
 - **Intermediate Steps Storage**: Add `intermediate_steps` JSON field to `Chat Message` DocType, store each step's reasoning, tool calls, results.
 - **UI Toggle Component**: Create a Vue component in `public/js/chat/modules/` that shows/hides reasoning steps with a toggle button.
 - **Timeout Handling**: Use Workflow checkpointing to limit max steps and implement timeout detection using `asyncio` or framework's timeout middleware.
@@ -100,6 +127,48 @@ For detailed API documentation, refer to the Python SDK reference and the sample
 | 1.3.4 | Integrate memory retrieval via AI Context Providers for RAG | ⬜ Not Started | | Inject top‑3 relevant past conversations using framework's context injection |
 | 1.3.5 | Build memory‑management UI | ⬜ Not Started | | Allow users to view/delete stored memory vectors |
 | 1.3.6 | Performance benchmark | ⬜ Not Started | | Measure retrieval latency (<100ms target) |
+
+### 1.4 Provider Management
+
+**Goal:** Manage multiple LLM providers with unified interface using Microsoft Agent Framework's provider abstraction.
+
+**Detailed Breakdown:**
+- **Provider Configuration DocType**: Extend `LLM Provider` DocType to include fields for Azure OpenAI, OpenAI, Foundry, Anthropic, Ollama, etc. Add validation for endpoint URLs and API keys.
+- **IChatClient Integration**: Implement provider‑specific `IChatClient` adapters for each supported provider using Microsoft Agent Framework's built‑in clients (`OpenAIChatClient`, `AzureOpenAIChatClient`, `FoundryChatClient`, `AnthropicChatClient`, `OllamaChatClient`).
+- **Provider Switching**: Use framework's provider routing to dynamically switch between providers based on availability, cost, or performance.
+- **Fallback & Retry Logic**: Implement middleware for automatic fallback to backup providers when primary fails, using framework's retry policies.
+- **Usage Tracking**: Track token usage, costs per provider, and store metrics in `LLM Provider` records.
+- **UI for Provider Management**: Create a Frappe Desk page to configure providers, test connections, and view usage analytics.
+
+| # | Task | Status | PR/Commit | Notes |
+|---|------|--------|-----------|-------|
+| 1.4.1 | Extend `LLM Provider` DocType for all supported providers | ⬜ Not Started | | Add fields for endpoint URLs, API keys, model mappings, rate limits |
+| 1.4.2 | Implement IChatClient adapters using framework's built‑in clients | ⬜ Not Started | | Use `OpenAIChatClient`, `AzureOpenAIChatClient`, `FoundryChatClient`, etc. |
+| 1.4.3 | Add provider‑switching logic with fallback | ⬜ Not Started | | Use framework's provider routing and retry policies for high availability |
+| 1.4.4 | Implement usage tracking per provider | ⬜ Not Started | | Store token counts, costs, latency metrics in provider records |
+| 1.4.5 | Build provider‑management UI | ⬜ Not Started | | Test connections, view analytics, configure priorities |
+
+### 1.5 Middleware Architecture
+
+**Goal:** Leverage Microsoft Agent Framework's middleware stack for cross‑cutting concerns: telemetry, security, validation, and tool approval.
+
+**Detailed Breakdown:**
+- **Middleware Configuration**: Define a configuration system to enable/disable middleware chains per agent or globally.
+- **Agent Run Middleware**: Use `AgentRunMiddleware` to log input/output of every agent invocation, measure latency, and capture errors.
+- **Function Calling Middleware**: Use `FunctionCallingMiddleware` to intercept tool calls for logging, validation, and transformation before execution.
+- **Tool Approval Middleware**: Implement human‑in‑the‑loop approval workflow using `ToolApprovalMiddleware` for sensitive tools.
+- **IChatClient Middleware**: Use `IChatClientMiddleware` to modify requests to LLM providers (add headers, retry logic, fallback).
+- **Telemetry Integration**: Integrate OpenTelemetry via middleware for distributed tracing across agent runs, tool calls, and LLM requests.
+- **Custom Middleware**: Create custom middleware for Frappe‑specific concerns (permission checking, audit logging).
+
+| # | Task | Status | PR/Commit | Notes |
+|---|------|--------|-----------|-------|
+| 1.5.1 | Configure Agent Run Middleware for telemetry | ⬜ Not Started | | Log agent inputs/outputs, measure latency, capture errors |
+| 1.5.2 | Implement Function Calling Middleware for tool logging | ⬜ Not Started | | Intercept tool calls, validate parameters, log results |
+| 1.5.3 | Set up Tool Approval Middleware for sensitive actions | ⬜ Not Started | | Human‑in‑the‑loop approval workflow for tools marked `requires_approval` |
+| 1.5.4 | Add IChatClient Middleware for request modification | ⬜ Not Started | | Add headers, implement retry logic, handle provider fallback |
+| 1.5.5 | Integrate OpenTelemetry for distributed tracing | ⬜ Not Started | | Trace across agent runs, tool calls, LLM requests |
+| 1.5.6 | Create custom middleware for Frappe permissions | ⬜ Not Started | | Check `has_permission` before tool execution, log audit trails |
 
 ---
 
@@ -142,6 +211,31 @@ For detailed API documentation, refer to the Python SDK reference and the sample
 | 2.3.4 | Implement automated quality scoring using framework's evaluation hooks | ⬜ Not Started | | Heuristics for relevance, accuracy, helpfulness using framework's evaluation APIs |
 | 2.3.5 | Set up A/B testing framework using framework's provider switching | ⬜ Not Started | | Compare different agent configurations using framework's provider routing |
 | 2.3.6 | Create anomaly detection using framework's telemetry data | ⬜ Not Started | | Flag unusual token usage or repeated tool failures using framework's metrics |
+
+### 2.4 Integration Patterns
+
+**Goal:** Leverage Microsoft Agent Framework's extensive integration ecosystem for enterprise scenarios.
+
+**Detailed Breakdown:**
+- **UI Framework Integration**: Use DevUI components to embed agent capabilities into Frappe Desk pages and custom web apps.
+- **Hosted Agents Integration**: Integrate with Microsoft Foundry Hosted Agents for pre‑built business scenarios (e.g., customer support, sales analysis).
+- **Vector Store Integrations**: Connect to Azure AI Search, PostgreSQL, Qdrant, Redis, and other vector stores for semantic memory and RAG.
+- **Memory AI Context Providers**: Use built‑in memory injection providers to dynamically inject conversation history and external data into agent context.
+- **RAG AI Context Providers**: Implement retrieval‑augmented generation using framework's RAG providers for document search.
+- **Azure Functions (Durable) Integration**: Orchestrate long‑running workflows with Azure Functions and Durable Tasks.
+- **A2A Protocol**: Enable agent‑to‑agent communication across network boundaries for distributed multi‑agent systems.
+- **M365 Integration**: Connect to Microsoft 365 data sources (Outlook, SharePoint, Teams) using framework's M365 connectors.
+
+| # | Task | Status | PR/Commit | Notes |
+|---|------|--------|-----------|-------|
+| 2.4.1 | Integrate DevUI components for embedding agents in Frappe Desk | ⬜ Not Started | | Use framework's DevUI components for chat interfaces, agent controls |
+| 2.4.2 | Connect to Microsoft Foundry Hosted Agents for business scenarios | ⬜ Not Started | | Pre‑built agents for customer support, sales analysis, etc. |
+| 2.4.3 | Implement vector store integrations (Azure AI Search, PostgreSQL, Qdrant) | ⬜ Not Started | | Use framework's VectorStore abstraction for semantic memory |
+| 2.4.4 | Add Memory AI Context Providers for dynamic memory injection | ⬜ Not Started | | Inject conversation history and external data via framework's context providers |
+| 2.4.5 | Integrate RAG AI Context Providers for document search | ⬜ Not Started | | Retrieval‑augmented generation using framework's RAG providers |
+| 2.4.6 | Orchestrate workflows with Azure Functions (Durable) | ⬜ Not Started | | Long‑running workflow integration using framework's Azure Functions connectors |
+| 2.4.7 | Enable A2A protocol for distributed multi‑agent systems | ⬜ Not Started | | Agent‑to‑agent communication across network boundaries |
+| 2.4.8 | Connect to Microsoft 365 data sources (Outlook, SharePoint, Teams) | ⬜ Not Started | | Use framework's M365 connectors for enterprise data integration |
 
 ---
 

@@ -63,7 +63,7 @@ The table below maps each major capability area to specific Microsoft Agent Fram
 
 ## Phase 1: Foundation
 
-**Status:** ⏳ **Not Started** (Target completion: Weeks 1‑2)
+**Status:** 🚧 **In Progress** (Target completion: Weeks 1‑2)
 
 ### 1.1 Tool Framework
 **Goal:** Enable the agent to call ERPNext functions via a registry of whitelisted tools.
@@ -80,13 +80,13 @@ The table below maps each major capability area to specific Microsoft Agent Fram
 
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
-| 1.1.1 | Create `Tool Registry` DocType | ⬜ Not Started | | JSON schema: `tool_name`, `description`, `python_function`, `parameters_json`, `permission_doctype` |
+| 1.1.1 | Create `Tool Registry` DocType | ✅ **Completed** | [task/1.1.1](https://github.com/phalouvas/ph_agent/tree/task/1.1.1) | JSON schema: `tool_name`, `description`, `python_function`, `parameters_json`, `requires_approval`, `is_enabled`. Validation: unique tool_name, importable python_function, valid JSON. Simplified design: No permission fields - relies on Frappe's DocType permissions and tool-level permission checks. |
 | 1.1.2 | Implement `ToolManager` class with `function_tool` registration | ⬜ Not Started | | Loads tools from DB, registers with agent‑framework's `function_tool` decorator, validates schemas |
 | 1.1.3 | Add Tool Approval middleware for sensitive actions | ⬜ Not Started | | Human‑in‑the‑loop approval workflow for tools marked as `requires_approval` |
 | 1.1.4 | Integrate MCP server for external tools (web search, file search) | ⬜ Not Started | | Use Microsoft Agent Framework's MCP integration for hosted/local tools |
 | 1.1.5 | Create 5 sample ERPNext tools using `function_tool` | ⬜ Not Started | | `get_customer_details`, `list_sales_orders`, `fetch_stock_levels`, `create_quotation`, `send_email` |
 | 1.1.6 | Add tool‑call logging via Function Calling Middleware | ⬜ Not Started | | Store tool invocation details in `Chat Message` using framework middleware |
-| 1.1.7 | Implement Tool Registry Access Control using child table `tool_registry_doc_type_access` | ⬜ Not Started | | Link tools with DocTypes and permissions for fine‑grained access control |
+| 1.1.7 | Implement Tool Registry Access Control using Frappe permissions | ✅ **Simplified** | | Access control handled by Frappe's DocType permissions (System Manager only) and tool-level permission checks in Python functions |
 
 ### 1.2 Planning Agent
 **Goal:** Add multi‑step reasoning and explicit task decomposition.

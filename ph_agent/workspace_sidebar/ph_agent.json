@@ -56,16 +56,17 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "list",
+   "icon": "pen-tool",
    "indent": 0,
    "keep_closed": 0,
-   "label": "Reports",
+   "label": "Tool Registry",
+   "link_to": "Tool Registry",
    "link_type": "DocType",
    "show_arrow": 0,
-   "type": "Section Break"
+   "type": "Link"
   }
  ],
- "modified": "2026-04-16 15:56:06.830576",
+ "modified": "2026-04-20 14:50:50.740632",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

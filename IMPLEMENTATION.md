@@ -217,9 +217,6 @@ The following features are **already implemented** and form the foundation for t
 | **Phase 2 completion** | 0% | 100% |
 | **Phase 3 completion** | 0% | 100% |
 | **Phase 4 completion** | 0% | 100% |
-| **Unit test coverage** | Unknown | 80% |
-| **Integration test coverage** | Unknown | 70% |
-| **End‑to‑end test coverage** | Unknown | 50% |
 
 ## Key Decisions & Architecture Notes
 
@@ -227,7 +224,7 @@ The following features are **already implemented** and form the foundation for t
 - **Vector Database Choice**: Selected ChromaDB over Pinecone/Weaviate for simplicity and zero‑cost on‑premise deployment. Embeddings will be generated using `sentence‑transformers/all‑MiniLM‑L6‑v2` (local) or OpenAI’s `text‑embedding‑3‑small` (cloud).
 - **Permission Model**: Tools will respect Frappe’s standard `has_permission` checks; no custom permission system will be built.
 - **UI Framework**: Continue using Vue Advanced Chat component; no migration to a different chat UI library planned.
-- **Agent Framework**: Use the existing `agents` Python library (already in dependencies) for planning, tools, and multi‑agent orchestration.
+- **Agent Framework**: Use Microsoft Agent Framework's built‑in middleware, session management, workflows, and MCP server integration to accelerate development and ensure robustness.
 - **Deployment Target**: Primary environment is Frappe Bench (v16) with ERPNext; secondary target is Frappe Cloud.
 
 ### 2026‑04‑20: Implementation Priority
@@ -237,10 +234,10 @@ The following features are **already implemented** and form the foundation for t
 4. **Security Hardening** must be part of each phase, not left until Phase 3.
 
 ### 2026‑04‑20: Testing Strategy
-- **Unit Tests**: Each tool, agent class, and utility function.
-- **Integration Tests**: Tool‑calling, memory retrieval, workflow state transitions.
-- **End‑to‑End Tests**: Full chat conversations with simulated user inputs.
-- **Performance Tests**: Load testing with `locust` for concurrent user simulation.
+- **Manual Testing**: Rigorous human testing of each feature before deployment.
+- **Integration Testing**: End‑to‑end workflow validation with real‑world scenarios.
+- **Exploratory Testing**: Ad‑hoc testing to uncover edge cases and usability issues.
+- **Security Review**: Manual review of tool permissions, input validation, and data handling.
 
 ## Recent Changes & PRs
 
@@ -252,7 +249,7 @@ The following features are **already implemented** and form the foundation for t
 
 1. **Create GitHub Issues** for Phase‑1 tasks (Tool Framework).
 2. **Start implementation** of `Tool Registry` DocType (estimated 2‑3 hours).
-3. **Set up CI/CD** for automated testing (if not already present).
+3. **Establish manual testing protocols** and checklist for each feature.
 4. **Update this document** as progress is made.
 
 ---

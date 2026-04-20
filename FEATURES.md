@@ -2,7 +2,7 @@
 
 ## Introduction
 
-PH Agent is a Frappe application that brings agentic AI chatbots into ERPNext, enabling intelligent conversations and task automation within business workflows. Built on the `agents` Python library and integrated with the Frappe framework, PH Agent provides a robust foundation for AI-driven interactions.
+PH Agent is a Frappe application that brings agentic AI chatbots into ERPNext, enabling intelligent conversations and task automation within business workflows. Built on the Microsoft Agent Framework (`agents` Python library) and integrated with the Frappe framework, PH Agent provides a robust foundation for AI-driven interactions.
 
 This document outlines the current architecture, explores opportunities for deeper integration with the Agent Framework, and proposes a roadmap for transforming PH Agent into a fully-fledged multi-agent system capable of complex reasoning, tool usage, and workflow automation.
 
@@ -125,7 +125,7 @@ graph TB
 ### 🔧 Current Technical Stack
 
 - **Frontend**: Vue Advanced Chat web component + modular JavaScript
-- **Backend**: Frappe Framework (Python) with `agents` library
+- **Backend**: Frappe Framework (Python) with Microsoft Agent Framework (`agents` library)
 - **LLM Integration**: OpenAI SDK compatible with multiple providers
 - **Storage**: Frappe MariaDB for structured data, File storage for attachments
 - **Real-time**: Frappe Socket.IO server
@@ -134,14 +134,14 @@ graph TB
 
 ### 📈 Current vs Future State
 
-| Aspect | Current State | Future State with Agent Framework |
-|--------|---------------|-----------------------------------|
-| **Reasoning** | Single-step response | Multi-step planning with decomposition |
-| **Tools** | PDF extraction only | Rich ERPNext integration & custom tools |
-| **Memory** | Conversation history | Vector store + entity memory |
-| **Agents** | Single general-purpose agent | Multi-agent collaboration system |
-| **Workflows** | Linear conversations | State-based workflow engine |
-| **Observability** | Basic logging | Comprehensive tracing & evaluation |
+| Aspect | Current State | Future State with Microsoft Agent Framework |
+|--------|---------------|---------------------------------------------|
+| **Reasoning** | Single-step response | Multi-step planning with decomposition using Microsoft Agent Framework's planning middleware |
+| **Tools** | PDF extraction only | Rich ERPNext integration & custom tools via Microsoft Agent Framework's tool registry and MCP server integration |
+| **Memory** | Conversation history | Vector store + entity memory using Microsoft Agent Framework's session management |
+| **Agents** | Single general-purpose agent | Multi-agent collaboration system leveraging Microsoft Agent Framework's orchestration capabilities |
+| **Workflows** | Linear conversations | State-based workflow engine using Microsoft Agent Framework's workflow middleware |
+| **Observability** | Basic logging | Comprehensive tracing & evaluation with Microsoft Agent Framework's observability features |
 
 ## Agent Framework Integration Opportunities
 
@@ -149,10 +149,10 @@ graph TB
 
 **Current Limitation**: The agent responds to single messages without explicit planning or decomposition of complex tasks.
 
-**Agent Framework Capabilities**:
-- **Planning**: Break down complex queries into sub-tasks with clear dependencies
-- **Reasoning**: Chain-of-thought reasoning with intermediate steps
-- **Self-correction**: Ability to detect errors and adjust approach
+**Microsoft Agent Framework Capabilities**:
+- **Planning Middleware**: Built‑in planning pipeline with step decomposition and dependency resolution
+- **Reasoning Engine**: Chain‑of‑thought reasoning with intermediate step tracking and validation
+- **Self‑Correction**: Automatic error detection and recovery through framework‑provided correction loops
 
 **Implementation Approach**:
 ```python
@@ -173,10 +173,10 @@ class PlanningAgent:
 
 **Current Limitation**: Limited to PDF extraction; no integration with ERPNext data or actions.
 
-**Agent Framework Capabilities**:
-- **Tool Registry**: Declarative tool definitions with schema validation
-- **ERPNext Tools**: Query customers, create sales orders, fetch reports
-- **Custom Tools**: Python functions as tools with automatic documentation
+**Microsoft Agent Framework Capabilities**:
+- **Tool Registry & MCP Server Integration**: Declarative tool definitions with schema validation and automatic discovery via Model Context Protocol (MCP) servers
+- **ERPNext Tools**: Query customers, create sales orders, fetch reports with built‑in permission checking
+- **Custom Tools**: Python functions as tools with automatic documentation and type validation using Microsoft Agent Framework's SDK
 
 **Proposed Tool Categories**:
 
@@ -191,10 +191,10 @@ class PlanningAgent:
 
 **Current Limitation**: Simple conversation history with token limits; no long-term memory.
 
-**Agent Framework Capabilities**:
-- **Vector Memory**: Semantic search over past conversations
-- **Entity Memory**: Track people, companies, products across sessions
-- **Summary Memory**: Compressed representations of long conversations
+**Microsoft Agent Framework Capabilities**:
+- **Session Management**: Built‑in session handling with automatic context window management and persistence
+- **Vector Memory**: Semantic search over past conversations using integrated vector store support
+- **Entity Memory**: Track people, companies, products across sessions with relationship mapping
 
 **Implementation Architecture**:
 - **Short-term**: Current conversation window (existing)
@@ -205,10 +205,10 @@ class PlanningAgent:
 
 **Current Limitation**: Single agent architecture; no specialist collaboration.
 
-**Agent Framework Capabilities**:
-- **Specialist Agents**: Dedicated agents for specific domains (sales, support, accounting)
-- **Orchestration**: Coordinator agent that routes tasks to specialists
-- **Parallel Processing**: Multiple agents working on different aspects simultaneously
+**Microsoft Agent Framework Capabilities**:
+- **Orchestration Middleware**: Built‑in agent orchestration with intelligent routing and load balancing
+- **Specialist Agents**: Dedicated agents for specific domains (sales, support, accounting) with framework‑managed lifecycle
+- **Parallel Processing**: Concurrent agent execution with coordination and result aggregation
 
 **Example Multi-Agent Workflow**:
 ```
@@ -222,10 +222,10 @@ User: "I need help with a customer complaint and creating a refund"
 
 **Current Limitation**: Linear conversation flow; no support for structured workflows.
 
-**Agent Framework Capabilities**:
-- **State Machines**: Define workflow states and transitions
-- **Conditional Logic**: Branching based on user responses or system conditions
-- **Human-in-the-loop**: Pause for approval at critical steps
+**Microsoft Agent Framework Capabilities**:
+- **Workflow Middleware**: Built‑in workflow engine with state machine support and transition management
+- **Conditional Logic**: Branching based on user responses or system conditions using framework‑provided decision nodes
+- **Human‑in‑the‑Loop**: Integrated approval workflows with notification and escalation mechanisms
 
 **Use Case Example**:
 ```python
@@ -247,10 +247,10 @@ refund_workflow = Workflow(
 
 **Current Limitation**: Limited logging; no performance metrics or quality evaluation.
 
-**Agent Framework Capabilities**:
-- **Execution Tracing**: Detailed logs of agent reasoning and tool calls
-- **Metrics Collection**: Response time, token usage, cost tracking
-- **Quality Evaluation**: Automated scoring of response relevance and accuracy
+**Microsoft Agent Framework Capabilities**:
+- **Observability Middleware**: Built‑in tracing, metrics collection, and logging with OpenTelemetry integration
+- **Execution Tracing**: Detailed logs of agent reasoning and tool calls with visualization support
+- **Quality Evaluation**: Automated scoring of response relevance and accuracy using framework‑provided evaluators
 
 **Implementation Strategy**:
 - **OpenTelemetry Integration**: Distributed tracing across agents and tools
@@ -260,14 +260,14 @@ refund_workflow = Workflow(
 ## Implementation Roadmap
 
 ### Phase 1: Foundation (Weeks 1-2)
-- **Tool Framework**: Implement basic tool registry with ERPNext integration
-- **Planning Agent**: Add simple planning capabilities to existing agent
-- **Enhanced Memory**: Integrate vector store for semantic memory
+- **Tool Framework**: Leverage Microsoft Agent Framework's tool registry and MCP server integration for ERPNext tools
+- **Planning Agent**: Utilize Microsoft Agent Framework's planning middleware for multi‑step reasoning
+- **Enhanced Memory**: Use Microsoft Agent Framework's session management and vector memory support
 
 ### Phase 2: Advanced Capabilities (Weeks 3-4)
-- **Multi-Agent System**: Specialist agents with orchestration
-- **Workflow Engine**: State-based conversation flows
-- **Evaluation Framework**: Metrics collection and tracing
+- **Multi‑Agent System**: Specialist agents with orchestration using Microsoft Agent Framework's orchestration middleware
+- **Workflow Engine**: State‑based conversation flows using Microsoft Agent Framework's workflow middleware
+- **Evaluation Framework**: Metrics collection and tracing with Microsoft Agent Framework's observability features
 
 ### Phase 3: Production Readiness (Weeks 5-6)
 - **Security Hardening**: Permission checks on all tool calls

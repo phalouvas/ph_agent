@@ -57,7 +57,7 @@
    "reqd": 1
   },
   {
-   "description": "Overrides the provider-level system prompt for this session. Leave empty to use the provider default.",
+   "description": "Inherits provider default when session is created. If empty, no system prompt will be used.",
    "fieldname": "system_prompt",
    "fieldtype": "Long Text",
    "label": "System Prompt"

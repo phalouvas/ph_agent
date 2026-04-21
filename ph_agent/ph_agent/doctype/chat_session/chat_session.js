@@ -36,7 +36,7 @@ frappe.ui.form.on("Chat Session", {
 				args: {
 					doctype: "LLM Provider",
 					filters: { is_default: 1, is_enabled: 1 },
-					fields: ["name", "supports_streaming", "enable_suggestions"],
+					fields: ["name", "supports_streaming", "enable_suggestions", "system_prompt"],
 					limit: 1
 				},
 				callback: function(r) {
@@ -45,6 +45,7 @@ frappe.ui.form.on("Chat Session", {
 						frm.set_value("llm_provider", provider.name);
 						frm.set_value("enable_streaming", provider.supports_streaming ? 1 : 0);
 						frm.set_value("enable_suggestions", provider.enable_suggestions ? 1 : 0);
+						frm.set_value("system_prompt", provider.system_prompt);
 					}
 				}
 			});
@@ -55,13 +56,14 @@ frappe.ui.form.on("Chat Session", {
 				args: {
 					doctype: "LLM Provider",
 					filters: { name: provider_name },
-					fieldname: ["supports_streaming", "enable_suggestions"]
+					fieldname: ["supports_streaming", "enable_suggestions", "system_prompt"]
 				},
 				callback: function(r) {
 					if (r.message) {
 						const provider = r.message;
 						frm.set_value("enable_streaming", provider.supports_streaming ? 1 : 0);
 						frm.set_value("enable_suggestions", provider.enable_suggestions ? 1 : 0);
+						frm.set_value("system_prompt", provider.system_prompt);
 					}
 				}
 			});

@@ -27,6 +27,9 @@ class ChatSession(Document):
 			self.enable_suggestions = provider.enable_suggestions
 			# Inherit enable_streaming from provider's supports_streaming
 			self.enable_streaming = provider.supports_streaming
+			# Inherit system_prompt from provider if not explicitly set
+			if not self.system_prompt:
+				self.system_prompt = provider.system_prompt
 	
 	def validate(self):
 		# Validate temperature range

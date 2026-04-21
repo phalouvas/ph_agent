@@ -77,8 +77,8 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		openai_client=openai_client,
 	)
 
-	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
-	system_prompt = session.system_prompt or provider_doc.system_prompt or None
+	# Session prompt only; if empty, use None (no system prompt)
+	system_prompt = session.system_prompt or None
 
 	agent = Agent(
 		name="PH Agent",
@@ -234,8 +234,8 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	# Determine temperature: session overrides provider, default to 1.0
 	temperature = session.temperature if session.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
 	
-	# Session prompt overrides provider prompt; if both empty, use None (no system prompt)
-	system_prompt = session.system_prompt or provider_doc.system_prompt or None
+	# Session prompt only; if empty, use None (no system prompt)
+	system_prompt = session.system_prompt or None
 
 	# Build conversation history for context (only messages after last summary, INCLUDING the summary as system message)
 	# Get last summary message if exists

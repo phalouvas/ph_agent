@@ -101,6 +101,7 @@ def send_message(session, content, file_names=None):
 		enqueued_by=frappe.session.user,
 		queue="long",
 		timeout=600,
+		now=False
 	)
 
 	# Persist the job ID so cancel_generation can stop it
@@ -244,6 +245,7 @@ def edit_message(message_id, content):
 		enqueued_by=frappe.session.user,
 		queue="long",
 		timeout=600,
+		now=False
 	)
 	frappe.cache().set_value(f"ph_agent:job:{session}", job.id, expires_in_sec=600)
 
@@ -501,6 +503,7 @@ def regenerate_message(message_id):
 		agent_msg_name=message_id,
 		queue="long",
 		timeout=600,
+		now=False
 	)
 	frappe.cache().set_value(f"ph_agent:job:{session}", job.id, expires_in_sec=600)
 

@@ -2,9 +2,12 @@ import asyncio
 import json
 
 import frappe
-from agents import Agent, ModelSettings, RunConfig, Runner
-from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+from agent_framework import Agent, Message
+from agent_framework.openai import OpenAIChatClient, OpenAIChatOptions
 from openai import AsyncOpenAI, OpenAI, AuthenticationError, RateLimitError
+
+# Import ToolManager for loading tools
+from ph_agent.agent.tools.tool_manager import ToolManager
 
 def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int]:
 	"""
@@ -72,22 +75,39 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	model = OpenAIChatCompletionsModel(
+	# Create OpenAIChatClient
+	chat_client = OpenAIChatClient(
 		model=provider_doc.default_model,
-		openai_client=openai_client,
+		async_client=openai_client,
+		base_url=provider_doc.api_url,
 	)
 
 	# Session prompt only; if empty, use None (no system prompt)
 	system_prompt = session.system_prompt or None
 
-	agent = Agent(
-		name="PH Agent",
-		instructions=system_prompt,
-		model=model,
-		model_settings=ModelSettings(temperature=temperature, max_tokens=max_tokens),
+	# Load tools from Tool Registry
+	tools = ToolManager.get_tools(session_name=session_name, user=frappe.session.user)
+	
+	# Create chat options with temperature and max_tokens
+	chat_options = OpenAIChatOptions(
+		temperature=temperature,
+		max_tokens=max_tokens
 	)
-
-	run_config = RunConfig(tracing_disabled=True)
+	
+	# Check if provider supports tools - some providers don't support function calling
+	# We'll try with tools first, but handle the case where tools are not supported
+	agent_kwargs = {
+		"name": "PH Agent",
+		"instructions": system_prompt,
+		"client": chat_client,
+		"default_options": chat_options,
+	}
+	
+	# Only add tools if we have any
+	if tools:
+		agent_kwargs["tools"] = tools
+	
+	agent = Agent(**agent_kwargs)
 
 	# Build conversation history for context (only messages after last summary, INCLUDING the summary as system message)
 	# Get last summary message if exists
@@ -114,7 +134,8 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			order_by="creation asc",
 		)
 	
-	history = []
+	# Build message history in standard OpenAI format
+	messages = []
 	user_message_added = False
 	for m in prior_messages:
 		# Skip placeholder messages
@@ -122,35 +143,173 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			continue
 		if m.message_type == "Summary":
 			# Format summary messages specially
-			history.append({"role": "system", "content": f"Conversation summary: {m.content or ''}"})
+			messages.append({
+				"role": "system",
+				"content": f"Conversation summary: {m.content or ''}"
+			})
 		elif m.sender_type == "User":
-			history.append({"role": "user", "content": m.content or ""})
+			messages.append({
+				"role": "user",
+				"content": m.content or ""
+			})
 			# Check if this is the user_message we're processing
 			if m.content == user_message:
 				user_message_added = True
 		else:
-			history.append({"role": "assistant", "content": m.content or ""})
+			messages.append({
+				"role": "assistant",
+				"content": m.content or ""
+			})
 	
 	# Only add user_message if it wasn't already in prior_messages
 	if not user_message_added:
-		history.append({"role": "user", "content": user_message})
+		messages.append({
+			"role": "user",
+			"content": user_message
+		})
+	
+	# Add system prompt if provided
+	if system_prompt:
+		messages.insert(0, {
+			"role": "system",
+			"content": system_prompt
+		})
 	
 	try:
 		# Check cancellation before starting the expensive API call
 		if cancel_check and cancel_check():
 			raise asyncio.CancelledError()
 
-		result = asyncio.run(
-			Runner.run(
-				agent,
-				input=history,
-				run_config=run_config,
+		# Use standard OpenAI client for compatibility with DeepSeek
+		# Convert tools to OpenAI format if we have any
+		openai_tools = None
+		if tools:
+			openai_tools = []
+			for tool in tools:
+				# Convert FunctionTool to OpenAI tool format
+				# Note: tool.parameters is a method, need to call it: tool.parameters()
+				openai_tools.append({
+					"type": "function",
+					"function": {
+						"name": tool.name,
+						"description": tool.description or "",
+						"parameters": tool.parameters() or {}
+					}
+				})
+		
+		# Make the API call
+		response = asyncio.run(
+			openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=messages,
+				temperature=temperature,
+				max_tokens=max_tokens,
+				tools=openai_tools if openai_tools else None,
+				tool_choice="auto" if openai_tools else None
 			)
 		)
 
 		# Check cancellation after the API call returns — discard result if cancelled
 		if cancel_check and cancel_check():
 			raise asyncio.CancelledError()
+
+		# Handle the response
+		message = response.choices[0].message
+		reply = message.content or ""
+		input_tokens = response.usage.prompt_tokens if response.usage else 0
+		output_tokens = response.usage.completion_tokens if response.usage else 0
+		
+		# Check if tool calls were made
+		if message.tool_calls:
+			# Execute tool calls and get results
+			tool_results = []
+			for tool_call in message.tool_calls:
+				tool_name = tool_call.function.name
+				tool_args = json.loads(tool_call.function.arguments)
+				
+				# Find the matching tool
+				matching_tool = None
+				for tool in tools:
+					if tool.name == tool_name:
+						matching_tool = tool
+						break
+				
+				if matching_tool:
+					try:
+						# Execute the tool with the provided arguments
+						# FunctionTool objects can be called directly with keyword arguments
+						result = matching_tool(**tool_args)
+						tool_results.append({
+							"tool_call_id": tool_call.id,
+							"role": "tool",
+							"name": tool_name,
+							"content": str(result)
+						})
+					except Exception as e:
+						frappe.log_error(
+							title=f"Tool execution failed for {tool_name}",
+							message=f"Args: {tool_args}, Error: {str(e)}",
+							reference_doctype="Chat Session",
+							reference_name=session_name
+						)
+						tool_results.append({
+							"tool_call_id": tool_call.id,
+							"role": "tool",
+							"name": tool_name,
+							"content": f"Error: {str(e)}"
+						})
+				else:
+					tool_results.append({
+						"tool_call_id": tool_call.id,
+						"role": "tool",
+						"name": tool_name,
+						"content": f"Error: Tool '{tool_name}' not found"
+					})
+			
+			# If we have tool results, make another API call with the results
+			if tool_results:
+				# Add the assistant's message with tool calls to the conversation
+				messages.append({
+					"role": "assistant",
+					"content": reply,
+					"tool_calls": [
+						{
+							"id": tc.id,
+							"type": "function",
+							"function": {
+								"name": tc.function.name,
+								"arguments": tc.function.arguments
+							}
+						}
+						for tc in message.tool_calls
+					]
+				})
+				
+				# Add tool results to the conversation
+				for result in tool_results:
+					messages.append({
+						"role": result["role"],
+						"content": result["content"],
+						"tool_call_id": result["tool_call_id"],
+						"name": result["name"]
+					})
+				
+				# Make another API call with the tool results
+				response2 = asyncio.run(
+					openai_client.chat.completions.create(
+						model=provider_doc.default_model,
+						messages=messages,
+						temperature=temperature,
+						max_tokens=max_tokens
+					)
+				)
+				
+				# Update with the final response
+				message2 = response2.choices[0].message
+				reply = message2.content or ""
+				if response2.usage:
+					input_tokens += response2.usage.prompt_tokens
+					output_tokens += response2.usage.completion_tokens
 
 	except asyncio.CancelledError:
 		raise
@@ -169,10 +328,6 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			reference_name=session_name
 		)
 		frappe.throw(frappe._("The AI agent encountered an error: {0}").format(str(e)))
-
-	reply = result.final_output or "No response generated."
-	input_tokens = result.raw_responses[-1].usage.input_tokens if result.raw_responses else 0
-	output_tokens = result.raw_responses[-1].usage.output_tokens if result.raw_responses else 0
 
 	return reply, input_tokens, output_tokens
 
@@ -382,9 +537,17 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	model = OpenAIChatCompletionsModel(
+	# Create OpenAIChatClient
+	chat_client = OpenAIChatClient(
 		model=provider_doc.default_model,
-		openai_client=openai_client,
+		async_client=openai_client,
+		base_url=provider_doc.api_url,
+	)
+
+	# Create chat options
+	chat_options = OpenAIChatOptions(
+		temperature=title_temperature,
+		max_tokens=max_tokens
 	)
 
 	title_agent = Agent(
@@ -393,18 +556,18 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			"Generate a concise 5-8 word title that summarises the following conversation. "
 			"Return only the title text — no quotes, no punctuation at the end, no explanation."
 		),
-		model=model,
-		model_settings=ModelSettings(temperature=title_temperature, max_tokens=max_tokens),
+		client=chat_client,
+		default_options=chat_options,
 	)
 
 	prompt = f"User: {user_message}\nAssistant: {agent_reply}"
 
 	try:
+		# Convert prompt string to Message object (wrap in list to avoid character splitting)
+		message = Message(role="user", contents=[prompt])
 		result = asyncio.run(
-			Runner.run(
-				title_agent,
-				input=prompt,
-				run_config=RunConfig(tracing_disabled=True),
+			title_agent.run(
+				messages=message,
 			)
 		)
 		return (result.final_output or "").strip()
@@ -447,9 +610,17 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	model = OpenAIChatCompletionsModel(
+	# Create OpenAIChatClient
+	chat_client = OpenAIChatClient(
 		model=provider_doc.default_model,
-		openai_client=openai_client,
+		async_client=openai_client,
+		base_url=provider_doc.api_url,
+	)
+
+	# Create chat options
+	chat_options = OpenAIChatOptions(
+		temperature=summary_temperature,
+		max_tokens=max_tokens
 	)
 
 	summary_agent = Agent(
@@ -462,8 +633,8 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 			"Keep the summary to 2-3 sentences maximum. "
 			"Return only the summary text — no introductory phrases, no markdown, no extra text."
 		),
-		model=model,
-		model_settings=ModelSettings(temperature=summary_temperature, max_tokens=max_tokens),
+		client=chat_client,
+		default_options=chat_options,
 	)
 
 	# Format conversation for summarization
@@ -479,11 +650,11 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 	conversation_text = "\n".join(formatted_conversation)
 
 	try:
+		# Convert conversation text to Message object (wrap in list to avoid character splitting)
+		message = Message(role="user", contents=[conversation_text])
 		result = asyncio.run(
-			Runner.run(
-				summary_agent,
-				input=conversation_text,
-				run_config=RunConfig(tracing_disabled=True),
+			summary_agent.run(
+				messages=message,
 			)
 		)
 		return (result.final_output or "").strip()
@@ -523,9 +694,17 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	model = OpenAIChatCompletionsModel(
+	# Create OpenAIChatClient
+	chat_client = OpenAIChatClient(
 		model=provider_doc.default_model,
-		openai_client=openai_client,
+		async_client=openai_client,
+		base_url=provider_doc.api_url,
+	)
+
+	# Create chat options
+	chat_options = OpenAIChatOptions(
+		temperature=1.0,
+		max_tokens=max_tokens
 	)
 
 	suggestions_agent = Agent(
@@ -536,8 +715,8 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 			"Return only a JSON array of strings — no explanation, no markdown, no extra text. "
 			'Example: ["Question one?", "Question two?", "Question three?"]'
 		),
-		model=model,
-		model_settings=ModelSettings(temperature=1.0, max_tokens=max_tokens),
+		client=chat_client,
+		default_options=chat_options,
 	)
 
 	# Build a short summary of the conversation as context
@@ -548,11 +727,11 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 	context = "\n".join(context_parts)
 
 	try:
+		# Convert context string to Message object (wrap in list to avoid character splitting)
+		message = Message(role="user", contents=[context])
 		result = asyncio.run(
-			Runner.run(
-				suggestions_agent,
-				input=context,
-				run_config=RunConfig(tracing_disabled=True),
+			suggestions_agent.run(
+				messages=message,
 			)
 		)
 		raw = (result.final_output or "").strip()

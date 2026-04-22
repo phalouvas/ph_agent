@@ -96,6 +96,10 @@ class ToolManager:
             # Check if function is already decorated with @tool
             if hasattr(func, 'name') and hasattr(func, 'description'):
                 # Function is already a tool, use it as-is
+                # But apply requires_approval from Tool Registry if set
+                if record.get("requires_approval"):
+                    func.approval_mode = "always_require"
+                    logger.debug("Tool %s: set approval_mode=always_require from registry", record["tool_name"])
                 logger.debug("Tool %s is already decorated with @tool", record["tool_name"])
                 return func
             
@@ -198,23 +202,27 @@ class ToolManager:
     
     @classmethod
     def _get_cached_tools(cls) -> Optional[List]:
-        """Get tools from cache if available."""
-        try:
-            cached = frappe.cache().get_value(cls.CACHE_KEY)
-            if cached:
-                logger.debug("Found tools in cache")
-                return cached
-        except Exception as e:
-            logger.warning("Failed to read from cache: %s", str(e))
+        """Get tools from cache if available.
         
+        Note: Only metadata is cached; actual FunctionTool objects can't be pickled.
+        Returns None to force fresh load from DB each time.
+        """
         return None
     
     @classmethod
     def _cache_tools(cls, tools: List):
-        """Cache the loaded tools."""
+        """Cache the loaded tools (metadata only, not callable objects)."""
         try:
-            frappe.cache().set_value(cls.CACHE_KEY, tools, expires_in_sec=3600)  # 1 hour
-            logger.debug("Cached %d tools", len(tools))
+            # Store only serializable metadata — FunctionTool objects can't be pickled
+            tool_meta = []
+            for t in tools:
+                tool_meta.append({
+                    "name": t.name,
+                    "description": t.description,
+                    "approval_mode": getattr(t, "approval_mode", "never_require"),
+                })
+            frappe.cache().set_value(cls.CACHE_KEY, tool_meta, expires_in_sec=3600)  # 1 hour
+            logger.debug("Cached metadata for %d tools", len(tools))
         except Exception as e:
             logger.warning("Failed to cache tools: %s", str(e))
     
@@ -226,6 +234,23 @@ class ToolManager:
             logger.info("Invalidated tool cache")
         except Exception as e:
             logger.warning("Failed to invalidate cache: %s", str(e))
+    
+    @classmethod
+    def tool_requires_approval(cls, tool_name: str) -> bool:
+        """
+        Check if a tool requires human approval before execution.
+        
+        Args:
+            tool_name: Name of the tool to check
+            
+        Returns:
+            True if the tool requires approval, False otherwise
+        """
+        tools = cls.get_tools()
+        for tool_obj in tools:
+            if tool_obj.name == tool_name:
+                return getattr(tool_obj, 'approval_mode', 'never_require') == 'always_require'
+        return False
     
     @classmethod
     def get_tool_by_name(cls, tool_name: str) -> Optional[Any]:

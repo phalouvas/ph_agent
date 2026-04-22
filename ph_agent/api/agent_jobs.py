@@ -220,6 +220,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			input_tokens = 0
 			output_tokens = 0
 			streaming_successful = False
+			approval_data = None
 			
 			try:
 				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status):
@@ -227,10 +228,15 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						raise asyncio.CancelledError()
 						
 					if is_final:
-						# Final chunk with token usage
-						input_tokens = chunk_input_tokens
-						output_tokens = chunk_output_tokens
-						streaming_successful = True
+						# Check if this is an approval request (chunk is a dict with approval_data)
+						if isinstance(chunk, dict) and chunk.get("approval_needed"):
+							approval_data = chunk
+							streaming_successful = True
+						else:
+							# Normal final chunk with token usage
+							input_tokens = chunk_input_tokens
+							output_tokens = chunk_output_tokens
+							streaming_successful = True
 					else:
 						# Content chunk
 						full_content += chunk
@@ -245,6 +251,13 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 							},
 							user=enqueued_by,
 						)
+				
+				if approval_data:
+					# Handle approval flow
+					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
+					release_lock()
+					emit_status("")
+					return
 				
 				if streaming_successful:
 					# Update the placeholder message with full content and token counts
@@ -266,7 +279,15 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				)
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
-				reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+				reply, input_tokens, output_tokens, approval_data = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+				
+				if approval_data:
+					# Handle approval flow
+					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
+					release_lock()
+					emit_status("")
+					return
+				
 				# Update placeholder message with actual content and token counts
 				agent_msg.content = reply
 				agent_msg.input_tokens = input_tokens
@@ -275,7 +296,15 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				frappe.db.commit()
 		else:
 			# Non-streaming path - update the existing placeholder message
-			reply, input_tokens, output_tokens = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+			reply, input_tokens, output_tokens, approval_data = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+			
+			if approval_data:
+				# Handle approval flow
+				_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
+				release_lock()
+				emit_status("")
+				return
+			
 			# Update the placeholder message with actual content and token counts
 			agent_msg.content = reply
 			agent_msg.input_tokens = input_tokens
@@ -507,4 +536,317 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 			title=f"Suggestion background job failed for session {session}",
 			reference_doctype="Chat Session",
 			reference_name=session,
+		)
+
+
+def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
+	"""
+	Handle a tool approval request from the agent.
+	Creates a Tool Approval Request document and notifies the user.
+	
+	Args:
+		session: Chat Session name
+		agent_msg: The placeholder Chat Message document
+		approval_data: Dict with approval_needed, tool_calls, conversation_state
+		enqueued_by: User who enqueued the original job
+	"""
+	import json
+	
+	tool_calls = approval_data.get("tool_calls", [])
+	conversation_state = approval_data.get("conversation_state", {})
+	
+	if not tool_calls:
+		return
+	
+	# Use the first tool call for the approval request name/description
+	primary_tool = tool_calls[0]
+	
+	# Find the tool to get its description
+	tool_description = ""
+	from ph_agent.agent.tools.tool_manager import ToolManager
+	tools = ToolManager.get_tools()
+	for tool_obj in tools:
+		if tool_obj.name == primary_tool["name"]:
+			tool_description = tool_obj.description or ""
+			break
+	
+	# Update the placeholder message to show "Waiting for approval"
+	agent_msg.content = "🔐 Waiting for approval..."
+	agent_msg.message_type = "Agent"
+	agent_msg.save(ignore_permissions=True)
+	frappe.db.commit()
+	
+	# Publish updated message
+	frappe.publish_realtime(
+		event="new_message",
+		message={
+			"session": session,
+			"name": agent_msg.name,
+			"sender_type": "Agent",
+			"content": "🔐 Waiting for approval...",
+			"creation": str(agent_msg.creation),
+		},
+		user=enqueued_by,
+	)
+	
+	# Create Tool Approval Request document
+	approval_doc = frappe.get_doc(
+		{
+			"doctype": "Tool Approval Request",
+			"tool_name": primary_tool["name"],
+			"tool_description": tool_description,
+			"tool_arguments": json.dumps(
+				{
+					tc["name"]: tc.get("arguments", "{}")
+					for tc in tool_calls
+				},
+				indent=2,
+			),
+			"chat_session": session,
+			"chat_message": agent_msg.name,
+			"status": "Pending",
+			"conversation_state": json.dumps(conversation_state, indent=2),
+			"agent_message_saved": 1,
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.commit()
+	
+	# Publish approval_needed event for the UI
+	frappe.publish_realtime(
+		event="approval_needed",
+		message={
+			"session": session,
+			"approval_name": approval_doc.name,
+			"tool_name": primary_tool["name"],
+			"tool_description": tool_description,
+			"tool_arguments": json.dumps(
+				{
+					tc["name"]: tc.get("arguments", "{}")
+					for tc in tool_calls
+				},
+				indent=2,
+			),
+		},
+		user=enqueued_by,
+	)
+	
+	frappe.log_error(
+		title=f"Tool approval needed: {primary_tool['name']}",
+		message=f"Session: {session}, Approval: {approval_doc.name}",
+		reference_doctype="Chat Session",
+		reference_name=session,
+	)
+
+
+def _execute_approved_tool(approval_name):
+	"""
+	Background job: execute an approved tool and resume the conversation.
+	Called after an administrator approves a Tool Approval Request.
+	
+	Args:
+		approval_name: Name of the Tool Approval Request document
+	"""
+	import json
+	
+	approval_doc = frappe.get_doc("Tool Approval Request", approval_name)
+	
+	if approval_doc.status != "Approved":
+		frappe.log_error(
+			title=f"Tool approval {approval_name} is not in Approved state",
+			message=f"Current status: {approval_doc.status}",
+			reference_doctype="Tool Approval Request",
+			reference_name=approval_name,
+		)
+		return
+	
+	session = approval_doc.chat_session
+	conversation_state = json.loads(approval_doc.conversation_state)
+	messages = conversation_state.get("messages", [])
+	pending_tool_calls = conversation_state.get("pending_tool_calls", [])
+	
+	# Get the LLM provider for the second API call
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		frappe.log_error(
+			title=f"Provider not available for approved tool {approval_name}",
+			message=f"Session: {session}",
+			reference_doctype="Tool Approval Request",
+			reference_name=approval_name,
+		)
+		return
+	
+	from openai import OpenAI
+	
+	openai_client = OpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url,
+	)
+	
+	# Determine temperature
+	temperature = session_doc.temperature if session_doc.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	
+	# Get max_tokens
+	max_tokens = provider_doc.max_output_tokens
+	if not max_tokens:
+		model_name = (provider_doc.default_model or "").lower()
+		if "reasoner" in model_name:
+			max_tokens = 32768
+		else:
+			max_tokens = 4096
+	
+	# Load tools
+	from ph_agent.agent.tools.tool_manager import ToolManager
+	tools = ToolManager.get_tools(session_name=session, user=frappe.session.user)
+	
+	try:
+		# Execute each pending tool call
+		for tc in pending_tool_calls:
+			tool_name = tc["name"]
+			tool_args_raw = tc.get("arguments", "{}")
+			try:
+				tool_args = json.loads(tool_args_raw) if tool_args_raw else {}
+			except json.JSONDecodeError:
+				tool_args = {}
+			
+			# Find matching tool
+			matching_tool = None
+			for tool in tools:
+				if tool.name == tool_name:
+					matching_tool = tool
+					break
+			
+			if matching_tool:
+				try:
+					result = matching_tool(**tool_args)
+					messages.append({
+						"tool_call_id": tc["id"],
+						"role": "tool",
+						"name": tool_name,
+						"content": str(result)
+					})
+				except Exception as e:
+					frappe.log_error(
+						title=f"Approved tool execution failed for {tool_name}",
+						message=f"Args: {tool_args}, Error: {str(e)}",
+						reference_doctype="Chat Session",
+						reference_name=session,
+					)
+					messages.append({
+						"tool_call_id": tc["id"],
+						"role": "tool",
+						"name": tool_name,
+						"content": f"Error: {str(e)}"
+					})
+			else:
+				messages.append({
+					"tool_call_id": tc["id"],
+					"role": "tool",
+					"name": tool_name,
+					"content": f"Error: Tool '{tool_name}' not found"
+				})
+		
+		# Make API call with tool results
+		response = openai_client.chat.completions.create(
+			model=provider_doc.default_model,
+			messages=messages,
+			temperature=temperature,
+			max_tokens=max_tokens,
+		)
+		
+		reply = response.choices[0].message.content or ""
+		input_tokens = response.usage.prompt_tokens if response.usage else 0
+		output_tokens = response.usage.completion_tokens if response.usage else 0
+		
+		# Store the agent's response as a Chat Message
+		agent_msg = frappe.get_doc(
+			{
+				"doctype": "Chat Message",
+				"chat_session": session,
+				"sender_type": "Agent",
+				"message_type": "Agent",
+				"content": reply,
+				"input_tokens": input_tokens,
+				"output_tokens": output_tokens,
+			}
+		).insert(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Update the placeholder message to show it was replaced
+		placeholder_msg_name = approval_doc.chat_message
+		if placeholder_msg_name and frappe.db.exists("Chat Message", placeholder_msg_name):
+			placeholder_msg = frappe.get_doc("Chat Message", placeholder_msg_name)
+			placeholder_msg.content = "✅ Tool approved and executed. See below for the response."
+			placeholder_msg.save(ignore_permissions=True)
+			frappe.db.commit()
+			
+			# Publish update to placeholder
+			frappe.publish_realtime(
+				event="new_message",
+				message={
+					"session": session,
+					"name": placeholder_msg_name,
+					"sender_type": "Agent",
+					"content": "✅ Tool approved and executed. See below for the response.",
+					"creation": str(placeholder_msg.creation),
+				},
+				user=frappe.session.user,
+			)
+		
+		# Publish the new agent message
+		frappe.publish_realtime(
+			event="new_message",
+			message={
+				"session": session,
+				"name": agent_msg.name,
+				"sender_type": "Agent",
+				"content": reply,
+				"creation": str(agent_msg.creation),
+			},
+			user=frappe.session.user,
+		)
+		
+		# Publish approval_resolved event
+		frappe.publish_realtime(
+			event="approval_resolved",
+			message={
+				"session": session,
+				"approval_name": approval_name,
+				"status": "Approved",
+				"tool_name": approval_doc.tool_name,
+			},
+			user=frappe.session.user,
+		)
+		
+		# Update token counts on session
+		frappe.db.set_value(
+			"Chat Session",
+			session,
+			{
+				"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
+				"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
+				"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
+			},
+		)
+		frappe.db.commit()
+		
+		# Generate follow-up suggestions if enabled
+		if session_doc.enable_suggestions:
+			frappe.enqueue(
+				"ph_agent.api.agent_jobs._generate_suggestions_background",
+				session=session,
+				agent_message_id=agent_msg.name,
+				enqueued_by=frappe.session.user,
+				queue="short",
+				timeout=120,
+			)
+			
+	except Exception as e:
+		frappe.log_error(
+			title=f"Approved tool execution failed for {approval_name}",
+			message=str(e),
+			reference_doctype="Tool Approval Request",
+			reference_name=approval_name,
 		)

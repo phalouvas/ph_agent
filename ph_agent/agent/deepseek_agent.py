@@ -8,10 +8,11 @@ from openai import AsyncOpenAI, OpenAI, AuthenticationError, RateLimitError
 # Import ToolManager for loading tools
 from ph_agent.agent.tools.tool_manager import ToolManager
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int]:
+def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None]:
 	"""
 	Call the LLM via agent-framework using the provider linked to the chat session.
-	Returns (reply_text, input_tokens, output_tokens).
+	Returns (reply_text, input_tokens, output_tokens, approval_data).
+	If tools require approval, approval_data is a dict with tool call details; otherwise None.
 	Raises frappe.ValidationError with a user-friendly message on failure.
 	If cancel_check() returns True before or after the API call, raises asyncio.CancelledError.
 	"""
@@ -186,6 +187,61 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		
 		# Check if tool calls were made
 		if message.tool_calls:
+			# Check if any tool requires approval
+			approval_needed = False
+			for tool_call in message.tool_calls:
+				tool_name = tool_call.function.name
+				if ToolManager.tool_requires_approval(tool_name):
+					approval_needed = True
+					break
+
+			if approval_needed:
+				# Serialize conversation state for later resumption
+				# Build the assistant message with tool calls
+				assistant_msg = {
+					"role": "assistant",
+					"content": reply,
+					"tool_calls": [
+						{
+							"id": tc.id,
+							"type": "function",
+							"function": {
+								"name": tc.function.name,
+								"arguments": tc.function.arguments
+							}
+						}
+						for tc in message.tool_calls
+					]
+				}
+				conversation_state = {
+					"messages": messages + [assistant_msg],
+					"pending_tool_calls": [
+						{
+							"id": tc.id,
+							"name": tc.function.name,
+							"arguments": tc.function.arguments
+						}
+						for tc in message.tool_calls
+					]
+				}
+
+				# Return approval data so the caller can create the approval request
+				approval_data = {
+					"approval_needed": True,
+					"tool_calls": [
+						{
+							"id": tc.id,
+							"name": tc.function.name,
+							"arguments": tc.function.arguments
+						}
+						for tc in message.tool_calls
+					],
+					"conversation_state": conversation_state,
+					"input_tokens": input_tokens,
+					"output_tokens": output_tokens,
+				}
+				return reply, input_tokens, output_tokens, approval_data
+
 			# Execute tool calls and get results
 			tool_results = []
 			for tool_call in message.tool_calls:
@@ -294,7 +350,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		)
 		frappe.throw(frappe._("The AI agent encountered an error: {0}").format(str(e)))
 
-	return reply, input_tokens, output_tokens
+	return reply, input_tokens, output_tokens, None
 
 
 def _accumulate_tool_calls(stream):
@@ -529,6 +585,50 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 				"tool_calls": assistant_tool_calls
 			})
 			
+			# Check if any tool requires approval BEFORE executing
+			approval_needed = False
+			for idx in sorted_indices:
+				tc = tool_calls[idx]
+				if ToolManager.tool_requires_approval(tc["name"]):
+					approval_needed = True
+					break
+
+			if approval_needed:
+				# Yield the content already accumulated from first stream
+				if full_content:
+					yield full_content, False, 0, 0
+
+				# Build conversation state for resumption
+				conversation_state = {
+					"messages": messages,
+					"pending_tool_calls": [
+						{
+							"id": tool_calls[idx]["id"],
+							"name": tool_calls[idx]["name"],
+							"arguments": tool_calls[idx]["arguments"]
+						}
+						for idx in sorted_indices
+					]
+				}
+
+				# Yield approval data in final chunk
+				approval_data = {
+					"approval_needed": True,
+					"tool_calls": [
+						{
+							"id": tool_calls[idx]["id"],
+							"name": tool_calls[idx]["name"],
+							"arguments": tool_calls[idx]["arguments"]
+						}
+						for idx in sorted_indices
+					],
+					"conversation_state": conversation_state,
+					"input_tokens": input_tokens,
+					"output_tokens": output_tokens,
+				}
+				yield approval_data, True, input_tokens, output_tokens
+				return
+
 			# Execute each tool and collect results
 			for idx in sorted_indices:
 				tc = tool_calls[idx]

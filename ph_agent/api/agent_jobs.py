@@ -2,7 +2,7 @@ import asyncio
 
 import frappe
 from ph_agent.agent.deepseek_agent import generate_followup_suggestions, generate_session_title, get_agent_response, get_agent_response_stream
-from ph_agent.utils.pdf import extract_pdf_text
+from ph_agent.utils.file_extractor import extract_file_text
 
 
 def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
@@ -39,11 +39,15 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		)
 		return
 
-	# Build enriched content: append extracted PDF text from attachments
+	# Get provider settings early for file size limits
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+
+	# Build enriched content: append extracted file text from attachments
 	agent_content = content
 	if file_names:
-		pdf_texts = []
-		emit_status(frappe._("Extracting PDF text…"))
+		file_texts = []
+		emit_status(frappe._("Extracting file contents…"))
 		for file_name in file_names:
 			if is_cancelled():
 				release_lock()
@@ -55,17 +59,18 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					user=enqueued_by,
 				)
 				return
-			text = extract_pdf_text(file_name)
+			# Get max file size from provider settings
+			max_size_mb = provider_doc.max_file_size_mb or 50
+			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
 			if text:
-				pdf_texts.append(f"[PDF: {frappe.db.get_value('File', file_name, 'file_name')}]\n{text}")
-		if pdf_texts:
-			agent_content = content + "\n\n" + "\n\n".join(pdf_texts)
+				filename = frappe.db.get_value('File', file_name, 'file_name')
+				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
+		if file_texts:
+			agent_content = content + "\n\n" + "\n\n".join(file_texts)
 
 	emit_status(frappe._("Calling AI…"))
 
 	# Check if streaming should be used
-	session_doc = frappe.get_doc("Chat Session", session)
-	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming
 
 	# Create placeholder message for both streaming and non-streaming

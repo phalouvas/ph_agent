@@ -20,6 +20,8 @@
   "max_output_tokens",
   "context_length",
   "auto_summary_threshold",
+  "section_file_limits",
+  "max_file_size_mb",
   "system_prompt"
  ],
  "fields": [
@@ -123,6 +125,18 @@
    "fieldname": "auto_summary_threshold",
    "fieldtype": "Int",
    "label": "Auto Summary Threshold (%)"
+  },
+  {
+   "fieldname": "section_file_limits",
+   "fieldtype": "Section Break",
+   "label": "File Extraction Limits"
+  },
+  {
+   "default": "50",
+   "description": "Maximum file size (in MB) allowed for content extraction. Files larger than this will be skipped. Default: 50 MB.",
+   "fieldname": "max_file_size_mb",
+   "fieldtype": "Int",
+   "label": "Max File Size (MB)"
   }
  ],
  "links": [],

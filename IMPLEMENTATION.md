@@ -333,7 +333,7 @@ The following features are **already implemented** and form the foundation for t
 | **Real‑time Streaming** | ✅ Complete | Chunked responses via Frappe realtime events |
 | **Conversation Memory** | ✅ Complete | Full history passed to LLM each turn |
 | **File Attachments** | ✅ Complete | PDF, images, documents stored as Frappe Files |
-| **PDF Text Extraction** | ✅ Complete | Automatic content extraction using PyPDF2 |
+| **File Text Extraction** | ✅ Complete | Automatic content extraction using markitdown (PDF, DOCX, PPTX, XLSX, HTML, etc.) |
 | **Session Management** | ✅ Complete | Create, browse, delete chat sessions |
 | **Message Editing** | ✅ Complete | Edit user messages with auto‑regeneration |
 | **Message Regeneration** | ✅ Complete | Regenerate agent responses with one click |

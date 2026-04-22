@@ -64,16 +64,6 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	# Determine temperature: session overrides provider, default to 1.0
 	temperature = session.temperature if session.temperature is not None else provider_doc.temperature if provider_doc.temperature is not None else 1.0
 	
-	# Get max_tokens from provider, use model-specific defaults if not set
-	max_tokens = provider_doc.max_output_tokens
-	if not max_tokens:
-		# Fallback to model-specific defaults
-		model_name = (provider_doc.default_model or "").lower()
-		if "reasoner" in model_name:
-			max_tokens = 32768  # 32K for DeepSeek Reasoner
-		else:
-			max_tokens = 4096   # 4K for DeepSeek Chat and other models
-	
 	# Session prompt only; if empty, use None (no system prompt)
 	system_prompt = session.system_prompt or None
 
@@ -159,12 +149,16 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 			for tool in tools:
 				# Convert FunctionTool to OpenAI tool format
 				# Note: tool.parameters is a method, need to call it: tool.parameters()
+				params = tool.parameters() or {}
+				# DeepSeek compatibility: add additionalProperties to avoid empty {} args
+				if "properties" in params:
+					params["additionalProperties"] = False
 				openai_tools.append({
 					"type": "function",
 					"function": {
 						"name": tool.name,
 						"description": tool.description or "",
-						"parameters": tool.parameters() or {}
+						"parameters": params
 					}
 				})
 		
@@ -303,11 +297,61 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	return reply, input_tokens, output_tokens
 
 
-def get_agent_response_stream(session_name: str, user_message: str, cancel_check=None):
+def _accumulate_tool_calls(stream):
+	"""
+	Accumulate tool call deltas from an OpenAI streaming response.
+	
+	OpenAI sends tool calls as fragments across multiple chunks using delta.tool_calls.
+	Each fragment has an index that identifies which tool call it belongs to.
+	
+	Returns (full_content, tool_calls_dict, input_tokens, output_tokens).
+	tool_calls_dict is {index: {id, name, arguments}}.
+	"""
+	full_content = ""
+	tool_calls = {}
+	input_tokens = 0
+	output_tokens = 0
+
+	for chunk in stream:
+		if chunk.choices:
+			delta = chunk.choices[0].delta
+			
+			# Accumulate text content
+			if delta.content is not None:
+				full_content += delta.content
+			
+			# Accumulate tool call deltas
+			if delta.tool_calls:
+				for tc_delta in delta.tool_calls:
+					idx = tc_delta.index
+					if idx not in tool_calls:
+						tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
+					if tc_delta.id:
+						tool_calls[idx]["id"] = tc_delta.id
+					if tc_delta.function:
+						if tc_delta.function.name:
+							tool_calls[idx]["name"] = tc_delta.function.name
+						if tc_delta.function.arguments:
+							tool_calls[idx]["arguments"] += tc_delta.function.arguments
+		
+		# Capture usage from final chunk
+		if chunk.usage:
+			input_tokens = chunk.usage.prompt_tokens
+			output_tokens = chunk.usage.completion_tokens
+
+	return full_content, tool_calls, input_tokens, output_tokens
+
+
+def get_agent_response_stream(session_name: str, user_message: str, cancel_check=None, status_callback=None):
 	"""
 	Call the LLM via OpenAI streaming API and yield content chunks.
+	Supports tool calls: if the model requests tools, they are executed between
+	two streaming calls. The second streaming call's content is yielded as chunks.
+	
 	Yields (chunk_content, is_final, input_tokens, output_tokens) where is_final is False for content chunks
 	and True for the final chunk containing token usage.
+	
+	If status_callback is provided, it is called with status messages for the UI.
 	Raises frappe.ValidationError with a user-friendly message on failure.
 	If cancel_check() returns True, raises asyncio.CancelledError.
 	"""
@@ -362,6 +406,9 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 	
 	# Session prompt only; if empty, use None (no system prompt)
 	system_prompt = session.system_prompt or None
+
+	# Load tools from Tool Registry
+	tools = ToolManager.get_tools(session_name=session_name, user=frappe.session.user)
 
 	# Build conversation history for context (only messages after last summary, INCLUDING the summary as system message)
 	# Get last summary message if exists
@@ -418,46 +465,164 @@ def get_agent_response_stream(session_name: str, user_message: str, cancel_check
 		if cancel_check and cancel_check():
 			raise asyncio.CancelledError()
 
-		# Get max_tokens from provider, use model-specific defaults if not set
-		max_tokens = provider_doc.max_output_tokens
-		if not max_tokens:
-			# Fallback to model-specific defaults
-			model_name = (provider_doc.default_model or "").lower()
-			if "reasoner" in model_name:
-				max_tokens = 32768  # 32K for DeepSeek Reasoner
-			else:
-				max_tokens = 4096   # 4K for DeepSeek Chat and other models
+		# Convert tools to OpenAI format if we have any
+		openai_tools = None
+		if tools:
+			openai_tools = []
+			for tool in tools:
+				# Convert FunctionTool to OpenAI tool format
+				params = tool.parameters() or {}
+				# DeepSeek compatibility: add additionalProperties to avoid empty {} args
+				if "properties" in params:
+					params["additionalProperties"] = False
+				openai_tools.append({
+					"type": "function",
+					"function": {
+						"name": tool.name,
+						"description": tool.description or "",
+						"parameters": params
+					}
+				})
 		
-		# Use OpenAI's streaming API directly
+		# ---- FIRST STREAMING CALL (with tools if available) ----
 		stream = openai_client.chat.completions.create(
 			model=provider_doc.default_model,
 			messages=messages,
 			temperature=temperature,
 			max_tokens=max_tokens,
 			stream=True,
+			tools=openai_tools if openai_tools else None,
+			tool_choice="auto" if openai_tools else None,
 		)
 
-		full_content = ""
-		input_tokens = 0
-		output_tokens = 0
+		full_content, tool_calls, input_tokens, output_tokens = _accumulate_tool_calls(stream)
 
-		for chunk in stream:
-			# Check cancellation during streaming
+		# Check cancellation after first stream
+		if cancel_check and cancel_check():
+			raise asyncio.CancelledError()
+
+		# ---- TOOL EXECUTION ----
+		if tool_calls:
+			if status_callback:
+				status_callback(frappe._("Executing tools…"))
+
+			# Sort tool calls by index to maintain order
+			sorted_indices = sorted(tool_calls.keys())
+			
+			# Build the assistant message with tool_calls for the conversation
+			assistant_tool_calls = []
+			for idx in sorted_indices:
+				tc = tool_calls[idx]
+				assistant_tool_calls.append({
+					"id": tc["id"],
+					"type": "function",
+					"function": {
+						"name": tc["name"],
+						"arguments": tc["arguments"]
+					}
+				})
+			
+			# Add assistant message with tool calls to conversation
+			messages.append({
+				"role": "assistant",
+				"content": full_content or None,
+				"tool_calls": assistant_tool_calls
+			})
+			
+			# Execute each tool and collect results
+			for idx in sorted_indices:
+				tc = tool_calls[idx]
+				tool_name = tc["name"]
+				tool_args_raw = tc["arguments"]
+				
+				try:
+					tool_args = json.loads(tool_args_raw) if tool_args_raw else {}
+				except json.JSONDecodeError:
+					tool_args = {}
+				
+				# Find matching tool
+				matching_tool = None
+				for tool in tools:
+					if tool.name == tool_name:
+						matching_tool = tool
+						break
+				
+				if matching_tool:
+					try:
+						result = matching_tool(**tool_args)
+						messages.append({
+							"tool_call_id": tc["id"],
+							"role": "tool",
+							"name": tool_name,
+							"content": str(result)
+						})
+					except Exception as e:
+						frappe.log_error(
+							title=f"Tool execution failed for {tool_name}",
+							message=f"Args: {tool_args}, Error: {str(e)}",
+							reference_doctype="Chat Session",
+							reference_name=session_name
+						)
+						messages.append({
+							"tool_call_id": tc["id"],
+							"role": "tool",
+							"name": tool_name,
+							"content": f"Error: {str(e)}"
+						})
+				else:
+					messages.append({
+						"tool_call_id": tc["id"],
+						"role": "tool",
+						"name": tool_name,
+						"content": f"Error: Tool '{tool_name}' not found"
+					})
+			
+			# Check cancellation before second call
 			if cancel_check and cancel_check():
 				raise asyncio.CancelledError()
-
-			if chunk.choices and chunk.choices[0].delta.content is not None:
-				content_chunk = chunk.choices[0].delta.content
-				full_content += content_chunk
-				yield content_chunk, False, 0, 0
-
-			# Check for final chunk with token usage
-			if chunk.usage:
-				input_tokens = chunk.usage.prompt_tokens
-				output_tokens = chunk.usage.completion_tokens
-
-		# Yield final chunk with token usage
-		yield "", True, input_tokens, output_tokens
+			
+			if status_callback:
+				status_callback(frappe._("Calling AI…"))
+			
+			# ---- SECOND STREAMING CALL (no tools, just the result) ----
+			stream2 = openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=messages,
+				temperature=temperature,
+				max_tokens=max_tokens,
+				stream=True,
+			)
+			
+			full_content2 = ""
+			input_tokens2 = 0
+			output_tokens2 = 0
+			
+			for chunk in stream2:
+				if cancel_check and cancel_check():
+					raise asyncio.CancelledError()
+				
+				if chunk.choices and chunk.choices[0].delta.content is not None:
+					content_chunk = chunk.choices[0].delta.content
+					full_content2 += content_chunk
+					yield content_chunk, False, 0, 0
+				
+				if chunk.usage:
+					input_tokens2 = chunk.usage.prompt_tokens
+					output_tokens2 = chunk.usage.completion_tokens
+			
+			# Yield final chunk with accumulated tokens from both calls
+			yield "", True, input_tokens + input_tokens2, output_tokens + output_tokens2
+		else:
+			# No tool calls — just yield the accumulated content from the first stream
+			# The content was already captured by _accumulate_tool_calls but not yielded
+			# We need to re-stream it. Since we already consumed the stream, we'll
+			# yield it here as a single chunk plus final.
+			# (In practice, for the no-tool case we could optimize by yielding during
+			#  accumulation, but this keeps the flow simpler.)
+			# Actually, let's yield the content that was already accumulated.
+			if full_content:
+				yield full_content, False, 0, 0
+			yield "", True, input_tokens, output_tokens
 
 	except asyncio.CancelledError:
 		raise

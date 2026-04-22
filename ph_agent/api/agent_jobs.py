@@ -222,7 +222,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			streaming_successful = False
 			
 			try:
-				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled):
+				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status):
 					if is_cancelled():
 						raise asyncio.CancelledError()
 						

@@ -192,11 +192,27 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 const fileUrl = f.url || f.localUrl || fileObj.url || 
                                (fileObj.blob && URL.createObjectURL(fileObj.blob)) ||
                                (fileObj instanceof Blob && URL.createObjectURL(fileObj));
+                
+                // Get file type from file object (MIME type like "application/pdf")
+                const mimeType = f.type || fileObj.type || "";
+                // Extract extension from MIME type or filename
+                let extension = "";
+                if (mimeType && mimeType.includes('/')) {
+                    // Extract from MIME type (e.g., "application/pdf" -> "pdf")
+                    extension = mimeType.split('/').pop();
+                } else if (fileName.includes('.')) {
+                    // Extract from filename
+                    extension = fileName.split(".").pop().toLowerCase();
+                } else {
+                    // Default to empty string
+                    extension = "";
+                }
+                
                 return {
                     name: fileName,
                     size: f.size || fileObj.size || 0,
-                    type: fileName.split(".").pop().toLowerCase(),
-                    extension: fileName.split(".").pop().toLowerCase(),
+                    type: extension, // Use extension for type
+                    extension: extension,
                     url: fileUrl,
                 };
             });
@@ -241,8 +257,22 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     hasFile: 'file' in files[0],
                     hasName: 'name' in files[0],
                     fileType: typeof files[0],
-                    constructor: files[0].constructor.name
+                    constructor: files[0].constructor.name,
+                    fullObject: JSON.parse(JSON.stringify(files[0])), // Convert to plain object
+                    fileObject: files[0].file ? JSON.parse(JSON.stringify(files[0].file)) : null
                 });
+                // Also check the actual File object properties
+                if (files[0].file) {
+                    const fileObj = files[0].file;
+                    console.log("DEBUG: File object properties:", {
+                        name: fileObj.name,
+                        type: fileObj.type,
+                        size: fileObj.size,
+                        lastModified: fileObj.lastModified,
+                        isFile: fileObj instanceof File,
+                        isBlob: fileObj instanceof Blob
+                    });
+                }
             }
             
             const uploadPromises = (files || []).map((f) => {
@@ -275,6 +305,79 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         return name;
                     });
                     console.log("DEBUG: File names to send:", fileNames);
+                    
+                    // Update optimistic message with Frappe file URLs
+                    // This allows immediate download instead of waiting for message reload
+                    console.log("DEBUG: Upload response details:", uploaded);
+                    console.log("DEBUG: Current messages in state before update:", state.getMessages());
+                    const updatedMessages = state.getMessages().map((msg) => {
+                        if (msg._id === tempId && msg.files) {
+                            console.log("DEBUG: Found optimistic message to update:", msg._id);
+                            // Update each file with Frappe URL if available
+                            const updatedFiles = msg.files.map((file, index) => {
+                                console.log("DEBUG: Processing file at index", index, ":", file);
+                                if (index < uploaded.length && uploaded[index]) {
+                                    const uploadedFile = uploaded[index];
+                                    console.log("DEBUG: Uploaded file info at index", index, ":", uploadedFile);
+                                    // Get Frappe file URL from upload response
+                                    const frappeUrl = uploadedFile.file_url || uploadedFile.url;
+                                    if (frappeUrl) {
+                                        console.log("DEBUG: Updating file URL from blob to Frappe URL:", frappeUrl);
+                                        
+                                        // Extract filename from file_url if available (includes extension)
+                                        let fileName = file.name;
+                                        if (frappeUrl.includes('/files/')) {
+                                            // Extract filename from URL (e.g., "/files/ACC-SINV-2026-00225-1.pdf" -> "ACC-SINV-2026-00225-1.pdf")
+                                            const urlParts = frappeUrl.split('/');
+                                            const extractedName = urlParts[urlParts.length - 1];
+                                            if (extractedName && extractedName.includes('.')) {
+                                                fileName = extractedName;
+                                                console.log("DEBUG: Extracted filename from file_url:", fileName);
+                                            }
+                                        }
+                                        
+                                        // If no filename from URL, use uploadedFile.file_name
+                                        if (!fileName || !fileName.includes('.')) {
+                                            fileName = uploadedFile.file_name || file.name;
+                                            console.log("DEBUG: Using file_name as filename:", fileName);
+                                        }
+                                        
+                                        // Get extension from MIME type or filename
+                                        let extension = "";
+                                        if (uploadedFile.file_type) {
+                                            extension = uploadedFile.file_type.split('/').pop().toLowerCase();
+                                            console.log("DEBUG: Got extension from file_type:", extension);
+                                        } else if (fileName.includes('.')) {
+                                            extension = fileName.split('.').pop().toLowerCase();
+                                            console.log("DEBUG: Got extension from filename:", extension);
+                                        }
+                                        
+                                        const updatedFile = {
+                                            ...file,
+                                            url: frappeUrl,
+                                            name: fileName,
+                                            type: extension,
+                                            extension: extension
+                                        };
+                                        console.log("DEBUG: Updated file object:", updatedFile);
+                                        return updatedFile;
+                                    } else {
+                                        console.log("DEBUG: No Frappe URL in upload response for file at index", index);
+                                    }
+                                } else {
+                                    console.log("DEBUG: No uploaded file at index", index, "uploaded length:", uploaded.length);
+                                }
+                                return file;
+                            });
+                            const updatedMsg = { ...msg, files: updatedFiles };
+                            console.log("DEBUG: Updated message:", updatedMsg);
+                            return updatedMsg;
+                        }
+                        return msg;
+                    });
+                    state.setMessages(updatedMessages);
+                    _chat.messages = updatedMessages;
+                    console.log("DEBUG: Messages after update:", state.getMessages());
                     
                     // IMPORTANT: Frappe might not handle arrays properly in frappe.call
                     // Try different approaches:
@@ -704,8 +807,15 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const { message, file } = event.detail[0];
             
             console.log("DEBUG: File download requested - full event detail:", event.detail[0]);
-            console.log("DEBUG: File object structure:", file);
+            console.log("DEBUG: File object structure:", JSON.stringify(file, null, 2));
             console.log("DEBUG: File object keys:", Object.keys(file));
+            console.log("DEBUG: Checking all possible file properties:");
+            for (const key in file) {
+                console.log(`  ${key}:`, file[key]);
+            }
+            
+            console.log("DEBUG: Message object:", JSON.stringify(message, null, 2));
+            console.log("DEBUG: Message files array:", message.files);
             
             // Check if this is a download action
             if (file.action === "download") {
@@ -716,12 +826,159 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 let downloadUrl = file.url || file.fileUrl || file.file_url ||
                                  (file.file && file.file.url);
                 
-                console.log("File download requested:", {
+                // If fileName doesn't have an extension, try to extract from downloadUrl
+                // This handles cases where file_name in database doesn't include extension
+                if (fileName && !fileName.includes('.') && downloadUrl) {
+                    // Try to extract filename from URL
+                    // For Frappe download API: /api/method/...?file_url=/files/filename.pdf
+                    // For direct file URL: /files/filename.pdf
+                    let extractedName = null;
+                    
+                    // First, check if it's a Frappe download API URL with file_url parameter
+                    const fileUrlMatch = downloadUrl.match(/file_url=([^&]+)/);
+                    if (fileUrlMatch) {
+                        // Extract the file_url parameter value
+                        let fileUrl = fileUrlMatch[1];
+                        // Decode URL encoding
+                        try {
+                            fileUrl = decodeURIComponent(fileUrl);
+                        } catch (e) {
+                            // Keep as-is if decoding fails
+                        }
+                        // Extract filename from the file_url
+                        const filenameMatch = fileUrl.match(/\/([^\/]+)$/);
+                        if (filenameMatch) {
+                            extractedName = filenameMatch[1];
+                        }
+                    }
+                    
+                    // If not found in file_url parameter, try to extract from the path
+                    if (!extractedName) {
+                        const urlMatch = downloadUrl.match(/\/([^\/?]+)(?:\?|$)/);
+                        if (urlMatch) {
+                            extractedName = urlMatch[1];
+                            // If it's encoded, decode it
+                            try {
+                                extractedName = decodeURIComponent(extractedName);
+                            } catch (e) {
+                                // Keep as-is if decoding fails
+                            }
+                        }
+                    }
+                    
+                    if (extractedName) {
+                        // Only use extracted name if it has an extension
+                        if (extractedName.includes('.')) {
+                            fileName = extractedName;
+                            console.log("Extracted filename with extension from URL:", fileName);
+                        } else {
+                            console.log("Extracted filename from URL but it has no extension:", extractedName);
+                        }
+                    }
+                }
+                
+                // Get file extension from various possible sources
+                let fileExtension = file.extension || file.type || 
+                                   (file.file && file.file.type && file.file.type.split('/').pop());
+                
+                console.log("DEBUG: File extension sources:", {
+                    fileExtension: fileExtension,
+                    file_extension: file.extension,
+                    file_type: file.type,
+                    file_file_type: file.file && file.file.type,
+                    fileName: fileName,
+                    fileNameHasDot: fileName.includes('.')
+                });
+                
+                // Common MIME type to extension mapping
+                const mimeTypeToExtension = {
+                    'application/pdf': 'pdf',
+                    'application/msword': 'doc',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                    'application/vnd.ms-excel': 'xls',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                    'application/vnd.ms-powerpoint': 'ppt',
+                    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                    'text/plain': 'txt',
+                    'text/csv': 'csv',
+                    'text/html': 'html',
+                    'image/jpeg': 'jpg',
+                    'image/jpg': 'jpg',
+                    'image/png': 'png',
+                    'image/gif': 'gif',
+                    'image/svg+xml': 'svg'
+                };
+                
+                // If fileName doesn't have extension but we have fileExtension, add it
+                if (fileName && fileExtension && !fileName.includes('.')) {
+                    // Remove any leading dot from extension and convert to lowercase
+                    fileExtension = fileExtension.replace(/^\./, '').toLowerCase();
+                    
+                    // Check if fileExtension is a MIME type (contains '/')
+                    if (fileExtension.includes('/')) {
+                        // It's a MIME type, look up extension
+                        const mappedExtension = mimeTypeToExtension[fileExtension];
+                        if (mappedExtension) {
+                            fileExtension = mappedExtension;
+                            console.log("Mapped MIME type to extension:", fileExtension);
+                        } else {
+                            // Extract from MIME type (e.g., "application/pdf" -> "pdf")
+                            fileExtension = fileExtension.split('/').pop();
+                            console.log("Extracted extension from MIME type:", fileExtension);
+                        }
+                    }
+                    
+                    // Check if fileExtension looks like a valid extension (not a filename)
+                    // Valid extensions are usually short (1-10 chars) and mostly alphabetic
+                    // They shouldn't contain numbers, hyphens, or underscores (except for some like "7z")
+                    const looksLikeExtension = fileExtension && 
+                                              fileExtension.length <= 10 && 
+                                              /^[a-z0-9]+$/i.test(fileExtension) &&
+                                              !fileExtension.includes('-') &&
+                                              !fileExtension.includes('_') &&
+                                              /[a-z]/i.test(fileExtension); // Must contain at least one letter
+                    
+                    // Only add extension if it looks like a valid extension
+                    if (fileExtension && looksLikeExtension && fileExtension !== fileName.toLowerCase()) {
+                        fileName = fileName + '.' + fileExtension;
+                        console.log("Added extension to filename:", fileName);
+                    } else {
+                        console.log("Not adding extension - doesn't look like valid extension:", fileExtension, "looksLikeExtension:", looksLikeExtension);
+                    }
+                }
+                // If fileName already has extension but it doesn't match fileExtension, fix it
+                else if (fileName && fileName.includes('.') && fileExtension) {
+                    const currentExt = fileName.split('.').pop().toLowerCase();
+                    // Clean up fileExtension
+                    let expectedExt = fileExtension.replace(/^\./, '').toLowerCase();
+                    if (expectedExt.includes('/')) {
+                        expectedExt = expectedExt.split('/').pop();
+                    }
+                    
+                    if (currentExt !== expectedExt) {
+                        // Replace the extension
+                        const baseName = fileName.substring(0, fileName.lastIndexOf('.'));
+                        fileName = baseName + '.' + expectedExt;
+                        console.log("Fixed extension mismatch:", fileName);
+                    } else {
+                        // Just ensure it's lowercase
+                        const parts = fileName.split('.');
+                        parts[parts.length - 1] = parts[parts.length - 1].toLowerCase();
+                        fileName = parts.join('.');
+                        console.log("Normalized extension to lowercase:", fileName);
+                    }
+                }
+                
+                console.log("File download requested - details:", {
                     messageId: message._id,
                     fileName: fileName,
+                    fileNameIncludesDot: fileName.includes('.'),
                     fileUrl: downloadUrl,
                     fileAction: file.action,
-                    allFileProps: file
+                    fileExtension: file.extension,
+                    fileType: file.type,
+                    file_name: file.file_name,
+                    name: file.name
                 });
                 
                 // For Frappe file attachments, we need to use the download API for private files
@@ -749,17 +1006,39 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         console.log("Converted Frappe file URL to download API:", downloadUrl);
                     }
                     // Check if it's a relative path without /files/
-                    else if (!downloadUrl.startsWith("http") && !downloadUrl.startsWith("/")) {
+                    else if (!downloadUrl.startsWith("http") && !downloadUrl.startsWith("/") && !downloadUrl.startsWith("blob:")) {
                         // Might be a relative file path, prepend with /
                         downloadUrl = "/" + downloadUrl;
                         console.log("Converted relative file path to absolute:", downloadUrl);
                     }
                 }
                 
-                // If it's a valid URL, open it in a new tab
+                // If it's a valid URL, download it with proper filename
                 if (downloadUrl && (downloadUrl.startsWith("http") || downloadUrl.startsWith("/"))) {
-                    console.log("Opening file URL:", downloadUrl);
-                    window.open(downloadUrl, "_blank");
+                    console.log("Downloading file URL:", downloadUrl, "with filename:", fileName);
+                    
+                    // Create a temporary anchor element to trigger download with filename
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    
+                    // Only set download attribute if filename has an extension
+                    // Otherwise, let the server's Content-Disposition header determine the filename
+                    if (fileName.includes('.')) {
+                        a.download = fileName; // This sets the filename for the download
+                        console.log("Setting download attribute with filename:", fileName);
+                    } else {
+                        console.log("Filename has no extension, not setting download attribute. Letting server determine filename.");
+                    }
+                    
+                    a.target = '_blank'; // Open in new tab for safety
+                    a.style.display = 'none';
+                    
+                    // Add to document, click, and remove
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    console.log("File download triggered for:", fileName);
                 } else if (downloadUrl && downloadUrl.startsWith("blob:")) {
                     // Blob URLs are temporary and can't be downloaded directly
                     console.warn("File has blob URL (temporary):", downloadUrl);

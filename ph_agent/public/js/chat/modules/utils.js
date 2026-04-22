@@ -21,9 +21,49 @@ window.phAgent.utils = window.phAgent.utils || (function() {
         fmtMsg: function(m, currentUserId, agentId = "ph_agent") {
             const dt = new Date((m.creation || "").replace(" ", "T"));
             const files = (m.files || []).map((f) => {
-                const fileName = f.file_name || "";
-                const extension = fileName.split(".").pop().toLowerCase();
-                return {
+                // Try to get filename from file_url first (includes extension)
+                // file_url format: "/files/filename.pdf"
+                let fileName = "";
+                let extension = "";
+                
+                if (f.file_url) {
+                    // Extract filename from URL (e.g., "/files/ACC-SINV-2026-00225-1.pdf" -> "ACC-SINV-2026-00225-1.pdf")
+                    const urlParts = f.file_url.split('/');
+                    fileName = urlParts[urlParts.length - 1];
+                    console.log("DEBUG fmtMsg: Extracted filename from file_url:", fileName);
+                }
+                
+                // If no file_url or empty filename, fall back to file_name
+                if (!fileName && f.file_name) {
+                    fileName = f.file_name;
+                    console.log("DEBUG fmtMsg: Using file_name as filename:", fileName);
+                }
+                
+                console.log("DEBUG fmtMsg: File object from database:", {
+                    file_name: f.file_name,
+                    file_type: f.file_type,
+                    file_url: f.file_url,
+                    file_size: f.file_size,
+                    extracted_filename: fileName,
+                    full_object: f
+                });
+                
+                // Get extension from filename if it has one
+                if (fileName.includes('.')) {
+                    extension = fileName.split(".").pop().toLowerCase();
+                }
+                // If no extension in filename, try to get from file_type (MIME type)
+                if (!extension && f.file_type) {
+                    // Extract from MIME type (e.g., "application/pdf" -> "pdf")
+                    extension = f.file_type.split('/').pop().toLowerCase();
+                    // Also update filename to include extension
+                    if (fileName && !fileName.includes('.')) {
+                        fileName = fileName + '.' + extension;
+                        console.log("DEBUG fmtMsg: Added extension to filename:", fileName);
+                    }
+                }
+                
+                const fileObj = {
                     name: fileName,
                     size: f.file_size,
                     extension: extension,
@@ -33,6 +73,8 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     file_name: fileName, // Keep original property name
                     file_url: f.file_url, // Keep original property name
                 };
+                console.log("DEBUG fmtMsg: Created file object:", fileObj);
+                return fileObj;
             });
             const formattedMsg = {
                 _id: m.name,
@@ -114,7 +156,16 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                                 }
                             }
                         }
-                        console.log("DEBUG: Plain upload response:", plainResponse);
+                        console.log("DEBUG: Plain upload response - all fields:", plainResponse);
+                        // Log specific fields we care about
+                        console.log("DEBUG: Upload response key fields:", {
+                            name: plainResponse.name,
+                            file_name: plainResponse.file_name,
+                            file_url: plainResponse.file_url,
+                            file_type: plainResponse.file_type,
+                            is_private: plainResponse.is_private,
+                            docstatus: plainResponse.docstatus
+                        });
                         resolve(plainResponse);
                     },
                     error: (xhr, status, error) => {

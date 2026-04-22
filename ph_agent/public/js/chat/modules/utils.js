@@ -55,8 +55,33 @@ window.phAgent.utils = window.phAgent.utils || (function() {
          */
         uploadFile: function(file) {
             return new Promise((resolve, reject) => {
+                console.log("DEBUG: uploadFile called with:", file);
+                
+                // Handle different file object structures
+                let fileBlob, fileName;
+                
+                if (file.blob && file.name) {
+                    // Standard structure: {blob: Blob, name: string}
+                    fileBlob = file.blob;
+                    fileName = file.name;
+                } else if (file.file && (file.name || file.file.name)) {
+                    // Vue Advanced Chat structure: {file: File, name: string}
+                    fileBlob = file.file;
+                    fileName = file.name || file.file.name;
+                } else if (file instanceof File || file instanceof Blob) {
+                    // Direct File/Blob object
+                    fileBlob = file;
+                    fileName = file.name || "uploaded_file";
+                } else {
+                    console.error("DEBUG: Unsupported file structure:", file);
+                    reject(new Error("Unsupported file structure"));
+                    return;
+                }
+                
+                console.log("DEBUG: Uploading file:", fileName, "type:", fileBlob.type, "size:", fileBlob.size);
+                
                 const formData = new FormData();
-                formData.append("file", file.blob, file.name);
+                formData.append("file", fileBlob, fileName);
                 formData.append("is_private", "1");
                 $.ajax({
                     url: "/api/method/upload_file",
@@ -65,8 +90,29 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     processData: false,
                     contentType: false,
                     headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
-                    success: (r) => resolve(r.message),
-                    error: reject,
+                    success: (r) => {
+                        console.log("DEBUG: upload_file API response:", r.message);
+                        // Extract plain values from any Proxy objects
+                        const response = r.message;
+                        let plainResponse = response;
+                        if (response && typeof response === 'object') {
+                            // Create a plain object copy
+                            plainResponse = {};
+                            for (const key in response) {
+                                if (Object.prototype.hasOwnProperty.call(response, key)) {
+                                    const value = response[key];
+                                    // Extract value from Proxy if needed
+                                    plainResponse[key] = value && typeof value === 'object' && value.valueOf ? value.valueOf() : value;
+                                }
+                            }
+                        }
+                        console.log("DEBUG: Plain upload response:", plainResponse);
+                        resolve(plainResponse);
+                    },
+                    error: (xhr, status, error) => {
+                        console.error("DEBUG: File upload failed:", error, "status:", status, "xhr:", xhr);
+                        reject(error);
+                    },
                 });
             });
         },

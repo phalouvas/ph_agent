@@ -152,7 +152,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
          * @param {Event} event - Event object with message details
          */
         handleSendMessage: function(event) {
+            console.log("DEBUG: handleSendMessage called with event.detail[0]:", event.detail[0]);
             const { roomId, content, files, replyMessage } = event.detail[0];
+            console.log("DEBUG: Extracted - roomId:", roomId, "content:", content, "files:", files, "files type:", typeof files, "files length:", files ? files.length : 0);
             
             const state = window.phAgent.state;
             const roomService = window.phAgent.roomService;
@@ -218,19 +220,73 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             _chat.rooms = rooms;
             
             // Upload files first (if any), then send the message
-            const uploadPromises = (files || []).map((f) => utils.uploadFile(f));
+            console.log("DEBUG: Starting file upload. files:", files, "files count:", files ? files.length : 0);
+            
+            // Debug file structure
+            if (files && files.length > 0) {
+                console.log("DEBUG: First file structure:", {
+                    keys: Object.keys(files[0]),
+                    hasBlob: 'blob' in files[0],
+                    hasFile: 'file' in files[0],
+                    hasName: 'name' in files[0],
+                    fileType: typeof files[0],
+                    constructor: files[0].constructor.name
+                });
+            }
+            
+            const uploadPromises = (files || []).map((f) => {
+                console.log("DEBUG: Processing file for upload:", f);
+                // Handle different file object structures
+                let fileToUpload = f;
+                if (f.file) {
+                    // Vue Advanced Chat might use {file: FileObject} structure
+                    console.log("DEBUG: File has 'file' property, using f.file");
+                    fileToUpload = { blob: f.file, name: f.name || f.file.name };
+                } else if (f instanceof File || f instanceof Blob) {
+                    // Direct File or Blob object
+                    console.log("DEBUG: File is File/Blob instance");
+                    fileToUpload = { blob: f, name: f.name };
+                }
+                return utils.uploadFile(fileToUpload);
+            });
+            
             Promise.all(uploadPromises)
                 .then((uploaded) => {
-                    const fileNames = uploaded.map((u) => u.name);
+                    console.log("DEBUG: Files uploaded successfully:", uploaded);
+                    // Ensure we get plain string file names (not Proxies)
+                    const fileNames = uploaded.map((u) => {
+                        const name = u.name;
+                        // Extract plain value if it's a Proxy/object
+                        if (name && typeof name === 'object') {
+                            console.log("DEBUG: File name is object, extracting value:", name);
+                            return String(name);
+                        }
+                        return name;
+                    });
+                    console.log("DEBUG: File names to send:", fileNames);
+                    
+                    // IMPORTANT: Frappe might not handle arrays properly in frappe.call
+                    // Try different approaches:
+                    // 1. JSON string
+                    const filesJson = JSON.stringify(fileNames);
+                    console.log("DEBUG: Files as JSON string:", filesJson);
+                    
+                    // 2. Comma-separated string (simpler for Frappe)
+                    const filesCsv = fileNames.join(',');
+                    console.log("DEBUG: Files as CSV:", filesCsv);
+                    
+                    // Try CSV first (simpler)
+                    const args = { 
+                        session: roomId, 
+                        content, 
+                        file_names: filesCsv,  // Comma-separated string
+                        reply_to: replyMessage?._id 
+                    };
+                    console.log("DEBUG: Full args being sent:", JSON.stringify(args));
                     
                     frappe.call({
                         method: "ph_agent.api.chat.send_message",
-                        args: { 
-                            session: roomId, 
-                            content, 
-                            files: fileNames,
-                            reply_to: replyMessage?._id 
-                        },
+                        args: args,
                         callback: (r) => {
                             if (!r.message) {
                                 console.error("Failed to send message");

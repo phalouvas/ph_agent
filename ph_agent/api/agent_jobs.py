@@ -42,12 +42,21 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	# Get provider settings early for file size limits
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	
+	# Debug logging
+	frappe.log_error(
+		f"DEBUG: _call_agent_background called. session={session}, user_msg_name={user_msg_name}, "
+		f"content_length={len(content)}, file_names={file_names}, provider={provider_doc.name}, "
+		f"max_file_size_mb={provider_doc.max_file_size_mb}",
+		"ph_agent_jobs"
+	)
 
 	# Build enriched content: append extracted file text from attachments
 	agent_content = content
 	if file_names:
 		file_texts = []
 		emit_status(frappe._("Extracting file contents…"))
+		frappe.log_error(f"DEBUG: Starting file extraction for {len(file_names)} files", "ph_agent_jobs")
 		for file_name in file_names:
 			if is_cancelled():
 				release_lock()
@@ -61,14 +70,32 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				return
 			# Get max file size from provider settings
 			max_size_mb = provider_doc.max_file_size_mb or 50
+			frappe.log_error(f"DEBUG: Extracting file {file_name} with size limit {max_size_mb} MB", "ph_agent_jobs")
 			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
 			if text:
 				filename = frappe.db.get_value('File', file_name, 'file_name')
 				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
+				frappe.log_error(
+					f"DEBUG: Successfully extracted text from {filename}. "
+					f"Type: {file_type_label}, Text length: {len(text)} chars",
+					"ph_agent_jobs"
+				)
+			else:
+				frappe.log_error(f"DEBUG: No text extracted from file {file_name}", "ph_agent_jobs")
 		if file_texts:
 			agent_content = content + "\n\n" + "\n\n".join(file_texts)
+			frappe.log_error(
+				f"DEBUG: Final agent_content length: {len(agent_content)} chars. "
+				f"Original content length: {len(content)}. Added {len(file_texts)} file texts.",
+				"ph_agent_jobs"
+			)
+		else:
+			frappe.log_error(f"DEBUG: No file texts were extracted. Using original content.", "ph_agent_jobs")
+	else:
+		frappe.log_error(f"DEBUG: No file_names provided. Using original content.", "ph_agent_jobs")
 
 	emit_status(frappe._("Calling AI…"))
+	frappe.log_error(f"DEBUG: Calling AI with content (first 500 chars): {agent_content[:500]}", "ph_agent_jobs")
 
 	# Check if streaming should be used
 	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming

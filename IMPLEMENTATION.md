@@ -1,7 +1,7 @@
 # PH Agent Implementation Progress
 
 *Document Version: 1.1*  
-*Last Updated: 2026-04-20*  
+*Last Updated: 2026-04-22*  
 *Maintainer: PH Agent Development Team*
 
 ---
@@ -82,7 +82,7 @@ The table below maps each major capability area to specific Microsoft Agent Fram
 |---|------|--------|-----------|-------|
 | 1.1.1 | Create `Tool Registry` DocType | ✅ **Completed** | [task/1.1.1](https://github.com/phalouvas/ph_agent/tree/task/1.1.1) | JSON schema: `tool_name`, `description`, `python_function`, `parameters_json`, `requires_approval`, `is_enabled`. Validation: unique tool_name, importable python_function, valid JSON. Simplified design: No permission fields - relies on Frappe's DocType permissions and tool-level permission checks. |
 | 1.1.2 | Implement `ToolManager` class with `function_tool` registration | ✅ **Completed** | [task/1.1.2](https://github.com/phalouvas/ph_agent/tree/task/1.1.2) | ToolManager implemented with caching, context injection, and dynamic tool registration. Includes two test tools: datetime tool and calculator tool. Uses `agent_framework.tool` decorator (not `agents.function_tool` due to compatibility). |
-| 1.1.3 | Add Tool Approval middleware for sensitive actions | ⬜ Not Started | | Human‑in‑the‑loop approval workflow for tools marked as `requires_approval` |
+| 1.1.3 | Add Tool Approval middleware for sensitive actions | ✅ **Completed** | [version-16](https://github.com/phalouvas/ph_agent/tree/version-16) | Human‑in‑the‑loop approval workflow for tools marked as `requires_approval`. Created `Tool Approval Request` DocType (fields: tool_name, description, arguments, chat_session, chat_message, status, approver, approval_date, rejection_reason, conversation_state, agent_message_saved). Implements `_handle_tool_approval()` to create approval docs and pause execution, `_execute_approved_tool()` background job to resume after approval. Approve/Reject buttons on DocType form. Cascade delete via `on_trash` doc_events hooks for Chat Session and Chat Message. Real-time UI notifications for pending/resolved approvals. Three bugs fixed: approval_mode propagation, @frappe.whitelist() on approve/reject methods, and cascade delete using frappe.db.delete(). |
 | 1.1.4 | Integrate MCP server for external tools (web search, file search) | ⬜ Not Started | | Use Microsoft Agent Framework's MCP integration for hosted/local tools |
 | 1.1.5 | Create 5 sample ERPNext tools using `function_tool` | ⬜ Not Started | | `get_customer_details`, `list_sales_orders`, `fetch_stock_levels`, `create_quotation`, `send_email` |
 | 1.1.6 | Add tool‑call logging via Function Calling Middleware | ⬜ Not Started | | Store tool invocation details in `Chat Message` using framework middleware |

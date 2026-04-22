@@ -850,3 +850,49 @@ def _execute_approved_tool(approval_name):
 			reference_doctype="Tool Approval Request",
 			reference_name=approval_name,
 		)
+
+
+def cancel_approvals_for_session(doc, method):
+	"""
+	Cascade delete all Tool Approval Requests linked to a Chat Session
+	when the session is deleted.
+	
+	This runs in on_trash, which is called BEFORE Frappe's link validation,
+	so we delete the dependent records first to allow the session delete to proceed.
+	
+	Uses raw DB delete to bypass link validation (the Tool Approval Request
+	references the session being deleted, so normal frappe.delete_doc would fail).
+	
+	Called via doc_events hook: Chat Session > on_trash
+	"""
+	linked_requests = frappe.get_all(
+		"Tool Approval Request",
+		filters={"chat_session": doc.name},
+		pluck="name",
+	)
+	for req_name in linked_requests:
+		frappe.db.delete("Tool Approval Request", {"name": req_name})
+	frappe.db.commit()
+
+
+def cancel_approvals_for_message(doc, method):
+	"""
+	Cascade delete all Tool Approval Requests linked to a Chat Message
+	when the message is deleted.
+	
+	This runs in on_trash, which is called BEFORE Frappe's link validation,
+	so we delete the dependent records first to allow the message delete to proceed.
+	
+	Uses raw DB delete to bypass link validation (the Tool Approval Request
+	references the message being deleted, so normal frappe.delete_doc would fail).
+	
+	Called via doc_events hook: Chat Message > on_trash
+	"""
+	linked_requests = frappe.get_all(
+		"Tool Approval Request",
+		filters={"chat_message": doc.name},
+		pluck="name",
+	)
+	for req_name in linked_requests:
+		frappe.db.delete("Tool Approval Request", {"name": req_name})
+	frappe.db.commit()

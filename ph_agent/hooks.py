@@ -132,13 +132,13 @@ page_js = {"chat": ["public/js/lib/vue-advanced-chat.umd.js", "public/js/chat/lo
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Tool Registry": {
+		"on_update": "ph_agent.agent.tools.tool_manager.invalidate_tool_cache",
+		"on_trash": "ph_agent.agent.tools.tool_manager.invalidate_tool_cache",
+		"after_insert": "ph_agent.agent.tools.tool_manager.invalidate_tool_cache",
+	}
+}
 
 # Scheduled Tasks
 # ---------------

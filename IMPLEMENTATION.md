@@ -81,7 +81,7 @@ The table below maps each major capability area to specific Microsoft Agent Fram
 | # | Task | Status | PR/Commit | Notes |
 |---|------|--------|-----------|-------|
 | 1.1.1 | Create `Tool Registry` DocType | ✅ **Completed** | [task/1.1.1](https://github.com/phalouvas/ph_agent/tree/task/1.1.1) | JSON schema: `tool_name`, `description`, `python_function`, `parameters_json`, `requires_approval`, `is_enabled`. Validation: unique tool_name, importable python_function, valid JSON. Simplified design: No permission fields - relies on Frappe's DocType permissions and tool-level permission checks. |
-| 1.1.2 | Implement `ToolManager` class with `function_tool` registration | ⬜ Not Started | | Loads tools from DB, registers with agent‑framework's `function_tool` decorator, validates schemas |
+| 1.1.2 | Implement `ToolManager` class with `function_tool` registration | ✅ **Completed** | [task/1.1.2](https://github.com/phalouvas/ph_agent/tree/task/1.1.2) | ToolManager implemented with caching, context injection, and dynamic tool registration. Includes two test tools: datetime tool and calculator tool. Uses `agent_framework.tool` decorator (not `agents.function_tool` due to compatibility). |
 | 1.1.3 | Add Tool Approval middleware for sensitive actions | ⬜ Not Started | | Human‑in‑the‑loop approval workflow for tools marked as `requires_approval` |
 | 1.1.4 | Integrate MCP server for external tools (web search, file search) | ⬜ Not Started | | Use Microsoft Agent Framework's MCP integration for hosted/local tools |
 | 1.1.5 | Create 5 sample ERPNext tools using `function_tool` | ⬜ Not Started | | `get_customer_details`, `list_sales_orders`, `fetch_stock_levels`, `create_quotation`, `send_email` |

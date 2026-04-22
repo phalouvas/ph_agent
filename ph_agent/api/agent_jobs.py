@@ -467,7 +467,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			agent_message_id=agent_msg.name,
 			enqueued_by=enqueued_by,
 			queue="short",
-			timeout=30,
+			timeout=120,
 		)
 
 

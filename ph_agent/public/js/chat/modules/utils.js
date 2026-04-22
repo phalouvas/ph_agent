@@ -20,12 +20,20 @@ window.phAgent.utils = window.phAgent.utils || (function() {
          */
         fmtMsg: function(m, currentUserId, agentId = "ph_agent") {
             const dt = new Date((m.creation || "").replace(" ", "T"));
-            const files = (m.files || []).map((f) => ({
-                name: f.file_name,
-                size: f.file_size,
-                type: (f.file_name || "").split(".").pop().toLowerCase(),
-                url: f.file_url,
-            }));
+            const files = (m.files || []).map((f) => {
+                const fileName = f.file_name || "";
+                const extension = fileName.split(".").pop().toLowerCase();
+                return {
+                    name: fileName,
+                    size: f.file_size,
+                    extension: extension,
+                    type: extension, // Keep type for compatibility
+                    url: f.file_url,
+                    // Vue Advanced Chat might expect these properties
+                    file_name: fileName, // Keep original property name
+                    file_url: f.file_url, // Keep original property name
+                };
+            });
             const formattedMsg = {
                 _id: m.name,
                 content: m.content,

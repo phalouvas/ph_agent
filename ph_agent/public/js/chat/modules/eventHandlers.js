@@ -55,6 +55,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             _chat.addEventListener("room-info", this.handleRoomInfo.bind(this));
             _chat.addEventListener("add-room", this.handleAddRoom.bind(this));
             _chat.addEventListener("room-action-handler", this.handleRoomAction.bind(this));
+            _chat.addEventListener("open-file", this.handleOpenFile.bind(this));
         },
         
         /**
@@ -183,12 +184,22 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             // Create optimistic user message
             const tempId = "temp_" + Date.now();
-            const localFiles = (files || []).map((f) => ({
-                name: f.name,
-                size: f.size,
-                type: (f.name || "").split(".").pop().toLowerCase(),
-                url: f.localUrl,
-            }));
+            const localFiles = (files || []).map((f) => {
+                // Try to get URL from different possible properties
+                // Vue Advanced Chat might provide file objects with different structures
+                const fileObj = f.file || f;
+                const fileName = f.name || fileObj.name || "file";
+                const fileUrl = f.url || f.localUrl || fileObj.url || 
+                               (fileObj.blob && URL.createObjectURL(fileObj.blob)) ||
+                               (fileObj instanceof Blob && URL.createObjectURL(fileObj));
+                return {
+                    name: fileName,
+                    size: f.size || fileObj.size || 0,
+                    type: fileName.split(".").pop().toLowerCase(),
+                    extension: fileName.split(".").pop().toLowerCase(),
+                    url: fileUrl,
+                };
+            });
             
             const optimisticMessage = {
                 _id: tempId,
@@ -682,6 +693,92 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     
                 default:
                     console.warn("Unknown room action:", action);
+            }
+        },
+        
+        /**
+         * Handle open-file event (when user clicks on a file to download)
+         * @param {Event} event - Event object with file details
+         */
+        handleOpenFile: function(event) {
+            const { message, file } = event.detail[0];
+            
+            console.log("DEBUG: File download requested - full event detail:", event.detail[0]);
+            console.log("DEBUG: File object structure:", file);
+            console.log("DEBUG: File object keys:", Object.keys(file));
+            
+            // Check if this is a download action
+            if (file.action === "download") {
+                // Try to get file name and URL from different possible property names
+                // Check all possible property names that could contain file info
+                let fileName = file.name || file.fileName || file.file_name || 
+                              (file.file && file.file.name) || "unknown_file";
+                let downloadUrl = file.url || file.fileUrl || file.file_url ||
+                                 (file.file && file.file.url);
+                
+                console.log("File download requested:", {
+                    messageId: message._id,
+                    fileName: fileName,
+                    fileUrl: downloadUrl,
+                    fileAction: file.action,
+                    allFileProps: file
+                });
+                
+                // For Frappe file attachments, we need to use the download API for private files
+                if (downloadUrl) {
+                    // Remove any leading/trailing whitespace
+                    downloadUrl = downloadUrl.trim();
+                    
+                    // Check if it's already a full download API URL
+                    if (downloadUrl.includes("/api/method/frappe.core.doctype.file.file.download_file")) {
+                        // Already a download API URL, use as-is
+                        console.log("File URL is already a download API URL:", downloadUrl);
+                    }
+                    // Check if this is a Frappe file path (starts with /files/ or files/)
+                    else if (downloadUrl.startsWith("/files/") || downloadUrl.startsWith("files/")) {
+                        // Ensure it starts with /files/
+                        if (downloadUrl.startsWith("files/")) {
+                            downloadUrl = "/" + downloadUrl;
+                        }
+                        
+                        // For private files in Frappe, we need to use the download API
+                        // The file URL might be something like "/files/filename.pdf"
+                        // We need to convert it to "/api/method/frappe.core.doctype.file.file.download_file?file_url=/files/filename.pdf"
+                        const encodedFileUrl = encodeURIComponent(downloadUrl);
+                        downloadUrl = `/api/method/frappe.core.doctype.file.file.download_file?file_url=${encodedFileUrl}`;
+                        console.log("Converted Frappe file URL to download API:", downloadUrl);
+                    }
+                    // Check if it's a relative path without /files/
+                    else if (!downloadUrl.startsWith("http") && !downloadUrl.startsWith("/")) {
+                        // Might be a relative file path, prepend with /
+                        downloadUrl = "/" + downloadUrl;
+                        console.log("Converted relative file path to absolute:", downloadUrl);
+                    }
+                }
+                
+                // If it's a valid URL, open it in a new tab
+                if (downloadUrl && (downloadUrl.startsWith("http") || downloadUrl.startsWith("/"))) {
+                    console.log("Opening file URL:", downloadUrl);
+                    window.open(downloadUrl, "_blank");
+                } else if (downloadUrl && downloadUrl.startsWith("blob:")) {
+                    // Blob URLs are temporary and can't be downloaded directly
+                    console.warn("File has blob URL (temporary):", downloadUrl);
+                    frappe.show_alert({
+                        message: __("File is still being processed. Please wait a moment and try again."),
+                        indicator: "orange"
+                    });
+                } else {
+                    console.warn("Invalid file URL for download:", downloadUrl);
+                    console.warn("Full file object:", file);
+                    frappe.show_alert({
+                        message: __("Unable to download file. File URL not found or file is still processing."),
+                        indicator: "red"
+                    });
+                }
+            } else if (file.action === "preview") {
+                // Preview action - let Vue Advanced Chat handle it
+                // The library will show media preview for images/videos
+                console.log("File preview requested for:", file.name);
             }
         },
         

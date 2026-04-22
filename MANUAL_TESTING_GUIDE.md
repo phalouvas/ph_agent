@@ -58,13 +58,27 @@ Tools are now properly executed when called by the LLM:
 
 ## Test Steps
 
-### Step 1: Create Tool Registry Record
+### Step 1: Create Tool Registry Records
+
+#### 1.1 Create DateTime Tool Record
 1. Go to **PH Agent → Tool Registry**
 2. Click **New**
 3. Fill in the following details:
    - **Tool Name**: `show_datetime`
    - **Description**: `Shows the current date and time. Useful for testing tool registration and verifying the system is working.`
    - **Python Function**: `ph_agent.agent.tools.datetime_tool.show_datetime_tool`
+   - **Parameters JSON**: `{}` (leave empty or use `{}`)
+   - **Is Enabled**: Checked ✓
+   - **Requires Approval**: Unchecked (for testing)
+4. Click **Save**
+
+#### 1.2 Create Calculator Tool Record
+1. Go to **PH Agent → Tool Registry**
+2. Click **New**
+3. Fill in the following details:
+   - **Tool Name**: `calculate`
+   - **Description**: `Performs mathematical calculations. Supports basic arithmetic, percentages, and common math functions.`
+   - **Python Function**: `ph_agent.agent.tools.calculator_tool.calculate_tool`
    - **Parameters JSON**: `{}` (leave empty or use `{}`)
    - **Is Enabled**: Checked ✓
    - **Requires Approval**: Unchecked (for testing)
@@ -79,18 +93,37 @@ The Tool Registry should validate:
 ### Step 3: Test Tool Loading via Chat
 1. Go to **PH Agent → Chat**
 2. Create a new chat session or use existing one
-3. Send a message that should trigger tool usage, e.g.:
+3. Send messages that should trigger different tools, e.g.:
+
+   **For DateTime Tool:**
    - "What's the current date and time?"
    - "Can you show me the current time in ISO format?"
    - "Use the datetime tool to show today's date"
    - "What time is it in UTC?"
    - "Show me the full date and time format"
 
+   **For Calculator Tool:**
+   - "Calculate 15 + 27"
+   - "What is 20% of 150?"
+   - "Multiply 12 by 8"
+   - "Calculate the square root of 64"
+   - "What is 100 divided by 4?"
+   - "Calculate 5 to the power of 3"
+   - "Subtract 42 from 100"
+
 ### Step 4: Verify Tool Execution
 The agent should:
-1. Recognize the tool is available
-2. Call the datetime tool with appropriate parameters
-3. Return a response like: "Current date/time [User: Administrator, Session: session_name]: 2026-04-21T10:30:45"
+1. Recognize which tool is appropriate for the query
+2. Call the correct tool with appropriate parameters
+3. Return responses like:
+
+   **For DateTime Tool:**
+   "Current date/time [User: Administrator, Session: session_name]: 2026-04-21T10:30:45"
+
+   **For Calculator Tool:**
+   "15 + 27 = 42 [User: Administrator, Session: session_name]"
+   "20% of 150 = 30.0 [User: Administrator, Session: session_name]"
+   "√64 = 8.0 [User: Administrator, Session: session_name]"
 
 **Note**: The actual date/time will be the current system time when the tool is called.
 
@@ -102,9 +135,16 @@ The agent should:
 3. The tool cache should be invalidated and reloaded
 
 ### Step 6: Test Multiple Tool Calls
-1. Create additional test tools in Tool Registry
-2. Send a message that might require multiple tools
-3. Verify the agent can handle multiple tool calls in one response
+1. With both datetime and calculator tools created
+2. Send messages that test tool selection:
+   - "What time is it and also calculate 25 * 4" (should use both tools)
+   - "Calculate 10 + 20 and show me the date" (should use both tools)
+   - "What's 15% of 200?" (should use calculator only)
+   - "What's today's date?" (should use datetime only)
+3. Verify the agent can:
+   - Select the correct tool(s) for each query
+   - Handle multiple tool calls in one response when appropriate
+   - Provide clear responses showing which tools were used
 
 ### Step 7: Test Error Handling
 1. Temporarily break the datetime tool (e.g., modify the Python file to raise an exception)
@@ -113,11 +153,34 @@ The agent should:
 
 ## Expected Behavior
 
-### Successful Tool Call
+### Successful Tool Calls
+
+**DateTime Tool:**
 ```
 User: What's the current date and time?
 Agent: [Calls datetime tool]
 Agent: The current date and time is Tuesday, April 21, 2026 at 10:30:45 AM UTC.
+```
+
+**Calculator Tool:**
+```
+User: Calculate 15 + 27
+Agent: [Calls calculator tool]
+Agent: 15 + 27 = 42
+```
+
+**Percentage Calculation:**
+```
+User: What is 20% of 150?
+Agent: [Calls calculator tool]
+Agent: 20% of 150 = 30.0
+```
+
+**Multiple Tools:**
+```
+User: What time is it and calculate 25 * 4
+Agent: [Calls datetime tool, then calculator tool]
+Agent: Current time is 10:30:45. 25 * 4 = 100
 ```
 
 ### Tool Not Found
@@ -132,6 +195,12 @@ Agent: Error: Tool 'non_existent_tool' not found
 User: Use datetime tool with invalid format
 Agent: [Calls datetime tool with invalid args]
 Agent: The datetime tool returned an error: Invalid format specified
+```
+
+```
+User: Calculate 10 divided by 0
+Agent: [Calls calculator tool]
+Agent: Error: Division by zero is not allowed
 ```
 
 ## Troubleshooting
@@ -178,8 +247,16 @@ print(f"Loaded {len(tools)} tools")
 for tool in tools:
     print(f"- {tool.name}: {tool.description}")
 ```
+
+You should see both tools loaded:
+```
+Loaded 2 tools
+- show_datetime: Shows the current date and time...
+- calculate: Performs mathematical calculations...
+```
+
 2. The cache should be automatically invalidated
-3. Try using the tool again to verify changes take effect
+3. Try using the tools again to verify changes take effect
 
 ### Step 6: Test Context Injection
 Verify that context is injected correctly:
@@ -187,17 +264,25 @@ Verify that context is injected correctly:
 - Session name should appear in tool output
 - Frappe session should be available in context
 
-### Step 7: Test Multiple Tools (Optional)
-1. Create additional tool records for testing
-2. Verify all enabled tools are loaded
-3. Test tool selection by the agent
+### Step 7: Test Tool Selection Logic
+1. With both tools enabled, test how the agent selects between them:
+   - **Clear tool selection**: "Calculate 15 + 20" → Should use calculator
+   - **Clear tool selection**: "What's the time?" → Should use datetime
+   - **Ambiguous queries**: "What's today?" → May use datetime or ask for clarification
+   - **Combined queries**: "Time and calculate 5*5" → Should use both tools
+
+2. Test edge cases:
+   - Disable one tool and verify it's not loaded
+   - Test with invalid parameters
+   - Test error handling for both tools
 
 ## Expected Results
 
 ### Successful Implementation
-- Tools are loaded from Tool Registry
+- Both tools are loaded from Tool Registry
 - Tools are registered with Microsoft Agent Framework
-- Agent can call tools during conversation
+- Agent can select appropriate tool based on query
+- Agent can handle multiple tools in one conversation
 - Context (user, session) is injected into tool calls
 - Cache is invalidated when Tool Registry changes
 
@@ -205,6 +290,8 @@ Verify that context is injected correctly:
 - Invalid Python function paths show validation errors
 - Disabled tools are not loaded
 - Tool errors are logged but don't crash the agent
+- Division by zero and other math errors are handled gracefully
+- Invalid parameters return helpful error messages
 
 ## Troubleshooting
 
@@ -222,7 +309,9 @@ Verify that context is injected correctly:
 
 3. **Tool not found in Tool Registry**
    - Check if tool is enabled (`is_enabled = 1`)
-   - Verify Python function path is correct (should be `ph_agent.agent.tools.datetime_tool.show_datetime_tool`)
+   - Verify Python function path is correct:
+     - DateTime: `ph_agent.agent.tools.datetime_tool.show_datetime_tool`
+     - Calculator: `ph_agent.agent.tools.calculator_tool.calculate_tool`
    - Check Frappe logs for import errors
 
 4. **Agent doesn't use tool**
@@ -288,15 +377,33 @@ Verify that context is injected correctly:
 
 ## Verification Checklist
 
-- [ ] Tool Registry record created successfully
+### Basic Functionality
+- [ ] DateTime Tool Registry record created successfully
+- [ ] Calculator Tool Registry record created successfully
 - [ ] Tool validation works (unique name, importable function)
-- [ ] Agent loads tools from Tool Registry
-- [ ] Tool is called during conversation
+- [ ] Agent loads both tools from Tool Registry
+- [ ] Tools are called during conversation
 - [ ] Context (user, session) appears in tool output
-- [ ] Cache invalidates on Tool Registry changes
-- [ ] Multiple tools can be loaded simultaneously
+- [ ] Cache invalidates when Tool Registry changes
+
+### Multiple Tool Testing
+- [ ] Both tools can be loaded simultaneously
+- [ ] Agent selects correct tool for date/time queries
+- [ ] Agent selects correct tool for math queries
+- [ ] Agent can handle queries requiring both tools
 - [ ] Disabled tools are not loaded
+
+### Error Handling
 - [ ] Error handling works for invalid tools
+- [ ] Math errors (division by zero) are handled gracefully
+- [ ] Invalid parameters return helpful error messages
+- [ ] Tool execution errors don't crash the agent
+
+### Advanced Testing
+- [ ] Test with different parameter combinations
+- [ ] Test tool selection with ambiguous queries
+- [ ] Verify cache invalidation after tool edits
+- [ ] Test with one tool disabled
 
 ## Notes
 - The streaming API (`get_agent_response_stream`) does not support tools yet

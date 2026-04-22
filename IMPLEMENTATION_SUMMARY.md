@@ -30,10 +30,26 @@ Successfully implemented a complete tool management system for the PH Agent Frap
 - **Solution**: Use standard OpenAI client for `get_agent_response()` while keeping `agent_framework` for tools
 - **Key Insight**: DeepSeek expects standard OpenAI format, not Azure format
 
-### Phase 5: Implementing Tool Execution
+### Phase 5: Fixing Helper Functions 404 Errors
+- **Problem**: "Error code: 404" in `generate_followup_suggestions()`, `generate_session_title()`, and `generate_conversation_summary()` functions
+- **Root Cause**: These helper functions were still using `agent_framework` which causes 404 errors with DeepSeek
+- **Solution**: Updated all three helper functions to use standard OpenAI client instead of `agent_framework`
+- **Implementation**: 
+  - Removed `agent_framework` imports (`Agent`, `Message`, `OpenAIChatClient`, `OpenAIChatOptions`)
+  - Updated `generate_session_title()` to use `openai_client.chat.completions.create()`
+  - Updated `generate_conversation_summary()` to use `openai_client.chat.completions.create()`
+  - Updated `generate_followup_suggestions()` to use `openai_client.chat.completions.create()` with JSON response format
+  - Removed unused `agent_framework` code from `get_agent_response()`
+
+### Phase 6: Implementing Tool Execution
 - **Problem**: Tools were detected but not executed
 - **Solution**: Implemented complete tool execution workflow in `get_agent_response()`
 - **Implementation**: Execute tools, send results back to LLM, get final response
+
+### Phase 7: Adding Calculator Tool for Testing
+- **Purpose**: Create a second test tool to verify multiple tool selection
+- **Implementation**: Created `calculator_tool.py` with support for basic arithmetic, percentages, powers, roots, logarithms
+- **Testing**: Verified calculator tool works correctly with "Calculate 15 + 27" returning "42"
 
 ## Changes Made
 
@@ -67,7 +83,17 @@ Successfully implemented a complete tool management system for the PH Agent Frap
   - Injects `FunctionInvocationContext` for metadata
   - Returns formatted date/time string
 
-### 3. DeepSeek Agent Integration (`ph_agent/agent/deepseek_agent.py`)
+### 3. Calculator Tool (`ph_agent/agent/tools/calculator_tool.py`)
+- **Purpose**: Math calculator for testing multiple tool selection
+- **Key Features**:
+  - Uses `@tool` decorator for registration
+  - Supports multiple calculation methods (expression, specific operations)
+  - Handles basic arithmetic, percentages, powers, roots, logarithms
+  - Includes safety checks for expression evaluation
+  - Provides detailed error messages for invalid inputs
+  - Injects context like datetime tool
+
+### 4. DeepSeek Agent Integration (`ph_agent/agent/deepseek_agent.py`)
 - **Purpose**: Main agent implementation with tool execution
 - **Key Changes**:
   - Fixed "Error code: 404" by using standard OpenAI client instead of `agent_framework` for DeepSeek
@@ -75,7 +101,7 @@ Successfully implemented a complete tool management system for the PH Agent Frap
   - Handles multiple tool calls in a single response
   - Executes tools and sends results back to LLM for final response
 
-### 4. Tool Registry DocType
+### 5. Tool Registry DocType
 - **Purpose**: Database storage for tool definitions
 - **Fields**: tool_name, module_path, function_name, description, parameters_json, is_enabled, requires_approval
 
@@ -92,6 +118,9 @@ Successfully implemented a complete tool management system for the PH Agent Frap
 
 ### Problem 4: "Error code: 404" with DeepSeek API
 **Solution**: Use standard OpenAI client (`openai.AsyncOpenAI`) instead of `agent_framework` for `get_agent_response()` because:
+
+### Problem 5: "Error code: 404" in helper functions
+**Solution**: Updated all three helper functions (`generate_session_title()`, `generate_conversation_summary()`, `generate_followup_suggestions()`) to use standard OpenAI client instead of `agent_framework`.
 - `agent_framework` uses Azure-like format: `{"type": "message", "role": "system", "content": [{"type": "input_text", "text": "message"}]}`
 - DeepSeek expects standard OpenAI format: `{"role": "system", "content": "message"}`
 - Standard OpenAI client works correctly with DeepSeek's OpenAI-compatible API
@@ -129,16 +158,28 @@ graph TD
 ## Testing
 
 ### Manual Testing Steps
-1. **Create Tool Registry record** for datetime tool
+1. **Create Tool Registry records** for both datetime and calculator tools
 2. **Send chat message** like "What's the current date?"
-3. **Verify** agent calls tool and returns date/time
-4. **Test cache invalidation** by editing tool record
-5. **Test error handling** with invalid tool parameters
+3. **Verify** agent calls datetime tool and returns date/time
+4. **Send chat message** like "Calculate 15 + 27"
+5. **Verify** agent calls calculator tool and returns "42"
+6. **Test multiple tool selection** by asking questions that could use either tool
+7. **Test cache invalidation** by editing tool records
+8. **Test error handling** with invalid tool parameters
 
 ### Expected Behavior
-- **Successful call**: "The current date is April 21, 2026"
+- **Successful datetime call**: "The current date is April 21, 2026"
+- **Successful calculator call**: "The result is 42"
 - **Tool not found**: "Error: Tool 'xyz' not found"
-- **Execution error**: "The datetime tool returned an error: ..."
+- **Execution error**: "The [tool] returned an error: ..."
+
+### Multiple Tool Selection Testing
+- **Scenario 1**: "What's today's date?" → Uses datetime tool
+- **Scenario 2**: "Calculate 15 + 27" → Uses calculator tool
+- **Scenario 3**: "What time is it?" → Uses datetime tool
+- **Scenario 4**: "What's 25% of 200?" → Uses calculator tool
+- **Scenario 5**: "Tell me the current timestamp" → Uses datetime tool
+- **Scenario 6**: "Calculate 2 to the power of 10" → Uses calculator tool
 
 ## Performance Considerations
 
@@ -156,10 +197,11 @@ graph TD
 
 1. `ph_agent/agent/tools/tool_manager.py` - New
 2. `ph_agent/agent/tools/datetime_tool.py` - New
-3. `ph_agent/agent/deepseek_agent.py` - Modified
-4. `ph_agent/agent/tools/__init__.py` - New
-5. `MANUAL_TESTING_GUIDE.md` - Updated
-6. `IMPLEMENTATION_SUMMARY.md` - Updated (this file)
+3. `ph_agent/agent/tools/calculator_tool.py` - New
+4. `ph_agent/agent/deepseek_agent.py` - Modified
+5. `ph_agent/agent/tools/__init__.py` - New
+6. `MANUAL_TESTING_GUIDE.md` - Updated
+7. `IMPLEMENTATION_SUMMARY.md` - Updated (this file)
 
 ## Dependencies
 - `agent-framework` (already in pyproject.toml)

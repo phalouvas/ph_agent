@@ -2,8 +2,7 @@ import asyncio
 import json
 
 import frappe
-from agent_framework import Agent, Message
-from agent_framework.openai import OpenAIChatClient, OpenAIChatOptions
+
 from openai import AsyncOpenAI, OpenAI, AuthenticationError, RateLimitError
 
 # Import ToolManager for loading tools
@@ -75,39 +74,11 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	# Create OpenAIChatClient
-	chat_client = OpenAIChatClient(
-		model=provider_doc.default_model,
-		async_client=openai_client,
-		base_url=provider_doc.api_url,
-	)
-
 	# Session prompt only; if empty, use None (no system prompt)
 	system_prompt = session.system_prompt or None
 
 	# Load tools from Tool Registry
 	tools = ToolManager.get_tools(session_name=session_name, user=frappe.session.user)
-	
-	# Create chat options with temperature and max_tokens
-	chat_options = OpenAIChatOptions(
-		temperature=temperature,
-		max_tokens=max_tokens
-	)
-	
-	# Check if provider supports tools - some providers don't support function calling
-	# We'll try with tools first, but handle the case where tools are not supported
-	agent_kwargs = {
-		"name": "PH Agent",
-		"instructions": system_prompt,
-		"client": chat_client,
-		"default_options": chat_options,
-	}
-	
-	# Only add tools if we have any
-	if tools:
-		agent_kwargs["tools"] = tools
-	
-	agent = Agent(**agent_kwargs)
 
 	# Build conversation history for context (only messages after last summary, INCLUDING the summary as system message)
 	# Get last summary message if exists
@@ -537,40 +508,28 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	# Create OpenAIChatClient
-	chat_client = OpenAIChatClient(
-		model=provider_doc.default_model,
-		async_client=openai_client,
-		base_url=provider_doc.api_url,
-	)
-
-	# Create chat options
-	chat_options = OpenAIChatOptions(
-		temperature=title_temperature,
-		max_tokens=max_tokens
-	)
-
-	title_agent = Agent(
-		name="Title Generator",
-		instructions=(
-			"Generate a concise 5-8 word title that summarises the following conversation. "
-			"Return only the title text — no quotes, no punctuation at the end, no explanation."
-		),
-		client=chat_client,
-		default_options=chat_options,
-	)
-
 	prompt = f"User: {user_message}\nAssistant: {agent_reply}"
 
 	try:
-		# Convert prompt string to Message object (wrap in list to avoid character splitting)
-		message = Message(role="user", contents=[prompt])
-		result = asyncio.run(
-			title_agent.run(
-				messages=message,
+		# Use standard OpenAI client instead of agent_framework to avoid 404 errors
+		response = asyncio.run(
+			openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=[
+					{
+						"role": "system",
+						"content": "Generate a concise 5-8 word title that summarises the following conversation. Return only the title text — no quotes, no punctuation at the end, no explanation."
+					},
+					{
+						"role": "user",
+						"content": prompt
+					}
+				],
+				temperature=title_temperature,
+				max_tokens=max_tokens,
 			)
 		)
-		return (result.final_output or "").strip()
+		return (response.choices[0].message.content or "").strip()
 	except Exception:
 		frappe.log_error(
 			title=f"Title generation failed for session {session_name}",
@@ -610,33 +569,6 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	# Create OpenAIChatClient
-	chat_client = OpenAIChatClient(
-		model=provider_doc.default_model,
-		async_client=openai_client,
-		base_url=provider_doc.api_url,
-	)
-
-	# Create chat options
-	chat_options = OpenAIChatOptions(
-		temperature=summary_temperature,
-		max_tokens=max_tokens
-	)
-
-	summary_agent = Agent(
-		name="Conversation Summarizer",
-		instructions=(
-			"You are a conversation summarizer. Your task is to create a concise summary of a chat conversation. "
-			"Focus on summarizing the FLOW of the conversation - who said what, what questions were asked, what answers were given. "
-			"DO NOT just repeat factual information from the conversation. Instead, summarize the conversation structure. "
-			"Example format: 'The user asked about [topic]. I explained [key points]. We discussed [main topics].' "
-			"Keep the summary to 2-3 sentences maximum. "
-			"Return only the summary text — no introductory phrases, no markdown, no extra text."
-		),
-		client=chat_client,
-		default_options=chat_options,
-	)
-
 	# Format conversation for summarization
 	formatted_conversation = []
 	for msg in conversation_history:
@@ -650,14 +582,25 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 	conversation_text = "\n".join(formatted_conversation)
 
 	try:
-		# Convert conversation text to Message object (wrap in list to avoid character splitting)
-		message = Message(role="user", contents=[conversation_text])
-		result = asyncio.run(
-			summary_agent.run(
-				messages=message,
+		# Use standard OpenAI client instead of agent_framework to avoid 404 errors
+		response = asyncio.run(
+			openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=[
+					{
+						"role": "system",
+						"content": "You are a conversation summarizer. Your task is to create a concise summary of a chat conversation. Focus on summarizing the FLOW of the conversation - who said what, what questions were asked, what answers were given. DO NOT just repeat factual information from the conversation. Instead, summarize the conversation structure. Example format: 'The user asked about [topic]. I explained [key points]. We discussed [main topics].' Keep the summary to 2-3 sentences maximum. Return only the summary text — no introductory phrases, no markdown, no extra text."
+					},
+					{
+						"role": "user",
+						"content": conversation_text
+					}
+				],
+				temperature=summary_temperature,
+				max_tokens=max_tokens,
 			)
 		)
-		return (result.final_output or "").strip()
+		return (response.choices[0].message.content or "").strip()
 	except Exception:
 		frappe.log_error(
 			title=f"Conversation summarization failed for session {session_name}",
@@ -694,31 +637,6 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 		else:
 			max_tokens = 4096   # 4K for DeepSeek Chat and other models
 	
-	# Create OpenAIChatClient
-	chat_client = OpenAIChatClient(
-		model=provider_doc.default_model,
-		async_client=openai_client,
-		base_url=provider_doc.api_url,
-	)
-
-	# Create chat options
-	chat_options = OpenAIChatOptions(
-		temperature=1.0,
-		max_tokens=max_tokens
-	)
-
-	suggestions_agent = Agent(
-		name="Suggestions Generator",
-		instructions=(
-			"You are a helpful assistant that suggests relevant follow-up questions based on the conversation. "
-			"Provide exactly 3 to 5 concise questions that the user might want to ask next. "
-			"Return only a JSON array of strings — no explanation, no markdown, no extra text. "
-			'Example: ["Question one?", "Question two?", "Question three?"]'
-		),
-		client=chat_client,
-		default_options=chat_options,
-	)
-
 	# Build a short summary of the conversation as context
 	context_parts = []
 	for msg in conversation_history[-6:]:  # last 6 messages max for context
@@ -727,17 +645,49 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 	context = "\n".join(context_parts)
 
 	try:
-		# Convert context string to Message object (wrap in list to avoid character splitting)
-		message = Message(role="user", contents=[context])
-		result = asyncio.run(
-			suggestions_agent.run(
-				messages=message,
+		# Use standard OpenAI client instead of agent_framework to avoid 404 errors
+		response = asyncio.run(
+			openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=[
+					{
+						"role": "system",
+						"content": "You are a helpful assistant that suggests relevant follow-up questions based on the conversation. Provide exactly 3 to 5 concise questions that the user might want to ask next. Return only a JSON array of strings — no explanation, no markdown, no extra text. Example: [\"Question one?\", \"Question two?\", \"Question three?\"]"
+					},
+					{
+						"role": "user",
+						"content": context
+					}
+				],
+				temperature=1.0,
+				max_tokens=max_tokens,
+				response_format={"type": "json_object"}
 			)
 		)
-		raw = (result.final_output or "").strip()
-		suggestions = json.loads(raw)
-		if isinstance(suggestions, list):
-			return [str(s) for s in suggestions if s][:5]
+		
+		raw = (response.choices[0].message.content or "").strip()
+		if raw:
+			# Try to parse as JSON
+			try:
+				data = json.loads(raw)
+				# Look for suggestions in the JSON response
+				if isinstance(data, dict):
+					# Try common keys
+					for key in ["suggestions", "questions", "follow_up", "response"]:
+						if key in data and isinstance(data[key], list):
+							suggestions = data[key]
+							return [str(s) for s in suggestions if s][:5]
+					# If no specific key found, try to extract any list
+					for value in data.values():
+						if isinstance(value, list):
+							suggestions = value
+							return [str(s) for s in suggestions if s][:5]
+				elif isinstance(data, list):
+					return [str(s) for s in data if s][:5]
+			except json.JSONDecodeError:
+				# If not valid JSON, try to extract suggestions from text
+				pass
+		
 		return []
 	except Exception:
 		frappe.log_error(

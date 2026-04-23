@@ -7,7 +7,7 @@ from collections.abc import Generator, Sequence
 from typing import Any
 
 import frappe
-from agent_framework import Agent, AgentSession, Content, HistoryProvider, Message
+from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMemoryHistoryProvider, Message
 from agent_framework_openai import OpenAIChatCompletionClient
 from openai import AsyncOpenAI
 from ph_agent.agent.tools.tool_manager import ToolManager
@@ -138,8 +138,38 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		instructions=session_doc.system_prompt or None,
 		tools=tools,
 		default_options=default_options,
-		context_providers=[FrappeMemoryProvider()],
+		context_providers=[InMemoryHistoryProvider(), FrappeMemoryProvider()],
 	)
+
+
+def _make_json_serializable(obj: Any) -> Any:
+	"""Convert an object to JSON-serializable form, handling common non-serializable types."""
+	try:
+		# First try to serialize directly
+		json.dumps(obj)
+		return obj
+	except (TypeError, ValueError):
+		# If direct serialization fails, convert recursively
+		if obj is None:
+			return None
+		elif isinstance(obj, (str, int, float, bool)):
+			return obj
+		elif isinstance(obj, dict):
+			return {k: _make_json_serializable(v) for k, v in obj.items()}
+		elif isinstance(obj, (list, tuple, set)):
+			return [_make_json_serializable(item) for item in obj]
+		elif hasattr(obj, 'to_dict'):
+			# Try to use to_dict() method if available
+			try:
+				return _make_json_serializable(obj.to_dict())
+			except Exception:
+				return str(obj)
+		elif hasattr(obj, '__dict__'):
+			# Convert object to dict
+			return _make_json_serializable(obj.__dict__)
+		else:
+			# For other types, convert to string representation
+			return str(obj)
 
 
 def _extract_approval_data(response) -> dict[str, Any] | None:
@@ -152,10 +182,26 @@ def _extract_approval_data(response) -> dict[str, Any] | None:
 				continue
 			function_call = content.function_call
 			arguments = function_call.arguments
+			
+			# Handle arguments - they could be dict, string, or string containing JSON
 			if isinstance(arguments, dict):
 				arguments_str = json.dumps(arguments)
+			elif isinstance(arguments, str):
+				# Try to parse as JSON first
+				try:
+					parsed = json.loads(arguments)
+					if isinstance(parsed, dict):
+						arguments_str = json.dumps(parsed)
+					else:
+						# Not a dict, store as string
+						arguments_str = arguments
+				except (json.JSONDecodeError, TypeError):
+					# Not valid JSON, store as string
+					arguments_str = arguments or "{}"
 			else:
-				arguments_str = arguments or "{}"
+				# Convert other types to string
+				arguments_str = str(arguments) if arguments is not None else "{}"
+			
 			approval_requests.append(
 				{
 					"id": content.id or "",
@@ -182,23 +228,35 @@ def _extract_approval_data(response) -> dict[str, Any] | None:
 	}
 
 
-def _run_agent(session_name: str, message: Message, user: str | None = None):
+def _run_agent(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None):
 	agent = _build_agent(session_name=session_name, user=user)
 	agent_session = AgentSession(session_id=session_name)
-	return asyncio.run(agent.run([message], session=agent_session))
+	if session_state:
+		agent_session.state.update(session_state)
+	messages = message if isinstance(message, list) else [message]
+	return asyncio.run(agent.run(messages, session=agent_session)), agent_session.state
 
 
 def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None]:
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
-	response = _run_agent(session_name, Message("user", [user_message]))
+	response, session_state = _run_agent(session_name, Message("user", [user_message]))
 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
 	input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
 	approval_data = _extract_approval_data(response)
+	if approval_data and session_state:
+		# Store session state in approval data for continuation
+		# Filter out in_memory provider data as it's temporary
+		filtered_state = {}
+		for key, value in session_state.items():
+			if key != "in_memory":
+				filtered_state[key] = value
+		# Convert to JSON-serializable form
+		approval_data["conversation_state"]["session_state"] = _make_json_serializable(filtered_state)
 	return response.text or "", input_tokens, output_tokens, approval_data
 
 
@@ -259,6 +317,11 @@ def get_agent_response_stream(
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
 				approval_data = _extract_approval_data(final_response)
 				if approval_data:
+					# Store session state in approval data for continuation.
+					# Filter out in_memory provider data: it holds live Message objects
+					# that cannot round-trip through JSON serialization.
+					filtered_state = {k: v for k, v in agent_session.state.items() if k != "in_memory"}
+					approval_data["conversation_state"]["session_state"] = _make_json_serializable(filtered_state)
 					result_queue.put(("approval", (approval_data, input_tokens, output_tokens)))
 				else:
 					result_queue.put(("done", ("", input_tokens, output_tokens)))
@@ -312,31 +375,110 @@ def run_after_approval(
 	approved: bool,
 	user: str | None = None,
 ) -> tuple[str, int, int]:
+	import traceback
+	
 	approval_requests = (conversation_state or {}).get("approval_requests") or []
 	if not approval_requests:
 		return "", 0, 0
 
 	approval = approval_requests[0]
+	frappe.log_error(
+		title=f"Debug: run_after_approval for {session_name}",
+		message=f"Approval data: {json.dumps(approval, indent=2)}"
+	)
+	
 	arguments_raw = approval.get("arguments") or "{}"
 	try:
 		arguments = json.loads(arguments_raw)
-	except Exception:
-		arguments = arguments_raw
+	except Exception as e:
+		# If we can't parse as JSON, try to handle it as a string
+		# Some arguments might be simple strings
+		frappe.log_error(
+			title=f"Debug: JSON parse error for arguments in {session_name}",
+			message=f"Arguments raw: {arguments_raw}, Error: {str(e)}"
+		)
+		if isinstance(arguments_raw, str) and arguments_raw.strip():
+			# Try to parse as JSON one more time with error handling
+			try:
+				arguments = json.loads(arguments_raw)
+			except Exception:
+				# If it's not valid JSON, treat it as a string argument
+				arguments = {"input": arguments_raw}
+		else:
+			arguments = {}
 
-	function_call = Content.from_function_call(
-		call_id=approval.get("call_id") or "",
-		name=approval.get("name") or "",
-		arguments=arguments,
-	)
-	approval_response = Content.from_function_approval_response(
-		approved=approved,
-		id=approval.get("id") or "",
-		function_call=function_call,
-	)
+	# Ensure arguments is a dictionary
+	if not isinstance(arguments, dict):
+		arguments = {"input": str(arguments)}
 
-	response = _run_agent(session_name, Message("user", [approval_response]), user=user)
-	input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
-	return response.text or "", input_tokens, output_tokens
+	frappe.log_error(
+		title=f"Debug: Creating function_call for {session_name}",
+		message=f"call_id: {approval.get('call_id')}, name: {approval.get('name')}, arguments: {arguments}"
+	)
+	
+	approval_id = approval.get("id") or ""
+
+	try:
+		# Recreate the inner function_call Content
+		function_call = Content.from_function_call(
+			call_id=approval.get("call_id") or "",
+			name=approval.get("name") or "",
+			arguments=arguments,
+		)
+		# Recreate the function_approval_request Content (what was in the original assistant message)
+		approval_request_content = Content.from_function_approval_request(
+			id=approval_id,
+			function_call=function_call,
+		)
+		# Create the approval response
+		approval_response = Content.from_function_approval_response(
+			approved=approved,
+			id=approval_id,
+			function_call=function_call,
+		)
+	except Exception as e:
+		frappe.log_error(
+			title=f"Error creating approval Content objects for {session_name}",
+			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}"
+		)
+		raise
+
+	# Get session state from conversation_state
+	session_state = conversation_state.get("session_state", {})
+	
+	frappe.log_error(
+		title=f"Debug: Calling _run_agent for {session_name}",
+		message=f"session_state: {json.dumps(session_state, indent=2)}"
+	)
+	
+	try:
+		# Per the Microsoft Agent Framework documentation, provide:
+		# 1. The assistant message containing the original function_approval_request
+		# 2. The user message containing the function_approval_response
+		# The original user query is supplied automatically by FrappeMemoryProvider.
+		messages = [
+			Message("assistant", [approval_request_content]),
+			Message("user", [approval_response]),
+		]
+		
+		response, _ = _run_agent(
+			session_name, 
+			messages,  # Pass both messages
+			user=user,
+			session_state=session_state
+		)
+		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
+		frappe.log_error(
+			title=f"Debug: _run_agent completed for {session_name}",
+			message=f"Response text length: {len(response.text or '')}, tokens: {input_tokens}/{output_tokens}"
+		)
+		return response.text or "", input_tokens, output_tokens
+	except Exception as e:
+		frappe.log_error(
+			title=f"Error in _run_agent for {session_name}",
+			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}"
+		)
+		raise
 
 
 def _provider_max_tokens(provider_doc) -> int:

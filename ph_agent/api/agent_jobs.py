@@ -649,6 +649,8 @@ def _execute_approved_tool(approval_name):
 	Args:
 		approval_name: Name of the Tool Approval Request document
 	"""
+	import traceback
+	
 	approval_doc = frappe.get_doc("Tool Approval Request", approval_name)
 	
 	if approval_doc.status != "Approved":
@@ -660,6 +662,11 @@ def _execute_approved_tool(approval_name):
 	
 	try:
 		notify_user = approval_doc.approver or frappe.session.user
+		# Log the conversation state for debugging
+		frappe.log_error(
+			title=f"Debug: Executing approved tool for {approval_name}",
+			message=f"Conversation state: {json.dumps(conversation_state, indent=2)}"
+		)
 		reply, input_tokens, output_tokens = run_after_approval(
 			session_name=session,
 			conversation_state=conversation_state,

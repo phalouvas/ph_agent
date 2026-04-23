@@ -84,21 +84,6 @@ def send_message(session, content, **kwargs):
 	# Get file_names from kwargs (might be passed as file_names or files)
 	file_names = kwargs.get('file_names') or kwargs.get('files')
 	
-	# Debug logging - check what Frappe actually passed
-	frappe.log_error(
-		f"DEBUG: send_message called. session={session}, content_length={len(content)}, "
-		f"file_names={file_names}, file_names type={type(file_names) if file_names is not None else 'None'}, "
-		f"all kwargs: {kwargs}",
-		"ph_agent_chat"
-	)
-	
-	# Also check frappe.form_dict to see all parameters sent
-	if hasattr(frappe.local, 'form_dict'):
-		frappe.log_error(
-			f"DEBUG: frappe.local.form_dict: {frappe.local.form_dict}",
-			"ph_agent_chat"
-		)
-
 	# Per-session lock: prevent concurrent processing
 	lock_key = f"ph_agent:lock:{session}"
 	if frappe.cache().get_value(lock_key):
@@ -127,43 +112,26 @@ def send_message(session, content, **kwargs):
 			# Try to parse as JSON first
 			try:
 				file_names_list = frappe.parse_json(file_names)
-				frappe.log_error(f"DEBUG: Parsed file_names as JSON string: {file_names_list}", "ph_agent_chat")
 			except Exception as e:
-				frappe.log_error(f"DEBUG: Failed to parse file_names as JSON: {str(e)}", "ph_agent_chat")
 				# Try as comma-separated string
 				if file_names.strip():
 					if ',' in file_names:
 						# Comma-separated list
 						file_names_list = [name.strip() for name in file_names.split(',') if name.strip()]
-						frappe.log_error(f"DEBUG: Parsed file_names as CSV: {file_names_list}", "ph_agent_chat")
 					else:
 						# Single file name
 						file_names_list = [file_names.strip()]
-						frappe.log_error(f"DEBUG: Single file name: {file_names_list}", "ph_agent_chat")
 		elif isinstance(file_names, (list, tuple)):
 			file_names_list = list(file_names)
-			frappe.log_error(f"DEBUG: file_names is already a list: {file_names_list}", "ph_agent_chat")
 		else:
 			frappe.log_error(f"DEBUG: Unexpected file_names type: {type(file_names)}, value: {file_names}", "ph_agent_chat")
-	
-	frappe.log_error(
-		f"DEBUG: Final file_names_list: {file_names_list}, length: {len(file_names_list)}",
-		"ph_agent_chat"
-	)
-	
+
 	# Also check what the actual File documents look like
 	if file_names_list:
 		for file_name in file_names_list:
-			frappe.log_error(f"DEBUG: Linking file {file_name} to message {user_msg.name}", "ph_agent_chat")
 			# Check if file exists
 			if frappe.db.exists("File", file_name):
 				file_doc = frappe.get_doc("File", file_name)
-				frappe.log_error(
-					f"DEBUG: File document details - name: {file_doc.name}, "
-					f"file_name: {file_doc.file_name}, file_url: {file_doc.file_url}, "
-					f"attached_to_name: {file_doc.attached_to_name}",
-					"ph_agent_chat"
-				)
 				frappe.db.set_value(
 					"File",
 					file_name,

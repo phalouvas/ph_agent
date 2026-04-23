@@ -43,20 +43,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	
-	# Debug logging
-	frappe.log_error(
-		f"DEBUG: _call_agent_background called. session={session}, user_msg_name={user_msg_name}, "
-		f"content_length={len(content)}, file_names={file_names}, provider={provider_doc.name}, "
-		f"max_file_size_mb={provider_doc.max_file_size_mb}",
-		"ph_agent_jobs"
-	)
-
 	# Build enriched content: append extracted file text from attachments
 	agent_content = content
 	if file_names:
 		file_texts = []
 		emit_status(frappe._("Extracting file contents…"))
-		frappe.log_error(f"DEBUG: Starting file extraction for {len(file_names)} files", "ph_agent_jobs")
 		for file_name in file_names:
 			if is_cancelled():
 				release_lock()
@@ -70,32 +61,14 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				return
 			# Get max file size from provider settings
 			max_size_mb = provider_doc.max_file_size_mb or 50
-			frappe.log_error(f"DEBUG: Extracting file {file_name} with size limit {max_size_mb} MB", "ph_agent_jobs")
 			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
 			if text:
 				filename = frappe.db.get_value('File', file_name, 'file_name')
-				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
-				frappe.log_error(
-					f"DEBUG: Successfully extracted text from {filename}. "
-					f"Type: {file_type_label}, Text length: {len(text)} chars",
-					"ph_agent_jobs"
-				)
-			else:
-				frappe.log_error(f"DEBUG: No text extracted from file {file_name}", "ph_agent_jobs")
+				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")							
 		if file_texts:
-			agent_content = content + "\n\n" + "\n\n".join(file_texts)
-			frappe.log_error(
-				f"DEBUG: Final agent_content length: {len(agent_content)} chars. "
-				f"Original content length: {len(content)}. Added {len(file_texts)} file texts.",
-				"ph_agent_jobs"
-			)
-		else:
-			frappe.log_error(f"DEBUG: No file texts were extracted. Using original content.", "ph_agent_jobs")
-	else:
-		frappe.log_error(f"DEBUG: No file_names provided. Using original content.", "ph_agent_jobs")
+			agent_content = content + "\n\n" + "\n\n".join(file_texts)		
 
 	emit_status(frappe._("Calling AI…"))
-	frappe.log_error(f"DEBUG: Calling AI with content (first 500 chars): {agent_content[:500]}", "ph_agent_jobs")
 
 	# Check if streaming should be used
 	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming
@@ -661,14 +634,6 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 		},
 		user=enqueued_by,
 	)
-	
-	frappe.log_error(
-		title=f"Tool approval needed: {primary_tool['name']}",
-		message=f"Session: {session}, Approval: {approval_doc.name}",
-		reference_doctype="Chat Session",
-		reference_name=session,
-	)
-
 
 def _execute_approved_tool(approval_name):
 	"""
@@ -683,12 +648,6 @@ def _execute_approved_tool(approval_name):
 	approval_doc = frappe.get_doc("Tool Approval Request", approval_name)
 	
 	if approval_doc.status != "Approved":
-		frappe.log_error(
-			title=f"Tool approval {approval_name} is not in Approved state",
-			message=f"Current status: {approval_doc.status}",
-			reference_doctype="Tool Approval Request",
-			reference_name=approval_name,
-		)
 		return
 	
 	session = approval_doc.chat_session

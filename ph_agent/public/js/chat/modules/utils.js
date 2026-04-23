@@ -29,7 +29,6 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                 // Prioritize file_name as it contains the original filename with extension
                 if (f.file_name) {
                     fileName = f.file_name;
-                    console.log("DEBUG fmtMsg: Using file_name as filename:", fileName);
                 }
                 
                 // If no file_name or empty filename, fall back to extracting from file_url
@@ -37,22 +36,13 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     // Extract filename from URL (e.g., "/files/ACC-SINV-2026-00225-1.pdf" -> "ACC-SINV-2026-00225-1.pdf")
                     const urlParts = f.file_url.split('/');
                     fileName = urlParts[urlParts.length - 1];
-                    console.log("DEBUG fmtMsg: Extracted filename from file_url:", fileName);
                 }
                 
-                console.log("DEBUG fmtMsg: File object from database:", {
-                    file_name: f.file_name,
-                    file_type: f.file_type,
-                    file_url: f.file_url,
-                    file_size: f.file_size,
-                    extracted_filename: fileName,
-                    full_object: f
-                });
+
                 
                 // Get extension from filename if it has one
                 if (fileName.includes('.')) {
                     extension = fileName.split(".").pop().toLowerCase();
-                    console.log("DEBUG fmtMsg: Got extension from filename:", extension);
                 }
                 
                 // If no extension in filename, try to get from file_type (MIME type)
@@ -86,15 +76,11 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     if (!extension) {
                         // If not in mapping, extract from MIME type (e.g., "application/pdf" -> "pdf")
                         extension = f.file_type.split('/').pop().toLowerCase();
-                        console.log("DEBUG fmtMsg: Extracted extension from file_type:", extension);
-                    } else {
-                        console.log("DEBUG fmtMsg: Mapped file_type to extension:", extension);
                     }
                     
                     // Also update filename to include extension if it doesn't have one
                     if (fileName && !fileName.includes('.')) {
                         fileName = fileName + '.' + extension;
-                        console.log("DEBUG fmtMsg: Added extension to filename:", fileName);
                     }
                 }
                 
@@ -104,11 +90,9 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     const urlFilename = urlParts[urlParts.length - 1];
                     if (urlFilename.includes('.')) {
                         extension = urlFilename.split('.').pop().toLowerCase();
-                        console.log("DEBUG fmtMsg: Got extension from file_url:", extension);
                         // Update filename if it doesn't have extension
                         if (fileName && !fileName.includes('.')) {
                             fileName = fileName + '.' + extension;
-                            console.log("DEBUG fmtMsg: Added extension from file_url to filename:", fileName);
                         }
                     }
                 }
@@ -123,7 +107,6 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     file_name: fileName, // Keep original property name
                     file_url: f.file_url, // Keep original property name
                 };
-                console.log("DEBUG fmtMsg: Created file object:", fileObj);
                 return fileObj;
             });
             const formattedMsg = {
@@ -155,7 +138,6 @@ window.phAgent.utils = window.phAgent.utils || (function() {
          */
         uploadFile: function(file) {
             return new Promise((resolve, reject) => {
-                console.log("DEBUG: uploadFile called with:", file);
                 
                 // Handle different file object structures
                 let fileBlob, fileName;
@@ -173,7 +155,6 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     fileBlob = file;
                     fileName = file.name || "uploaded_file";
                 } else {
-                    console.error("DEBUG: Unsupported file structure:", file);
                     reject(new Error("Unsupported file structure"));
                     return;
                 }
@@ -208,7 +189,6 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     // Check MIME type mapping first
                     if (mimeTypeToExtension[mimeType]) {
                         extension = mimeTypeToExtension[mimeType];
-                        console.log("DEBUG: Mapped MIME type to extension:", mimeType, "->", extension);
                     } else {
                         extension = mimeType.split('/').pop().toLowerCase();
                     }
@@ -218,10 +198,9 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                 
                 if (!fileName.includes('.') && extension) {
                     fileName = fileName + '.' + extension;
-                    console.log("DEBUG: Added extension to filename:", fileName);
                 }
                 
-                console.log("DEBUG: Uploading file:", fileName, "type:", fileBlob.type, "size:", fileBlob.size);
+
                 
                 const formData = new FormData();
                 formData.append("file", fileBlob, fileName);
@@ -234,7 +213,6 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     contentType: false,
                     headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
                     success: (r) => {
-                        console.log("DEBUG: upload_file API response:", r.message);
                         // Extract plain values from any Proxy objects
                         const response = r.message;
                         let plainResponse = response;
@@ -249,20 +227,9 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                                 }
                             }
                         }
-                        console.log("DEBUG: Plain upload response - all fields:", plainResponse);
-                        // Log specific fields we care about
-                        console.log("DEBUG: Upload response key fields:", {
-                            name: plainResponse.name,
-                            file_name: plainResponse.file_name,
-                            file_url: plainResponse.file_url,
-                            file_type: plainResponse.file_type,
-                            is_private: plainResponse.is_private,
-                            docstatus: plainResponse.docstatus
-                        });
                         resolve(plainResponse);
                     },
                     error: (xhr, status, error) => {
-                        console.error("DEBUG: File upload failed:", error, "status:", status, "xhr:", xhr);
                         reject(error);
                     },
                 });

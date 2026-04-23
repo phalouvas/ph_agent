@@ -38,7 +38,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
          */
         bindAll: function() {
             if (!_chat) {
-                console.error("Event handlers not initialized. Call init() first.");
                 return;
             }
             
@@ -120,7 +119,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     }
                 })
                 .catch((err) => {
-                    console.error("Failed to load token info:", err);
                 });
             
             frappe.call({
@@ -142,7 +140,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     _chat.setAttribute("messages-loaded", "true");
                 },
                 error: (err) => {
-                    console.error("Failed to fetch messages:", err);
                     _chat.setAttribute("messages-loaded", "true"); // Still mark as loaded
                 }
             });
@@ -153,9 +150,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
          * @param {Event} event - Event object with message details
          */
         handleSendMessage: function(event) {
-            console.log("DEBUG: handleSendMessage called with event.detail[0]:", event.detail[0]);
             const { roomId, content, files, replyMessage } = event.detail[0];
-            console.log("DEBUG: Extracted - roomId:", roomId, "content:", content, "files:", files, "files type:", typeof files, "files length:", files ? files.length : 0);
             
             const state = window.phAgent.state;
             const roomService = window.phAgent.roomService;
@@ -224,7 +219,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     // Check MIME type mapping first
                     if (mimeTypeToExtension[mimeType]) {
                         extension = mimeTypeToExtension[mimeType];
-                        console.log("DEBUG: Mapped MIME type to extension:", mimeType, "->", extension);
                     } else {
                         // Extract from MIME type (e.g., "application/pdf" -> "pdf")
                         extension = mimeType.split('/').pop();
@@ -281,45 +275,15 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             _chat.rooms = rooms;
             
             // Upload files first (if any), then send the message
-            console.log("DEBUG: Starting file upload. files:", files, "files count:", files ? files.length : 0);
-            
-            // Debug file structure
-            if (files && files.length > 0) {
-                console.log("DEBUG: First file structure:", {
-                    keys: Object.keys(files[0]),
-                    hasBlob: 'blob' in files[0],
-                    hasFile: 'file' in files[0],
-                    hasName: 'name' in files[0],
-                    fileType: typeof files[0],
-                    constructor: files[0].constructor.name,
-                    fullObject: JSON.parse(JSON.stringify(files[0])), // Convert to plain object
-                    fileObject: files[0].file ? JSON.parse(JSON.stringify(files[0].file)) : null
-                });
-                // Also check the actual File object properties
-                if (files[0].file) {
-                    const fileObj = files[0].file;
-                    console.log("DEBUG: File object properties:", {
-                        name: fileObj.name,
-                        type: fileObj.type,
-                        size: fileObj.size,
-                        lastModified: fileObj.lastModified,
-                        isFile: fileObj instanceof File,
-                        isBlob: fileObj instanceof Blob
-                    });
-                }
-            }
             
             const uploadPromises = (files || []).map((f) => {
-                console.log("DEBUG: Processing file for upload:", f);
                 // Handle different file object structures
                 let fileToUpload = f;
                 if (f.file) {
                     // Vue Advanced Chat might use {file: FileObject} structure
-                    console.log("DEBUG: File has 'file' property, using f.file");
                     fileToUpload = { blob: f.file, name: f.name || f.file.name };
                 } else if (f instanceof File || f instanceof Blob) {
                     // Direct File or Blob object
-                    console.log("DEBUG: File is File/Blob instance");
                     fileToUpload = { blob: f, name: f.name };
                 }
                 return utils.uploadFile(fileToUpload);
@@ -327,36 +291,27 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             Promise.all(uploadPromises)
                 .then((uploaded) => {
-                    console.log("DEBUG: Files uploaded successfully:", uploaded);
                     // Ensure we get plain string file names (not Proxies)
                     const fileNames = uploaded.map((u) => {
                         const name = u.name;
                         // Extract plain value if it's a Proxy/object
                         if (name && typeof name === 'object') {
-                            console.log("DEBUG: File name is object, extracting value:", name);
                             return String(name);
                         }
                         return name;
                     });
-                    console.log("DEBUG: File names to send:", fileNames);
                     
                     // Update optimistic message with Frappe file URLs
                     // This allows immediate download instead of waiting for message reload
-                    console.log("DEBUG: Upload response details:", uploaded);
-                    console.log("DEBUG: Current messages in state before update:", state.getMessages());
                     const updatedMessages = state.getMessages().map((msg) => {
                         if (msg._id === tempId && msg.files) {
-                            console.log("DEBUG: Found optimistic message to update:", msg._id);
                             // Update each file with Frappe URL if available
                             const updatedFiles = msg.files.map((file, index) => {
-                                console.log("DEBUG: Processing file at index", index, ":", file);
                                 if (index < uploaded.length && uploaded[index]) {
                                     const uploadedFile = uploaded[index];
-                                    console.log("DEBUG: Uploaded file info at index", index, ":", uploadedFile);
                                     // Get Frappe file URL from upload response
                                     const frappeUrl = uploadedFile.file_url || uploadedFile.url;
                                     if (frappeUrl) {
-                                        console.log("DEBUG: Updating file URL from blob to Frappe URL:", frappeUrl);
                                         
                                         // Extract filename from file_url if available (includes extension)
                                         let fileName = file.name;
@@ -366,7 +321,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                             const extractedName = urlParts[urlParts.length - 1];
                                             if (extractedName && extractedName.includes('.')) {
                                                 fileName = extractedName;
-                                                console.log("DEBUG: Extracted filename from file_url:", fileName);
                                             }
                                         }
                                         
@@ -398,26 +352,21 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                             // Check MIME type mapping first
                                             if (mimeTypeToExtension[uploadedFile.file_type]) {
                                                 extension = mimeTypeToExtension[uploadedFile.file_type];
-                                                console.log("DEBUG: Mapped MIME type to extension:", uploadedFile.file_type, "->", extension);
                                             } else {
                                                 extension = uploadedFile.file_type.split('/').pop().toLowerCase();
-                                                console.log("DEBUG: Got extension from file_type:", extension);
                                             }
                                         } else if (fileName.includes('.')) {
                                             extension = fileName.split('.').pop().toLowerCase();
-                                            console.log("DEBUG: Got extension from filename:", extension);
                                         }
                                         
                                         // If no filename from URL, use uploadedFile.file_name or file.name
                                         if (!fileName || !fileName.includes('.')) {
                                             fileName = uploadedFile.file_name || file.name;
-                                            console.log("DEBUG: Using file_name as filename:", fileName);
                                             
                                             // If filename still doesn't have extension but we have extension from MIME type,
                                             // construct filename with extension
                                             if (!fileName.includes('.') && extension) {
                                                 fileName = fileName + '.' + extension;
-                                                console.log("DEBUG: Constructed filename with extension:", fileName);
                                             }
                                         }
                                         
@@ -428,35 +377,26 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                             type: extension,
                                             extension: extension
                                         };
-                                        console.log("DEBUG: Updated file object:", updatedFile);
                                         return updatedFile;
-                                    } else {
-                                        console.log("DEBUG: No Frappe URL in upload response for file at index", index);
                                     }
-                                } else {
-                                    console.log("DEBUG: No uploaded file at index", index, "uploaded length:", uploaded.length);
                                 }
                                 return file;
                             });
                             const updatedMsg = { ...msg, files: updatedFiles };
-                            console.log("DEBUG: Updated message:", updatedMsg);
                             return updatedMsg;
                         }
                         return msg;
                     });
                     state.setMessages(updatedMessages);
                     _chat.messages = updatedMessages;
-                    console.log("DEBUG: Messages after update:", state.getMessages());
                     
                     // IMPORTANT: Frappe might not handle arrays properly in frappe.call
                     // Try different approaches:
                     // 1. JSON string
                     const filesJson = JSON.stringify(fileNames);
-                    console.log("DEBUG: Files as JSON string:", filesJson);
                     
                     // 2. Comma-separated string (simpler for Frappe)
                     const filesCsv = fileNames.join(',');
-                    console.log("DEBUG: Files as CSV:", filesCsv);
                     
                     // Try CSV first (simpler)
                     const args = { 
@@ -465,14 +405,12 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         file_names: filesCsv,  // Comma-separated string
                         reply_to: replyMessage?._id 
                     };
-                    console.log("DEBUG: Full args being sent:", JSON.stringify(args));
                     
                     frappe.call({
                         method: "ph_agent.api.chat.send_message",
                         args: args,
                         callback: (r) => {
                             if (!r.message) {
-                                console.error("Failed to send message");
                                 state.setIsProcessing(false);
                                 return;
                             }
@@ -501,7 +439,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                             _chat.rooms = updatedRooms;
                         },
                         error: (err) => {
-                            console.error("Failed to send message:", err);
                             state.setIsProcessing(false);
                             
                             // Remove typing indicator on error
@@ -517,7 +454,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     });
                 })
                 .catch((error) => {
-                    console.error("Failed to upload files:", error);
                     state.setIsProcessing(false);
                 });
         },
@@ -560,7 +496,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     }
                 },
                 error: (err) => {
-                    console.error("Failed to edit message:", err);
                     frappe.show_alert({ 
                         message: __("Failed to update message"), 
                         indicator: "red" 
@@ -595,7 +530,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     }
                 },
                 error: (err) => {
-                    console.error("Failed to delete message:", err);
                     frappe.show_alert({ 
                         message: __("Failed to delete message"), 
                         indicator: "red" 
@@ -644,7 +578,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         }
                     })
                     .catch(err => {
-                        console.error("Failed to delete messages:", err);
                         frappe.show_alert({ 
                             message: __("Failed to delete messages"), 
                             indicator: "red" 
@@ -689,7 +622,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     break;
                     
                 default:
-                    console.warn("Unknown message action:", action);
+                    // Unknown message action
             }
         },
         
@@ -730,7 +663,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     }
                 },
                 error: (err) => {
-                    console.error("Failed to regenerate message:", err);
                     state.setIsProcessing(false);
                     frappe.show_alert({ 
                         message: __("Failed to regenerate message"), 
@@ -793,7 +725,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                     });
                                 })
                                 .catch(err => {
-                                    console.error("Failed to update room title:", err);
                                     frappe.show_alert({ 
                                         message: __("Failed to update room title"), 
                                         indicator: "red" 
@@ -804,7 +735,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     dialog.show();
                 })
                 .catch(err => {
-                    console.error("Failed to get room info:", err);
                     frappe.show_alert({ 
                         message: __("Failed to load room information"), 
                         indicator: "red" 
@@ -820,7 +750,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             roomService.createNewSession()
                 .catch(err => {
                     if (err.message !== "Dialog cancelled") {
-                        console.error("Failed to create new session:", err);
                     }
                 });
         },
@@ -850,7 +779,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                     });
                                 })
                                 .catch(err => {
-                                    console.error("Failed to delete room:", err);
                                     frappe.show_alert({ 
                                         message: __("Failed to delete chat session"), 
                                         indicator: "red" 
@@ -864,7 +792,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     break;
                     
                 default:
-                    console.warn("Unknown room action:", action);
+                    // Unknown room action
             }
         },
         
@@ -875,16 +803,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
         handleOpenFile: function(event) {
             const { message, file } = event.detail[0];
             
-            console.log("DEBUG: File download requested - full event detail:", event.detail[0]);
-            console.log("DEBUG: File object structure:", JSON.stringify(file, null, 2));
-            console.log("DEBUG: File object keys:", Object.keys(file));
-            console.log("DEBUG: Checking all possible file properties:");
-            for (const key in file) {
-                console.log(`  ${key}:`, file[key]);
-            }
+
             
-            console.log("DEBUG: Message object:", JSON.stringify(message, null, 2));
-            console.log("DEBUG: Message files array:", message.files);
+
             
             // Check if this is a download action
             if (file.action === "download") {
@@ -939,9 +860,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         // Only use extracted name if it has an extension
                         if (extractedName.includes('.')) {
                             fileName = extractedName;
-                            console.log("Extracted filename with extension from URL:", fileName);
-                        } else {
-                            console.log("Extracted filename from URL but it has no extension:", extractedName);
                         }
                     }
                 }
@@ -950,14 +868,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 let fileExtension = file.extension || file.type || 
                                    (file.file && file.file.type && file.file.type.split('/').pop());
                 
-                console.log("DEBUG: File extension sources:", {
-                    fileExtension: fileExtension,
-                    file_extension: file.extension,
-                    file_type: file.type,
-                    file_file_type: file.file && file.file.type,
-                    fileName: fileName,
-                    fileNameHasDot: fileName.includes('.')
-                });
+
                 
                 // Common MIME type to extension mapping
                 const mimeTypeToExtension = {
@@ -992,11 +903,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         const mappedExtension = mimeTypeToExtension[fileExtension];
                         if (mappedExtension) {
                             fileExtension = mappedExtension;
-                            console.log("Mapped MIME type to extension:", fileExtension);
                         } else {
                             // Extract from MIME type (e.g., "application/pdf" -> "pdf")
                             fileExtension = fileExtension.split('/').pop();
-                            console.log("Extracted extension from MIME type:", fileExtension);
                         }
                     }
                     
@@ -1013,9 +922,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     // Only add extension if it looks like a valid extension
                     if (fileExtension && looksLikeExtension && fileExtension !== fileName.toLowerCase()) {
                         fileName = fileName + '.' + fileExtension;
-                        console.log("Added extension to filename:", fileName);
-                    } else {
-                        console.log("Not adding extension - doesn't look like valid extension:", fileExtension, "looksLikeExtension:", looksLikeExtension);
                     }
                 }
                 // If fileName already has extension but it doesn't match fileExtension, fix it
@@ -1031,27 +937,15 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         // Replace the extension
                         const baseName = fileName.substring(0, fileName.lastIndexOf('.'));
                         fileName = baseName + '.' + expectedExt;
-                        console.log("Fixed extension mismatch:", fileName);
                     } else {
                         // Just ensure it's lowercase
                         const parts = fileName.split('.');
                         parts[parts.length - 1] = parts[parts.length - 1].toLowerCase();
                         fileName = parts.join('.');
-                        console.log("Normalized extension to lowercase:", fileName);
                     }
                 }
                 
-                console.log("File download requested - details:", {
-                    messageId: message._id,
-                    fileName: fileName,
-                    fileNameIncludesDot: fileName.includes('.'),
-                    fileUrl: downloadUrl,
-                    fileAction: file.action,
-                    fileExtension: file.extension,
-                    fileType: file.type,
-                    file_name: file.file_name,
-                    name: file.name
-                });
+
                 
                 // For Frappe file attachments, we need to use the download API for private files
                 if (downloadUrl) {
@@ -1061,7 +955,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     // Check if it's already a full download API URL
                     if (downloadUrl.includes("/api/method/frappe.core.doctype.file.file.download_file")) {
                         // Already a download API URL, use as-is
-                        console.log("File URL is already a download API URL:", downloadUrl);
                     }
                     // Check if this is a Frappe file path (starts with /files/ or files/)
                     else if (downloadUrl.startsWith("/files/") || downloadUrl.startsWith("files/")) {
@@ -1075,20 +968,16 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         // We need to convert it to "/api/method/frappe.core.doctype.file.file.download_file?file_url=/files/filename.pdf"
                         const encodedFileUrl = encodeURIComponent(downloadUrl);
                         downloadUrl = `/api/method/frappe.core.doctype.file.file.download_file?file_url=${encodedFileUrl}`;
-                        console.log("Converted Frappe file URL to download API:", downloadUrl);
                     }
                     // Check if it's a relative path without /files/
                     else if (!downloadUrl.startsWith("http") && !downloadUrl.startsWith("/") && !downloadUrl.startsWith("blob:")) {
                         // Might be a relative file path, prepend with /
                         downloadUrl = "/" + downloadUrl;
-                        console.log("Converted relative file path to absolute:", downloadUrl);
                     }
                 }
                 
                 // If it's a valid URL, download it with proper filename
                 if (downloadUrl && (downloadUrl.startsWith("http") || downloadUrl.startsWith("/"))) {
-                    console.log("Downloading file URL:", downloadUrl, "with filename:", fileName);
-                    
                     // Create a temporary anchor element to trigger download with filename
                     const a = document.createElement('a');
                     a.href = downloadUrl;
@@ -1097,9 +986,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     // Otherwise, let the server's Content-Disposition header determine the filename
                     if (fileName.includes('.')) {
                         a.download = fileName; // This sets the filename for the download
-                        console.log("Setting download attribute with filename:", fileName);
-                    } else {
-                        console.log("Filename has no extension, not setting download attribute. Letting server determine filename.");
                     }
                     
                     a.target = '_blank'; // Open in new tab for safety
@@ -1109,18 +995,13 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
-                    
-                    console.log("File download triggered for:", fileName);
                 } else if (downloadUrl && downloadUrl.startsWith("blob:")) {
                     // Blob URLs are temporary and can't be downloaded directly
-                    console.warn("File has blob URL (temporary):", downloadUrl);
                     frappe.show_alert({
                         message: __("File is still being processed. Please wait a moment and try again."),
                         indicator: "orange"
                     });
                 } else {
-                    console.warn("Invalid file URL for download:", downloadUrl);
-                    console.warn("Full file object:", file);
                     frappe.show_alert({
                         message: __("Unable to download file. File URL not found or file is still processing."),
                         indicator: "red"
@@ -1129,7 +1010,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             } else if (file.action === "preview") {
                 // Preview action - let Vue Advanced Chat handle it
                 // The library will show media preview for images/videos
-                console.log("File preview requested for:", file.name);
             }
         },
         

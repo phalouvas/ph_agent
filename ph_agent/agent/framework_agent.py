@@ -189,23 +189,36 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 	try:
 		session_doc = frappe.get_doc("Chat Session", session_name)
 		if session_doc.session_state:
-			return json.loads(session_doc.session_state)
+			state = json.loads(session_doc.session_state)
+			return state
 		return {}
-	except Exception:
-		frappe.log_error(title="Error loading session state", message=f"Session: {session_name}")
+	except Exception as e:
+		frappe.log_error(
+			title="Error loading session state",
+			message=f"Session: {session_name}, Error: {e}"
+		)
 		return {}
 
 
 def _save_session_state(session_name: str, state: dict[str, Any]) -> None:
 	"""Save session state to Chat Session DocType."""
 	try:
+		if not state:
+			return
+		
 		filtered_state = _filter_session_state(state)
+		if not filtered_state:
+			return
+		
 		session_doc = frappe.get_doc("Chat Session", session_name)
-		session_doc.session_state = json.dumps(filtered_state, indent=2) if filtered_state else None
+		session_doc.session_state = json.dumps(filtered_state, indent=2)
 		session_doc.last_state_update = frappe.utils.now()
 		session_doc.save(ignore_permissions=True)
-	except Exception:
-		frappe.log_error(title="Error saving session state", message=f"Session: {session_name}")
+	except Exception as e:
+		frappe.log_error(
+			title="Error saving session state",
+			message=f"Session: {session_name}, Error: {e}"
+		)
 
 
 def _extract_approval_data(response) -> dict[str, Any] | None:
@@ -270,7 +283,8 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 	if session_state:
 		agent_session.state.update(session_state)
 	messages = message if isinstance(message, list) else [message]
-	return asyncio.run(agent.run(messages, session=agent_session)), agent_session.state
+	result = asyncio.run(agent.run(messages, session=agent_session))
+	return result, agent_session.state
 
 
 async def _run_agent_stream(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None):
@@ -340,6 +354,7 @@ def get_agent_response_stream(
 				)
 
 				seen_text = ""
+				chunk_count = 0
 
 				async for update in stream:
 					if stop_event.is_set():
@@ -359,6 +374,8 @@ def get_agent_response_stream(
 
 					if not delta:
 						continue
+
+					chunk_count += 1
 
 					# Emit in smaller pieces for smoother UI rendering.
 					for idx in range(0, len(delta), 80):
@@ -459,12 +476,13 @@ def run_after_approval(
 		arguments = {"input": str(arguments)}
 
 	approval_id = approval.get("id") or ""
+	tool_name = approval.get("name") or ""
 
 	try:
 		# Recreate the inner function_call Content
 		function_call = Content.from_function_call(
 			call_id=approval.get("call_id") or "",
-			name=approval.get("name") or "",
+			name=tool_name,
 			arguments=arguments,
 		)
 		# Recreate the function_approval_request Content (what was in the original assistant message)

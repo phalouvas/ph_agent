@@ -6,9 +6,11 @@ from frappe.model.document import Document
 
 
 # Safe namespace template for compiling custom/server scripts.
-# Provides controlled access to common modules without exposing dangerous builtins.
+# Provides controlled access to common modules.
+# __import__ is included so user scripts can use 'import math' etc.
 SAFE_NAMESPACE_TEMPLATE = {
     "__builtins__": {
+        "__import__": __import__,
         "abs": abs,
         "all": all,
         "any": any,

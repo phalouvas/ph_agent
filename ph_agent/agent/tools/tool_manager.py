@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Provides controlled access to common modules without dangerous builtins.
 SAFE_NAMESPACE = {
     "__builtins__": {
+        "__import__": __import__,
         "abs": abs,
         "all": all,
         "any": any,

@@ -16,6 +16,8 @@
   "column_break_1",
   "input_tokens",
   "output_tokens",
+  "session_state",
+  "last_state_update",
   "section_token_tracking",
   "estimated_conversation_tokens",
   "last_summary_message",
@@ -98,6 +100,21 @@
    "fieldname": "output_tokens",
    "fieldtype": "Int",
    "label": "Output Tokens"
+  },
+  {
+   "fieldname": "session_state",
+   "fieldtype": "Code",
+   "label": "Session State",
+   "options": "JSON",
+   "read_only": 1,
+   "description": "Persistent state for agent session (memory, skills, RAG context)"
+  },
+  {
+   "fieldname": "last_state_update",
+   "fieldtype": "Datetime",
+   "label": "Last State Update",
+   "read_only": 1,
+   "description": "When session state was last updated"
   },
   {
    "fieldname": "section_token_tracking",

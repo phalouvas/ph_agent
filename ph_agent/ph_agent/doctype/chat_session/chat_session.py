@@ -36,3 +36,15 @@ class ChatSession(Document):
 		if self.temperature is not None:
 			if self.temperature < 0 or self.temperature > 1.5:
 				frappe.throw(frappe._("Temperature must be between 0 and 1.5"))
+	
+	def before_save(self):
+		"""Clear session state when session is closed or archived."""
+		if self.has_value_changed("status"):
+			if self.status in ["Closed", "Archived"]:
+				# Clear session state when closing or archiving
+				self.session_state = None
+				self.last_state_update = None
+			elif self.status == "Open" and self._doc_before_save:
+				# If reopening a previously closed/archived session, keep state cleared
+				# (state would need to be rebuilt from conversation history)
+				pass

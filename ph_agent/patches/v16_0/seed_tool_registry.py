@@ -26,6 +26,16 @@ TOOL_REGISTRY_SEED = [
         "python_function": "ph_agent.agent.tools.calculator_tool.calculate_tool",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "circle_calculator",
+        "is_enabled": 1,
+        "script_type": "Custom Script",
+        "description": "Calculate the area and circumference of a circle given its radius. Demonstrates the Custom Script feature.",
+        "custom_script": "import math\n\ndef run_tool(radius, unit=\"meters\", ctx=None):\n    \"\"\"\n    Calculate the area and circumference of a circle given its radius.\n\n    Parameters:\n        radius (float): The radius of the circle (required).\n        unit (str): Unit of measurement (default: \"meters\").\n        ctx: Function invocation context (injected by the framework).\n\n    Returns:\n        A formatted string with the area and circumference.\n    \"\"\"\n    area = math.pi * radius ** 2\n    circumference = 2 * math.pi * radius\n\n    context_info = \"\"\n    if ctx and hasattr(ctx, \"kwargs\"):\n        user = ctx.kwargs.get(\"user\", \"\")\n        session = ctx.kwargs.get(\"session_name\", \"\")\n        if user or session:\n            context_info = f\" [User: {user}, Session: {session}]\"\n\n    return (\n        f\"Circle (radius={radius} {unit}): \"\n        f\"Area = {area:.2f} sq. {unit}, \"\n        f\"Circumference = {circumference:.2f} {unit}{context_info}\"\n    )\n",
+        "parameters_json": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"radius\": {\n      \"type\": \"number\",\n      \"description\": \"The radius of the circle\"\n    },\n    \"unit\": {\n      \"type\": \"string\",\n      \"description\": \"Unit of measurement (e.g., meters, feet)\"\n    }\n  },\n  \"required\": [\"radius\"]\n}",
+        "requires_approval": 0,
+    },
 ]
 
 

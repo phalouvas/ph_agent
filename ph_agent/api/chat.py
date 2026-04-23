@@ -340,7 +340,7 @@ def summarize_conversation(session, message_ids=None):
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 	
 	# Import here to avoid circular imports
-	from ph_agent.agent.deepseek_agent import generate_conversation_summary
+	from ph_agent.agent.framework_agent import generate_conversation_summary
 	
 	# Get session and provider
 	session_doc = frappe.get_doc("Chat Session", session)

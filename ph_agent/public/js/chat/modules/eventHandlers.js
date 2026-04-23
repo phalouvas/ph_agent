@@ -184,11 +184,34 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             // Create optimistic user message
             const tempId = "temp_" + Date.now();
+            
+            // Common MIME type to extension mapping (shared with handleOpenFile)
+            const mimeTypeToExtension = {
+                'application/pdf': 'pdf',
+                'application/msword': 'doc',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                'application/vnd.ms-excel': 'xls',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                'application/vnd.ms-powerpoint': 'ppt',
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                'text/plain': 'txt',
+                'text/csv': 'csv',
+                'text/html': 'html',
+                'application/json': 'json',
+                'application/xml': 'xml',
+                'application/epub+zip': 'epub',
+                'image/jpeg': 'jpg',
+                'image/jpg': 'jpg',
+                'image/png': 'png',
+                'image/gif': 'gif',
+                'image/svg+xml': 'svg'
+            };
+            
             const localFiles = (files || []).map((f) => {
                 // Try to get URL from different possible properties
                 // Vue Advanced Chat might provide file objects with different structures
                 const fileObj = f.file || f;
-                const fileName = f.name || fileObj.name || "file";
+                let fileName = f.name || fileObj.name || "file";
                 const fileUrl = f.url || f.localUrl || fileObj.url || 
                                (fileObj.blob && URL.createObjectURL(fileObj.blob)) ||
                                (fileObj instanceof Blob && URL.createObjectURL(fileObj));
@@ -198,14 +221,25 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 // Extract extension from MIME type or filename
                 let extension = "";
                 if (mimeType && mimeType.includes('/')) {
-                    // Extract from MIME type (e.g., "application/pdf" -> "pdf")
-                    extension = mimeType.split('/').pop();
+                    // Check MIME type mapping first
+                    if (mimeTypeToExtension[mimeType]) {
+                        extension = mimeTypeToExtension[mimeType];
+                        console.log("DEBUG: Mapped MIME type to extension:", mimeType, "->", extension);
+                    } else {
+                        // Extract from MIME type (e.g., "application/pdf" -> "pdf")
+                        extension = mimeType.split('/').pop();
+                    }
                 } else if (fileName.includes('.')) {
                     // Extract from filename
                     extension = fileName.split(".").pop().toLowerCase();
                 } else {
                     // Default to empty string
                     extension = "";
+                }
+                
+                // Ensure filename has extension
+                if (!fileName.includes('.') && extension) {
+                    fileName = fileName + '.' + extension;
                 }
                 
                 return {
@@ -326,7 +360,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                         
                                         // Extract filename from file_url if available (includes extension)
                                         let fileName = file.name;
-                                        if (frappeUrl.includes('/files/')) {
+                                        if (frappeUrl.includes('/files/') || frappeUrl.includes('/private/files/')) {
                                             // Extract filename from URL (e.g., "/files/ACC-SINV-2026-00225-1.pdf" -> "ACC-SINV-2026-00225-1.pdf")
                                             const urlParts = frappeUrl.split('/');
                                             const extractedName = urlParts[urlParts.length - 1];
@@ -336,20 +370,55 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                             }
                                         }
                                         
-                                        // If no filename from URL, use uploadedFile.file_name
-                                        if (!fileName || !fileName.includes('.')) {
-                                            fileName = uploadedFile.file_name || file.name;
-                                            console.log("DEBUG: Using file_name as filename:", fileName);
-                                        }
+                                        // Common MIME type to extension mapping (shared)
+                                        const mimeTypeToExtension = {
+                                            'application/pdf': 'pdf',
+                                            'application/msword': 'doc',
+                                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                                            'application/vnd.ms-excel': 'xls',
+                                            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                                            'application/vnd.ms-powerpoint': 'ppt',
+                                            'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                                            'text/plain': 'txt',
+                                            'text/csv': 'csv',
+                                            'text/html': 'html',
+                                            'application/json': 'json',
+                                            'application/xml': 'xml',
+                                            'application/epub+zip': 'epub',
+                                            'image/jpeg': 'jpg',
+                                            'image/jpg': 'jpg',
+                                            'image/png': 'png',
+                                            'image/gif': 'gif',
+                                            'image/svg+xml': 'svg'
+                                        };
                                         
                                         // Get extension from MIME type or filename
                                         let extension = "";
                                         if (uploadedFile.file_type) {
-                                            extension = uploadedFile.file_type.split('/').pop().toLowerCase();
-                                            console.log("DEBUG: Got extension from file_type:", extension);
+                                            // Check MIME type mapping first
+                                            if (mimeTypeToExtension[uploadedFile.file_type]) {
+                                                extension = mimeTypeToExtension[uploadedFile.file_type];
+                                                console.log("DEBUG: Mapped MIME type to extension:", uploadedFile.file_type, "->", extension);
+                                            } else {
+                                                extension = uploadedFile.file_type.split('/').pop().toLowerCase();
+                                                console.log("DEBUG: Got extension from file_type:", extension);
+                                            }
                                         } else if (fileName.includes('.')) {
                                             extension = fileName.split('.').pop().toLowerCase();
                                             console.log("DEBUG: Got extension from filename:", extension);
+                                        }
+                                        
+                                        // If no filename from URL, use uploadedFile.file_name or file.name
+                                        if (!fileName || !fileName.includes('.')) {
+                                            fileName = uploadedFile.file_name || file.name;
+                                            console.log("DEBUG: Using file_name as filename:", fileName);
+                                            
+                                            // If filename still doesn't have extension but we have extension from MIME type,
+                                            // construct filename with extension
+                                            if (!fileName.includes('.') && extension) {
+                                                fileName = fileName + '.' + extension;
+                                                console.log("DEBUG: Constructed filename with extension:", fileName);
+                                            }
                                         }
                                         
                                         const updatedFile = {
@@ -902,6 +971,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     'text/plain': 'txt',
                     'text/csv': 'csv',
                     'text/html': 'html',
+                    'application/json': 'json',
+                    'application/xml': 'xml',
+                    'application/epub+zip': 'epub',
                     'image/jpeg': 'jpg',
                     'image/jpg': 'jpg',
                     'image/png': 'png',

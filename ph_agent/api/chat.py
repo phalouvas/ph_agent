@@ -221,7 +221,7 @@ def get_history(session):
 		msg["files"] = frappe.get_all(
 			"File",
 			filters={"attached_to_doctype": "Chat Message", "attached_to_name": msg["name"]},
-			fields=["name", "file_name", "file_size", "file_url", "is_private"],
+			fields=["name", "file_name", "file_size", "file_url", "is_private", "file_type"],
 		)
 	return messages
 

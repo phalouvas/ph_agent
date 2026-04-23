@@ -26,17 +26,18 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                 let fileName = "";
                 let extension = "";
                 
-                if (f.file_url) {
+                // Prioritize file_name as it contains the original filename with extension
+                if (f.file_name) {
+                    fileName = f.file_name;
+                    console.log("DEBUG fmtMsg: Using file_name as filename:", fileName);
+                }
+                
+                // If no file_name or empty filename, fall back to extracting from file_url
+                if (!fileName && f.file_url) {
                     // Extract filename from URL (e.g., "/files/ACC-SINV-2026-00225-1.pdf" -> "ACC-SINV-2026-00225-1.pdf")
                     const urlParts = f.file_url.split('/');
                     fileName = urlParts[urlParts.length - 1];
                     console.log("DEBUG fmtMsg: Extracted filename from file_url:", fileName);
-                }
-                
-                // If no file_url or empty filename, fall back to file_name
-                if (!fileName && f.file_name) {
-                    fileName = f.file_name;
-                    console.log("DEBUG fmtMsg: Using file_name as filename:", fileName);
                 }
                 
                 console.log("DEBUG fmtMsg: File object from database:", {
@@ -51,15 +52,64 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                 // Get extension from filename if it has one
                 if (fileName.includes('.')) {
                     extension = fileName.split(".").pop().toLowerCase();
+                    console.log("DEBUG fmtMsg: Got extension from filename:", extension);
                 }
+                
                 // If no extension in filename, try to get from file_type (MIME type)
                 if (!extension && f.file_type) {
-                    // Extract from MIME type (e.g., "application/pdf" -> "pdf")
-                    extension = f.file_type.split('/').pop().toLowerCase();
-                    // Also update filename to include extension
+                    // Common MIME type to extension mapping (same as in eventHandlers.js)
+                    const mimeTypeToExtension = {
+                        'application/pdf': 'pdf',
+                        'application/msword': 'doc',
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                        'application/vnd.ms-excel': 'xls',
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                        'application/vnd.ms-powerpoint': 'ppt',
+                        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                        'text/plain': 'txt',
+                        'text/csv': 'csv',
+                        'text/html': 'html',
+                        'application/json': 'json',
+                        'application/xml': 'xml',
+                        'application/epub+zip': 'epub',
+                        'image/jpeg': 'jpg',
+                        'image/jpg': 'jpg',
+                        'image/png': 'png',
+                        'image/gif': 'gif',
+                        'image/svg+xml': 'svg'
+                    };
+                    
+                    // Extract MIME type and look up extension
+                    const mimeType = f.file_type.toLowerCase();
+                    extension = mimeTypeToExtension[mimeType];
+                    
+                    if (!extension) {
+                        // If not in mapping, extract from MIME type (e.g., "application/pdf" -> "pdf")
+                        extension = f.file_type.split('/').pop().toLowerCase();
+                        console.log("DEBUG fmtMsg: Extracted extension from file_type:", extension);
+                    } else {
+                        console.log("DEBUG fmtMsg: Mapped file_type to extension:", extension);
+                    }
+                    
+                    // Also update filename to include extension if it doesn't have one
                     if (fileName && !fileName.includes('.')) {
                         fileName = fileName + '.' + extension;
                         console.log("DEBUG fmtMsg: Added extension to filename:", fileName);
+                    }
+                }
+                
+                // If still no extension, try to extract from file_url as last resort
+                if (!extension && f.file_url && f.file_url.includes('.')) {
+                    const urlParts = f.file_url.split('/');
+                    const urlFilename = urlParts[urlParts.length - 1];
+                    if (urlFilename.includes('.')) {
+                        extension = urlFilename.split('.').pop().toLowerCase();
+                        console.log("DEBUG fmtMsg: Got extension from file_url:", extension);
+                        // Update filename if it doesn't have extension
+                        if (fileName && !fileName.includes('.')) {
+                            fileName = fileName + '.' + extension;
+                            console.log("DEBUG fmtMsg: Added extension from file_url to filename:", fileName);
+                        }
                     }
                 }
                 
@@ -126,6 +176,49 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     console.error("DEBUG: Unsupported file structure:", file);
                     reject(new Error("Unsupported file structure"));
                     return;
+                }
+                
+                // Ensure filename has extension
+                const mimeType = fileBlob.type || "";
+                let extension = "";
+                
+                // Common MIME type to extension mapping
+                const mimeTypeToExtension = {
+                    'application/pdf': 'pdf',
+                    'application/msword': 'doc',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                    'application/vnd.ms-excel': 'xls',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                    'application/vnd.ms-powerpoint': 'ppt',
+                    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                    'text/plain': 'txt',
+                    'text/csv': 'csv',
+                    'text/html': 'html',
+                    'application/json': 'json',
+                    'application/xml': 'xml',
+                    'application/epub+zip': 'epub',
+                    'image/jpeg': 'jpg',
+                    'image/jpg': 'jpg',
+                    'image/png': 'png',
+                    'image/gif': 'gif',
+                    'image/svg+xml': 'svg'
+                };
+                
+                if (mimeType && mimeType.includes('/')) {
+                    // Check MIME type mapping first
+                    if (mimeTypeToExtension[mimeType]) {
+                        extension = mimeTypeToExtension[mimeType];
+                        console.log("DEBUG: Mapped MIME type to extension:", mimeType, "->", extension);
+                    } else {
+                        extension = mimeType.split('/').pop().toLowerCase();
+                    }
+                } else if (fileName.includes('.')) {
+                    extension = fileName.split('.').pop().toLowerCase();
+                }
+                
+                if (!fileName.includes('.') && extension) {
+                    fileName = fileName + '.' + extension;
+                    console.log("DEBUG: Added extension to filename:", fileName);
                 }
                 
                 console.log("DEBUG: Uploading file:", fileName, "type:", fileBlob.type, "size:", fileBlob.size);

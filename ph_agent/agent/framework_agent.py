@@ -382,21 +382,12 @@ def run_after_approval(
 		return "", 0, 0
 
 	approval = approval_requests[0]
-	frappe.log_error(
-		title=f"Debug: run_after_approval for {session_name}",
-		message=f"Approval data: {json.dumps(approval, indent=2)}"
-	)
-	
 	arguments_raw = approval.get("arguments") or "{}"
 	try:
 		arguments = json.loads(arguments_raw)
 	except Exception as e:
 		# If we can't parse as JSON, try to handle it as a string
 		# Some arguments might be simple strings
-		frappe.log_error(
-			title=f"Debug: JSON parse error for arguments in {session_name}",
-			message=f"Arguments raw: {arguments_raw}, Error: {str(e)}"
-		)
 		if isinstance(arguments_raw, str) and arguments_raw.strip():
 			# Try to parse as JSON one more time with error handling
 			try:
@@ -411,11 +402,6 @@ def run_after_approval(
 	if not isinstance(arguments, dict):
 		arguments = {"input": str(arguments)}
 
-	frappe.log_error(
-		title=f"Debug: Creating function_call for {session_name}",
-		message=f"call_id: {approval.get('call_id')}, name: {approval.get('name')}, arguments: {arguments}"
-	)
-	
 	approval_id = approval.get("id") or ""
 
 	try:
@@ -446,11 +432,6 @@ def run_after_approval(
 	# Get session state from conversation_state
 	session_state = conversation_state.get("session_state", {})
 	
-	frappe.log_error(
-		title=f"Debug: Calling _run_agent for {session_name}",
-		message=f"session_state: {json.dumps(session_state, indent=2)}"
-	)
-	
 	try:
 		# Per the Microsoft Agent Framework documentation, provide:
 		# 1. The assistant message containing the original function_approval_request
@@ -467,11 +448,7 @@ def run_after_approval(
 			user=user,
 			session_state=session_state
 		)
-		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
-		frappe.log_error(
-			title=f"Debug: _run_agent completed for {session_name}",
-			message=f"Response text length: {len(response.text or '')}, tokens: {input_tokens}/{output_tokens}"
-		)
+		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)		
 		return response.text or "", input_tokens, output_tokens
 	except Exception as e:
 		frappe.log_error(

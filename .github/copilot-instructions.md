@@ -12,17 +12,22 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 
 ## Architecture
 - This is a **Frappe v16 app** that integrates agentic AI chatbots into ERPNext.
-- **Key integration points** are defined in `ph_agent/hooks.py` (document events, scheduled tasks, permission queries, method overrides, installation hooks). Most hooks are commented; enable only when needed.
+- **Key integration points** are defined in `ph_agent/hooks.py` (document events, scheduled tasks, permission queries, method overrides, installation hooks). Some hooks are already active:
+  - `doc_events` for Tool Registry, Chat Session, and Chat Message
+  - `app_include_css` for chat styles
+  - `page_js` for chat UI components
+  Enable additional hooks only when you have implemented the corresponding methods.
 - **Directory structure**:
   - `ph_agent/config/` – UI configuration (empty)
   - `ph_agent/patches/` – Database migrations (empty)
-  - `ph_agent/ph_agent/doctype/` – DocTypes: `Chat Session`, `Chat Message`, `LLM Provider`
+  - `ph_agent/ph_agent/doctype/` – DocTypes: `Chat Session`, `Chat Message`, `LLM Provider`, `Tool Registry`, `Tool Approval Request`
   - `ph_agent/ph_agent/page/chat/` – Chat UI implementation (`chat.js`)
   - `ph_agent/public/` – Front‑end assets (`css/chat.css`)
   - `ph_agent/templates/` – Website pages (empty)
   - `ph_agent/api/` – API endpoints (`chat.py`, `agent_jobs.py`)
-  - `ph_agent/agent/` – AI agent implementation (`deepseek_agent.py`)
-- **Dependencies** are managed via `pyproject.toml`. **Never** add `frappe` as a dependency (it’s installed and managed by bench). Add only app‑specific packages (e.g., `agent‑framework`).
+  - `ph_agent/ph_agent/agent/` – AI agent implementation (`framework_agent.py`)
+  - `ph_agent/ph_agent/agent/tools/` – Tool management (`tool_manager.py`, `calculator_tool.py`, `datetime_tool.py`)
+- **Dependencies** are managed via `pyproject.toml`. **Never** add `frappe` as a dependency (it’s installed and managed by bench). Add only app‑specific packages (e.g., `agent‑framework`, `agent‑framework‑openai`, `markitdown[pdf,docx,pptx,xlsx,html]`).
 - **Frappe conventions**: Use `@frappe.whitelist()` for API methods; follow Frappe’s document lifecycle.
 - **Real‑time communication**: Use `frappe.publish_realtime()` for WebSocket events (agent status, new messages).
 - **Background jobs**: Use `frappe.enqueue()` for long‑running tasks (LLM calls, PDF extraction).
@@ -42,7 +47,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   ```bash
   bench test‑site --app ph_agent
   ```
-- **Build system**: Flit (PEP 517/518). Python 3.11+ required (currently using 3.11.6).
+- **Build system**: Flit (PEP 517/518). Python 3.14+ required (configured in `pyproject.toml`).
 - **Code quality**: Pre‑commit hooks run Ruff, ESLint, Prettier, pyupgrade, etc. Always run `pre‑commit install` after cloning.
 
 ## Conventions
@@ -54,6 +59,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   - Use `MutationObserver` for DOM manipulation when integrating with third‑party components (e.g., hiding regenerate button on user messages).
   - Handle real‑time events with `frappe.realtime.on()`.
   - Use optimistic UI updates for better user experience.
+  - Implement conditional auto‑scroll for streaming responses (see `uiHelpers.js` and `realtimeListeners.js`).
 - **Avoid pitfalls**:
   - Do **not** add `frappe` to dependencies.
   - Always decorate API methods with `@frappe.whitelist()`.
@@ -61,6 +67,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   - Do not enable empty hooks.
   - Background jobs should check cancellation flags (`frappe.cache().get_value()`) for cooperative cancellation.
   - Ensure proper locking (`frappe.cache().set_value()`) for per‑session concurrent processing.
+  - When working with DeepSeek API, include `additionalProperties: false` in tool schemas and handle `reasoning_content` field for thinking mode.
 
 ## Reference Files
 | File | Purpose |
@@ -72,8 +79,17 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 | `README.md` | Installation and feature guide |
 | `ph_agent/api/chat.py` | Chat session and message API endpoints |
 | `ph_agent/api/agent_jobs.py` | Background job for LLM calls |
-| `ph_agent/agent/deepseek_agent.py` | LLM agent implementation |
+| `ph_agent/ph_agent/agent/framework_agent.py` | LLM agent implementation |
+| `ph_agent/ph_agent/agent/tools/tool_manager.py` | Tool registration and caching |
+| `ph_agent/ph_agent/doctype/tool_registry/tool_registry.py` | Tool Registry DocType controller |
+| `ph_agent/ph_agent/doctype/tool_approval_request/tool_approval_request.py` | Tool approval workflow |
 | `ph_agent/ph_agent/page/chat/chat.js` | Chat UI front‑end |
 | `ph_agent/public/css/chat.css` | Chat UI styles |
 
 **Link, don’t embed**: Consult the existing documentation (README, license) and Frappe framework documentation for broader context.
+
+## Tool Management & Approval Workflow
+- **Tool Registry**: Register Python functions as AI‑callable tools via the Tool Registry DocType.
+- **Tool Manager**: The `ToolManager` class loads, caches, and injects context into tools from the registry.
+- **Approval Mechanism**: Built‑in approval workflow using `Tool Approval Request` DocType and agent‑framework's `approval_mode="always_require"`.
+- **Middleware Integration**: Custom approval middleware can extend the built‑in approval logic with Frappe permissions and role‑based access.

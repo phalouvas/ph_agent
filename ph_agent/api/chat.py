@@ -10,6 +10,30 @@ def _emit_status(session, message):
 	)
 
 
+def _delete_files_attached_to_message(message_id):
+	"""
+	Delete all File documents attached to a Chat Message.
+	This properly deletes both the database record and the physical file from disk.
+	"""
+	# Get all File documents attached to this message
+	file_names = frappe.get_all(
+		"File",
+		filters={"attached_to_doctype": "Chat Message", "attached_to_name": message_id},
+		pluck="name",
+	)
+	
+	# Delete each File document properly (triggers on_trash to delete physical file)
+	for file_name in file_names:
+		try:
+			frappe.delete_doc("File", file_name, ignore_permissions=True, force=True)
+		except Exception as e:
+			# Log error but continue with other files
+			frappe.log_error(
+				f"Failed to delete file {file_name} attached to message {message_id}: {str(e)}",
+				"ph_agent_file_deletion"
+			)
+
+
 @frappe.whitelist()
 def update_session_provider(session, provider_name):
 	"""Change the LLM Provider on an existing Chat Session."""
@@ -230,7 +254,26 @@ def get_history(session):
 def delete_session(session):
 	"""Delete a Chat Session and all its messages."""
 	frappe.has_permission("Chat Session", ptype="delete", doc=session, throw=True)
-	frappe.db.delete("Chat Message", {"chat_session": session})
+	
+	# Get all messages in this session
+	messages = frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session},
+		pluck="name",
+	)
+	
+	# Delete each message individually (triggers on_trash hook which deletes attached files)
+	for message_id in messages:
+		try:
+			frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
+		except Exception as e:
+			# Log error but continue with other messages
+			frappe.log_error(
+				f"Failed to delete message {message_id} in session {session}: {str(e)}",
+				"ph_agent_session_deletion"
+			)
+	
+	# Delete the session
 	frappe.delete_doc("Chat Session", session, ignore_permissions=False)
 	frappe.db.commit()
 	return {"status": "ok"}
@@ -271,7 +314,7 @@ def edit_message(message_id, content):
 	deleted_ids = []
 	for subsequent_msg in subsequent:
 		deleted_ids.append(subsequent_msg.name)
-		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": subsequent_msg.name})
+		# Delete the chat message (on_trash hook will delete attached files)
 		frappe.delete_doc("Chat Message", subsequent_msg.name, ignore_permissions=True)
 
 	frappe.db.commit()
@@ -467,7 +510,7 @@ def delete_message(message_id):
 		frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 		frappe.db.commit()
 	
-	frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
+	# Delete the chat message (on_trash hook will delete attached files)
 	frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 	frappe.db.commit()
 
@@ -502,7 +545,7 @@ def delete_messages(message_ids):
 			# Clear the reference before deleting the message
 			frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 		
-		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
+		# Delete the chat message (on_trash hook will delete attached files)
 		frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 
 	frappe.db.commit()

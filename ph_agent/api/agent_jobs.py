@@ -911,6 +911,7 @@ def cancel_approvals_for_message(doc, method):
 	"""
 	Cascade delete all Tool Approval Requests linked to a Chat Message
 	when the message is deleted.
+	Also delete all File documents attached to the message.
 	
 	This runs in on_trash, which is called BEFORE Frappe's link validation,
 	so we delete the dependent records first to allow the message delete to proceed.
@@ -920,6 +921,7 @@ def cancel_approvals_for_message(doc, method):
 	
 	Called via doc_events hook: Chat Message > on_trash
 	"""
+	# Delete Tool Approval Requests
 	linked_requests = frappe.get_all(
 		"Tool Approval Request",
 		filters={"chat_message": doc.name},
@@ -927,4 +929,30 @@ def cancel_approvals_for_message(doc, method):
 	)
 	for req_name in linked_requests:
 		frappe.db.delete("Tool Approval Request", {"name": req_name})
+	
+	# Delete attached File documents
+	file_names = frappe.get_all(
+		"File",
+		filters={"attached_to_doctype": "Chat Message", "attached_to_name": doc.name},
+		pluck="name",
+	)
+	for file_name in file_names:
+		try:
+			# Check if file still exists (might have been deleted already)
+			if frappe.db.exists("File", file_name):
+				# Use force=True to bypass link validation (File references Chat Message being deleted)
+				frappe.delete_doc("File", file_name, ignore_permissions=True, force=True)
+			else:
+				# File was already deleted, log for debugging
+				frappe.log_error(
+					f"File {file_name} attached to message {doc.name} was already deleted",
+					"ph_agent_file_deletion"
+				)
+		except Exception as e:
+			# Log error but continue with other files
+			frappe.log_error(
+				f"Failed to delete file {file_name} attached to message {doc.name}: {str(e)}",
+				"ph_agent_file_deletion"
+			)
+	
 	frappe.db.commit()

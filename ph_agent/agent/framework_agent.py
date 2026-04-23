@@ -1,7 +1,9 @@
 import asyncio
+import inspect
 import json
 import queue
 import threading
+import time
 from collections.abc import Generator, Sequence
 from typing import Any
 
@@ -10,6 +12,9 @@ from agent_framework import Agent, AgentSession, Content, HistoryProvider, Messa
 from agent_framework_openai import OpenAIChatCompletionClient
 from openai import AsyncOpenAI
 from ph_agent.agent.tools.tool_manager import ToolManager
+
+
+logger = frappe.logger("ph_agent_streaming")
 
 
 class FrappeMemoryProvider(HistoryProvider):
@@ -209,9 +214,8 @@ def get_agent_response_stream(
 	if status_callback:
 		status_callback(frappe._("Calling AI…"))
 
-	agent = _build_agent(session_name=session_name)
-	agent_session = AgentSession(session_id=session_name)
-	stream = agent.run([Message("user", [user_message])], session=agent_session, stream=True)
+	site_name = getattr(frappe.local, "site", None)
+	active_user = getattr(frappe.session, "user", None)
 
 	result_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 	stop_event = threading.Event()
@@ -219,26 +223,93 @@ def get_agent_response_stream(
 	def _producer() -> None:
 		async def _consume() -> None:
 			try:
+				agent = _build_agent(session_name=session_name)
+				agent_session = AgentSession(session_id=session_name)
+				stream = agent.run([Message("user", [user_message])], session=agent_session, stream=True)
+				if inspect.isawaitable(stream):
+					stream = await stream
+
+				start_ts = time.time()
+				update_count = 0
+				emitted_chunks = 0
+				seen_text = ""
+				logger.info("stream.start session=%s", session_name)
+
 				async for update in stream:
+					update_count += 1
 					if stop_event.is_set():
 						break
-					chunk = update.text
-					if chunk:
-						result_queue.put(("chunk", chunk))
+
+					chunk = update.text or ""
+					if not chunk:
+						continue
+
+					# Some providers emit cumulative text in each update; convert to deltas.
+					if chunk.startswith(seen_text):
+						delta = chunk[len(seen_text) :]
+						seen_text = chunk
+					else:
+						delta = chunk
+						seen_text += delta
+
+					if not delta:
+						continue
+
+					# Emit in smaller pieces for smoother UI rendering.
+					for idx in range(0, len(delta), 80):
+						emitted_chunks += 1
+						result_queue.put(("chunk", delta[idx : idx + 80]))
+
+					if update_count <= 5 or update_count % 20 == 0:
+						logger.info(
+							"stream.update session=%s update=%s chunk_len=%s emitted=%s",
+							session_name,
+							update_count,
+							len(delta),
+							emitted_chunks,
+						)
+
 				if stop_event.is_set():
 					result_queue.put(("done", ("", 0, 0)))
 					return
+
 				final_response = await stream.get_final_response()
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
 				approval_data = _extract_approval_data(final_response)
 				if approval_data:
+					logger.info(
+						"stream.final session=%s updates=%s emitted=%s mode=approval duration=%.3fs",
+						session_name,
+						update_count,
+						emitted_chunks,
+						time.time() - start_ts,
+					)
 					result_queue.put(("approval", (approval_data, input_tokens, output_tokens)))
 				else:
+					logger.info(
+						"stream.final session=%s updates=%s emitted=%s mode=done duration=%.3fs",
+						session_name,
+						update_count,
+						emitted_chunks,
+						time.time() - start_ts,
+					)
 					result_queue.put(("done", ("", input_tokens, output_tokens)))
 			except Exception as exc:
+				logger.exception("stream.error session=%s err=%s", session_name, exc)
 				result_queue.put(("error", exc))
 
-		asyncio.run(_consume())
+		initialized = False
+		try:
+			if site_name:
+				frappe.init(site=site_name)
+				frappe.connect()
+				initialized = True
+				if active_user:
+					frappe.set_user(active_user)
+			asyncio.run(_consume())
+		finally:
+			if initialized:
+				frappe.destroy()
 
 	thread = threading.Thread(target=_producer, daemon=True)
 	thread.start()
@@ -248,7 +319,11 @@ def get_agent_response_stream(
 			stop_event.set()
 			raise asyncio.CancelledError()
 
-		event_type, payload = result_queue.get()
+		try:
+			event_type, payload = result_queue.get(timeout=0.2)
+		except queue.Empty:
+			continue
+
 		if event_type == "chunk":
 			yield payload, False, 0, 0
 			continue

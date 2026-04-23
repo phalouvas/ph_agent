@@ -4,14 +4,56 @@ import json
 import queue
 import threading
 from collections.abc import Generator, Sequence
+from pathlib import Path
 from typing import Any
 
 import frappe
 from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMemoryHistoryProvider, Message
 from agent_framework_openai import OpenAIChatCompletionClient
+from agent_framework._skills import SkillsProvider
 from openai import AsyncOpenAI
+from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
+from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
 
+
+
+def _build_skills_provider() -> SkillsProvider:
+	"""Build a SkillsProvider with both file-based and DocType-based skills.
+
+	File-based skills are auto-discovered from the site's ``private/files/skills/``
+	directory. DocType-based skills (code-defined) come from the Skill Registry.
+
+	When a DocType skill has the same name as a file-based skill, DocType
+	takes precedence — the file-based skill directory with the matching name
+	is excluded.
+	"""
+	# Get enabled DocType skill names
+	code_skills = get_code_skills()
+	doctype_skill_names = set(s.name for s in code_skills)
+
+	# Resolve the site's private files path
+	site_path = Path(frappe.get_site_path())
+	skills_dir = site_path / "private" / "files" / "skills"
+
+	# Determine file-based skill paths. Only exclude file-based skills when a
+	# DocType skill with the same name exists AND is enabled, so the DocType
+	# version takes precedence.
+	skill_paths = None
+	if skills_dir.exists():
+		all_dirs = [str(d) for d in skills_dir.iterdir() if d.is_dir()]
+		filtered_dirs = [
+			d for d in all_dirs
+			if Path(d).name not in doctype_skill_names
+		]
+		skill_paths = filtered_dirs if filtered_dirs else None
+
+	return SkillsProvider(
+		skill_paths=skill_paths,
+		skills=code_skills,
+		require_script_approval=True,
+		script_runner=run_file_script,
+	)
 
 
 class FrappeMemoryProvider(HistoryProvider):
@@ -133,12 +175,19 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	)
 	default_options = {"temperature": temperature, "max_tokens": max_tokens}
 
+	# Build skills provider from both file-based and DocType-based sources
+	skills_provider = _build_skills_provider()
+
 	return Agent(
 		client=chat_client,
 		instructions=session_doc.system_prompt or None,
 		tools=tools,
 		default_options=default_options,
-		context_providers=[InMemoryHistoryProvider(), FrappeMemoryProvider()],
+		context_providers=[
+			InMemoryHistoryProvider(),
+			FrappeMemoryProvider(),
+			skills_provider,
+		],
 	)
 
 

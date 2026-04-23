@@ -1,0 +1,72 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:SR-{skill_name}-{resource_name}",
+ "creation": "2026-04-23 00:00:00",
+ "doctype": "DocType",
+ "document_type": "",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "resource_name",
+  "description",
+  "resource_type",
+  "content",
+  "python_function"
+ ],
+ "fields": [
+  {
+   "fieldname": "resource_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Resource Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Description"
+  },
+  {
+   "default": "Static Text",
+   "fieldname": "resource_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Resource Type",
+   "options": "Static Text\nDynamic Function",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.resource_type == 'Static Text'",
+   "fieldname": "content",
+   "fieldtype": "Markdown Editor",
+   "in_list_view": 1,
+   "label": "Content",
+   "mandatory_depends_on": "eval:doc.resource_type == 'Static Text'"
+  },
+  {
+   "depends_on": "eval:doc.resource_type == 'Dynamic Function'",
+   "fieldname": "python_function",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Python Function",
+   "mandatory_depends_on": "eval:doc.resource_type == 'Dynamic Function'"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-23 00:00:00",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "Skill Resource",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

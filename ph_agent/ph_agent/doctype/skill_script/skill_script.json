@@ -1,0 +1,72 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:SS-{skill_name}-{script_name}",
+ "creation": "2026-04-23 00:00:00",
+ "doctype": "DocType",
+ "document_type": "",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "script_name",
+  "description",
+  "script_type",
+  "python_function",
+  "file"
+ ],
+ "fields": [
+  {
+   "fieldname": "script_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Script Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Description"
+  },
+  {
+   "default": "In-Process Function",
+   "fieldname": "script_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Script Type",
+   "options": "In-Process Function\nFile Reference",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.script_type == 'In-Process Function'",
+   "fieldname": "python_function",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Python Function",
+   "mandatory_depends_on": "eval:doc.script_type == 'In-Process Function'"
+  },
+  {
+   "depends_on": "eval:doc.script_type == 'File Reference'",
+   "fieldname": "file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "File",
+   "mandatory_depends_on": "eval:doc.script_type == 'File Reference'"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-23 00:00:00",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "Skill Script",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

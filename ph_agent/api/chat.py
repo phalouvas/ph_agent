@@ -10,6 +10,30 @@ def _emit_status(session, message):
 	)
 
 
+def _delete_files_attached_to_message(message_id):
+	"""
+	Delete all File documents attached to a Chat Message.
+	This properly deletes both the database record and the physical file from disk.
+	"""
+	# Get all File documents attached to this message
+	file_names = frappe.get_all(
+		"File",
+		filters={"attached_to_doctype": "Chat Message", "attached_to_name": message_id},
+		pluck="name",
+	)
+	
+	# Delete each File document properly (triggers on_trash to delete physical file)
+	for file_name in file_names:
+		try:
+			frappe.delete_doc("File", file_name, ignore_permissions=True, force=True)
+		except Exception as e:
+			# Log error but continue with other files
+			frappe.log_error(
+				f"Failed to delete file {file_name} attached to message {message_id}: {str(e)}",
+				"ph_agent_file_deletion"
+			)
+
+
 @frappe.whitelist()
 def update_session_provider(session, provider_name):
 	"""Change the LLM Provider on an existing Chat Session."""
@@ -53,9 +77,27 @@ def create_session(provider_name=None):
 
 
 @frappe.whitelist()
-def send_message(session, content, file_names=None):
+def send_message(session, content, **kwargs):
 	"""Store a user message and enqueue the LLM agent response as a background job."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
+	
+	# Get file_names from kwargs (might be passed as file_names or files)
+	file_names = kwargs.get('file_names') or kwargs.get('files')
+	
+	# Debug logging - check what Frappe actually passed
+	frappe.log_error(
+		f"DEBUG: send_message called. session={session}, content_length={len(content)}, "
+		f"file_names={file_names}, file_names type={type(file_names) if file_names is not None else 'None'}, "
+		f"all kwargs: {kwargs}",
+		"ph_agent_chat"
+	)
+	
+	# Also check frappe.form_dict to see all parameters sent
+	if hasattr(frappe.local, 'form_dict'):
+		frappe.log_error(
+			f"DEBUG: frappe.local.form_dict: {frappe.local.form_dict}",
+			"ph_agent_chat"
+		)
 
 	# Per-session lock: prevent concurrent processing
 	lock_key = f"ph_agent:lock:{session}"
@@ -78,13 +120,57 @@ def send_message(session, content, file_names=None):
 	).insert(ignore_permissions=False)
 
 	# Link any uploaded files to this message
-	file_names_list = frappe.parse_json(file_names) if isinstance(file_names, str) else (file_names or [])
-	for file_name in file_names_list:
-		frappe.db.set_value(
-			"File",
-			file_name,
-			{"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},
-		)
+	# Handle different formats: JSON string, comma-separated string, list, or None
+	file_names_list = []
+	if file_names is not None:
+		if isinstance(file_names, str):
+			# Try to parse as JSON first
+			try:
+				file_names_list = frappe.parse_json(file_names)
+				frappe.log_error(f"DEBUG: Parsed file_names as JSON string: {file_names_list}", "ph_agent_chat")
+			except Exception as e:
+				frappe.log_error(f"DEBUG: Failed to parse file_names as JSON: {str(e)}", "ph_agent_chat")
+				# Try as comma-separated string
+				if file_names.strip():
+					if ',' in file_names:
+						# Comma-separated list
+						file_names_list = [name.strip() for name in file_names.split(',') if name.strip()]
+						frappe.log_error(f"DEBUG: Parsed file_names as CSV: {file_names_list}", "ph_agent_chat")
+					else:
+						# Single file name
+						file_names_list = [file_names.strip()]
+						frappe.log_error(f"DEBUG: Single file name: {file_names_list}", "ph_agent_chat")
+		elif isinstance(file_names, (list, tuple)):
+			file_names_list = list(file_names)
+			frappe.log_error(f"DEBUG: file_names is already a list: {file_names_list}", "ph_agent_chat")
+		else:
+			frappe.log_error(f"DEBUG: Unexpected file_names type: {type(file_names)}, value: {file_names}", "ph_agent_chat")
+	
+	frappe.log_error(
+		f"DEBUG: Final file_names_list: {file_names_list}, length: {len(file_names_list)}",
+		"ph_agent_chat"
+	)
+	
+	# Also check what the actual File documents look like
+	if file_names_list:
+		for file_name in file_names_list:
+			frappe.log_error(f"DEBUG: Linking file {file_name} to message {user_msg.name}", "ph_agent_chat")
+			# Check if file exists
+			if frappe.db.exists("File", file_name):
+				file_doc = frappe.get_doc("File", file_name)
+				frappe.log_error(
+					f"DEBUG: File document details - name: {file_doc.name}, "
+					f"file_name: {file_doc.file_name}, file_url: {file_doc.file_url}, "
+					f"attached_to_name: {file_doc.attached_to_name}",
+					"ph_agent_chat"
+				)
+				frappe.db.set_value(
+					"File",
+					file_name,
+					{"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},
+				)
+			else:
+				frappe.log_error(f"DEBUG: File {file_name} does not exist in database!", "ph_agent_chat")
 
 	frappe.db.commit()
 
@@ -159,7 +245,7 @@ def get_history(session):
 		msg["files"] = frappe.get_all(
 			"File",
 			filters={"attached_to_doctype": "Chat Message", "attached_to_name": msg["name"]},
-			fields=["name", "file_name", "file_size", "file_url", "is_private"],
+			fields=["name", "file_name", "file_size", "file_url", "is_private", "file_type"],
 		)
 	return messages
 
@@ -168,7 +254,26 @@ def get_history(session):
 def delete_session(session):
 	"""Delete a Chat Session and all its messages."""
 	frappe.has_permission("Chat Session", ptype="delete", doc=session, throw=True)
-	frappe.db.delete("Chat Message", {"chat_session": session})
+	
+	# Get all messages in this session
+	messages = frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session},
+		pluck="name",
+	)
+	
+	# Delete each message individually (triggers on_trash hook which deletes attached files)
+	for message_id in messages:
+		try:
+			frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
+		except Exception as e:
+			# Log error but continue with other messages
+			frappe.log_error(
+				f"Failed to delete message {message_id} in session {session}: {str(e)}",
+				"ph_agent_session_deletion"
+			)
+	
+	# Delete the session
 	frappe.delete_doc("Chat Session", session, ignore_permissions=False)
 	frappe.db.commit()
 	return {"status": "ok"}
@@ -209,7 +314,7 @@ def edit_message(message_id, content):
 	deleted_ids = []
 	for subsequent_msg in subsequent:
 		deleted_ids.append(subsequent_msg.name)
-		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": subsequent_msg.name})
+		# Delete the chat message (on_trash hook will delete attached files)
 		frappe.delete_doc("Chat Message", subsequent_msg.name, ignore_permissions=True)
 
 	frappe.db.commit()
@@ -405,7 +510,7 @@ def delete_message(message_id):
 		frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 		frappe.db.commit()
 	
-	frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
+	# Delete the chat message (on_trash hook will delete attached files)
 	frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 	frappe.db.commit()
 
@@ -440,7 +545,7 @@ def delete_messages(message_ids):
 			# Clear the reference before deleting the message
 			frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 		
-		frappe.db.delete("File", {"attached_to_doctype": "Chat Message", "attached_to_name": message_id})
+		# Delete the chat message (on_trash hook will delete attached files)
 		frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 
 	frappe.db.commit()

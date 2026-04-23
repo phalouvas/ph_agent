@@ -2,7 +2,7 @@ import asyncio
 
 import frappe
 from ph_agent.agent.deepseek_agent import generate_followup_suggestions, generate_session_title, get_agent_response, get_agent_response_stream
-from ph_agent.utils.pdf import extract_pdf_text
+from ph_agent.utils.file_extractor import extract_file_text
 
 
 def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
@@ -39,11 +39,24 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		)
 		return
 
-	# Build enriched content: append extracted PDF text from attachments
+	# Get provider settings early for file size limits
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	
+	# Debug logging
+	frappe.log_error(
+		f"DEBUG: _call_agent_background called. session={session}, user_msg_name={user_msg_name}, "
+		f"content_length={len(content)}, file_names={file_names}, provider={provider_doc.name}, "
+		f"max_file_size_mb={provider_doc.max_file_size_mb}",
+		"ph_agent_jobs"
+	)
+
+	# Build enriched content: append extracted file text from attachments
 	agent_content = content
 	if file_names:
-		pdf_texts = []
-		emit_status(frappe._("Extracting PDF text…"))
+		file_texts = []
+		emit_status(frappe._("Extracting file contents…"))
+		frappe.log_error(f"DEBUG: Starting file extraction for {len(file_names)} files", "ph_agent_jobs")
 		for file_name in file_names:
 			if is_cancelled():
 				release_lock()
@@ -55,17 +68,36 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					user=enqueued_by,
 				)
 				return
-			text = extract_pdf_text(file_name)
+			# Get max file size from provider settings
+			max_size_mb = provider_doc.max_file_size_mb or 50
+			frappe.log_error(f"DEBUG: Extracting file {file_name} with size limit {max_size_mb} MB", "ph_agent_jobs")
+			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
 			if text:
-				pdf_texts.append(f"[PDF: {frappe.db.get_value('File', file_name, 'file_name')}]\n{text}")
-		if pdf_texts:
-			agent_content = content + "\n\n" + "\n\n".join(pdf_texts)
+				filename = frappe.db.get_value('File', file_name, 'file_name')
+				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
+				frappe.log_error(
+					f"DEBUG: Successfully extracted text from {filename}. "
+					f"Type: {file_type_label}, Text length: {len(text)} chars",
+					"ph_agent_jobs"
+				)
+			else:
+				frappe.log_error(f"DEBUG: No text extracted from file {file_name}", "ph_agent_jobs")
+		if file_texts:
+			agent_content = content + "\n\n" + "\n\n".join(file_texts)
+			frappe.log_error(
+				f"DEBUG: Final agent_content length: {len(agent_content)} chars. "
+				f"Original content length: {len(content)}. Added {len(file_texts)} file texts.",
+				"ph_agent_jobs"
+			)
+		else:
+			frappe.log_error(f"DEBUG: No file texts were extracted. Using original content.", "ph_agent_jobs")
+	else:
+		frappe.log_error(f"DEBUG: No file_names provided. Using original content.", "ph_agent_jobs")
 
 	emit_status(frappe._("Calling AI…"))
+	frappe.log_error(f"DEBUG: Calling AI with content (first 500 chars): {agent_content[:500]}", "ph_agent_jobs")
 
 	# Check if streaming should be used
-	session_doc = frappe.get_doc("Chat Session", session)
-	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming
 
 	# Create placeholder message for both streaming and non-streaming
@@ -879,6 +911,7 @@ def cancel_approvals_for_message(doc, method):
 	"""
 	Cascade delete all Tool Approval Requests linked to a Chat Message
 	when the message is deleted.
+	Also delete all File documents attached to the message.
 	
 	This runs in on_trash, which is called BEFORE Frappe's link validation,
 	so we delete the dependent records first to allow the message delete to proceed.
@@ -888,6 +921,7 @@ def cancel_approvals_for_message(doc, method):
 	
 	Called via doc_events hook: Chat Message > on_trash
 	"""
+	# Delete Tool Approval Requests
 	linked_requests = frappe.get_all(
 		"Tool Approval Request",
 		filters={"chat_message": doc.name},
@@ -895,4 +929,30 @@ def cancel_approvals_for_message(doc, method):
 	)
 	for req_name in linked_requests:
 		frappe.db.delete("Tool Approval Request", {"name": req_name})
+	
+	# Delete attached File documents
+	file_names = frappe.get_all(
+		"File",
+		filters={"attached_to_doctype": "Chat Message", "attached_to_name": doc.name},
+		pluck="name",
+	)
+	for file_name in file_names:
+		try:
+			# Check if file still exists (might have been deleted already)
+			if frappe.db.exists("File", file_name):
+				# Use force=True to bypass link validation (File references Chat Message being deleted)
+				frappe.delete_doc("File", file_name, ignore_permissions=True, force=True)
+			else:
+				# File was already deleted, log for debugging
+				frappe.log_error(
+					f"File {file_name} attached to message {doc.name} was already deleted",
+					"ph_agent_file_deletion"
+				)
+		except Exception as e:
+			# Log error but continue with other files
+			frappe.log_error(
+				f"Failed to delete file {file_name} attached to message {doc.name}: {str(e)}",
+				"ph_agent_file_deletion"
+			)
+	
 	frappe.db.commit()

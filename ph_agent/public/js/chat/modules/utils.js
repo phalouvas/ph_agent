@@ -20,12 +20,112 @@ window.phAgent.utils = window.phAgent.utils || (function() {
          */
         fmtMsg: function(m, currentUserId, agentId = "ph_agent") {
             const dt = new Date((m.creation || "").replace(" ", "T"));
-            const files = (m.files || []).map((f) => ({
-                name: f.file_name,
-                size: f.file_size,
-                type: (f.file_name || "").split(".").pop().toLowerCase(),
-                url: f.file_url,
-            }));
+            const files = (m.files || []).map((f) => {
+                // Try to get filename from file_url first (includes extension)
+                // file_url format: "/files/filename.pdf"
+                let fileName = "";
+                let extension = "";
+                
+                // Prioritize file_name as it contains the original filename with extension
+                if (f.file_name) {
+                    fileName = f.file_name;
+                    console.log("DEBUG fmtMsg: Using file_name as filename:", fileName);
+                }
+                
+                // If no file_name or empty filename, fall back to extracting from file_url
+                if (!fileName && f.file_url) {
+                    // Extract filename from URL (e.g., "/files/ACC-SINV-2026-00225-1.pdf" -> "ACC-SINV-2026-00225-1.pdf")
+                    const urlParts = f.file_url.split('/');
+                    fileName = urlParts[urlParts.length - 1];
+                    console.log("DEBUG fmtMsg: Extracted filename from file_url:", fileName);
+                }
+                
+                console.log("DEBUG fmtMsg: File object from database:", {
+                    file_name: f.file_name,
+                    file_type: f.file_type,
+                    file_url: f.file_url,
+                    file_size: f.file_size,
+                    extracted_filename: fileName,
+                    full_object: f
+                });
+                
+                // Get extension from filename if it has one
+                if (fileName.includes('.')) {
+                    extension = fileName.split(".").pop().toLowerCase();
+                    console.log("DEBUG fmtMsg: Got extension from filename:", extension);
+                }
+                
+                // If no extension in filename, try to get from file_type (MIME type)
+                if (!extension && f.file_type) {
+                    // Common MIME type to extension mapping (same as in eventHandlers.js)
+                    const mimeTypeToExtension = {
+                        'application/pdf': 'pdf',
+                        'application/msword': 'doc',
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                        'application/vnd.ms-excel': 'xls',
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                        'application/vnd.ms-powerpoint': 'ppt',
+                        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                        'text/plain': 'txt',
+                        'text/csv': 'csv',
+                        'text/html': 'html',
+                        'application/json': 'json',
+                        'application/xml': 'xml',
+                        'application/epub+zip': 'epub',
+                        'image/jpeg': 'jpg',
+                        'image/jpg': 'jpg',
+                        'image/png': 'png',
+                        'image/gif': 'gif',
+                        'image/svg+xml': 'svg'
+                    };
+                    
+                    // Extract MIME type and look up extension
+                    const mimeType = f.file_type.toLowerCase();
+                    extension = mimeTypeToExtension[mimeType];
+                    
+                    if (!extension) {
+                        // If not in mapping, extract from MIME type (e.g., "application/pdf" -> "pdf")
+                        extension = f.file_type.split('/').pop().toLowerCase();
+                        console.log("DEBUG fmtMsg: Extracted extension from file_type:", extension);
+                    } else {
+                        console.log("DEBUG fmtMsg: Mapped file_type to extension:", extension);
+                    }
+                    
+                    // Also update filename to include extension if it doesn't have one
+                    if (fileName && !fileName.includes('.')) {
+                        fileName = fileName + '.' + extension;
+                        console.log("DEBUG fmtMsg: Added extension to filename:", fileName);
+                    }
+                }
+                
+                // If still no extension, try to extract from file_url as last resort
+                if (!extension && f.file_url && f.file_url.includes('.')) {
+                    const urlParts = f.file_url.split('/');
+                    const urlFilename = urlParts[urlParts.length - 1];
+                    if (urlFilename.includes('.')) {
+                        extension = urlFilename.split('.').pop().toLowerCase();
+                        console.log("DEBUG fmtMsg: Got extension from file_url:", extension);
+                        // Update filename if it doesn't have extension
+                        if (fileName && !fileName.includes('.')) {
+                            fileName = fileName + '.' + extension;
+                            console.log("DEBUG fmtMsg: Added extension from file_url to filename:", fileName);
+                        }
+                    }
+                }
+                
+                const fileObj = {
+                    name: fileName,
+                    size: f.file_size,
+                    extension: extension,
+                    type: extension, // Keep type for compatibility
+                    url: f.file_url,
+                    // Vue Advanced Chat might expect these properties
+                    file_name: fileName, // Keep original property name
+                    file_url: f.file_url, // Keep original property name
+                };
+                console.log("DEBUG fmtMsg: Created file object:", fileObj);
+                return fileObj;
+            });
             const formattedMsg = {
                 _id: m.name,
                 content: m.content,
@@ -55,8 +155,76 @@ window.phAgent.utils = window.phAgent.utils || (function() {
          */
         uploadFile: function(file) {
             return new Promise((resolve, reject) => {
+                console.log("DEBUG: uploadFile called with:", file);
+                
+                // Handle different file object structures
+                let fileBlob, fileName;
+                
+                if (file.blob && file.name) {
+                    // Standard structure: {blob: Blob, name: string}
+                    fileBlob = file.blob;
+                    fileName = file.name;
+                } else if (file.file && (file.name || file.file.name)) {
+                    // Vue Advanced Chat structure: {file: File, name: string}
+                    fileBlob = file.file;
+                    fileName = file.name || file.file.name;
+                } else if (file instanceof File || file instanceof Blob) {
+                    // Direct File/Blob object
+                    fileBlob = file;
+                    fileName = file.name || "uploaded_file";
+                } else {
+                    console.error("DEBUG: Unsupported file structure:", file);
+                    reject(new Error("Unsupported file structure"));
+                    return;
+                }
+                
+                // Ensure filename has extension
+                const mimeType = fileBlob.type || "";
+                let extension = "";
+                
+                // Common MIME type to extension mapping
+                const mimeTypeToExtension = {
+                    'application/pdf': 'pdf',
+                    'application/msword': 'doc',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                    'application/vnd.ms-excel': 'xls',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                    'application/vnd.ms-powerpoint': 'ppt',
+                    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+                    'text/plain': 'txt',
+                    'text/csv': 'csv',
+                    'text/html': 'html',
+                    'application/json': 'json',
+                    'application/xml': 'xml',
+                    'application/epub+zip': 'epub',
+                    'image/jpeg': 'jpg',
+                    'image/jpg': 'jpg',
+                    'image/png': 'png',
+                    'image/gif': 'gif',
+                    'image/svg+xml': 'svg'
+                };
+                
+                if (mimeType && mimeType.includes('/')) {
+                    // Check MIME type mapping first
+                    if (mimeTypeToExtension[mimeType]) {
+                        extension = mimeTypeToExtension[mimeType];
+                        console.log("DEBUG: Mapped MIME type to extension:", mimeType, "->", extension);
+                    } else {
+                        extension = mimeType.split('/').pop().toLowerCase();
+                    }
+                } else if (fileName.includes('.')) {
+                    extension = fileName.split('.').pop().toLowerCase();
+                }
+                
+                if (!fileName.includes('.') && extension) {
+                    fileName = fileName + '.' + extension;
+                    console.log("DEBUG: Added extension to filename:", fileName);
+                }
+                
+                console.log("DEBUG: Uploading file:", fileName, "type:", fileBlob.type, "size:", fileBlob.size);
+                
                 const formData = new FormData();
-                formData.append("file", file.blob, file.name);
+                formData.append("file", fileBlob, fileName);
                 formData.append("is_private", "1");
                 $.ajax({
                     url: "/api/method/upload_file",
@@ -65,8 +233,38 @@ window.phAgent.utils = window.phAgent.utils || (function() {
                     processData: false,
                     contentType: false,
                     headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
-                    success: (r) => resolve(r.message),
-                    error: reject,
+                    success: (r) => {
+                        console.log("DEBUG: upload_file API response:", r.message);
+                        // Extract plain values from any Proxy objects
+                        const response = r.message;
+                        let plainResponse = response;
+                        if (response && typeof response === 'object') {
+                            // Create a plain object copy
+                            plainResponse = {};
+                            for (const key in response) {
+                                if (Object.prototype.hasOwnProperty.call(response, key)) {
+                                    const value = response[key];
+                                    // Extract value from Proxy if needed
+                                    plainResponse[key] = value && typeof value === 'object' && value.valueOf ? value.valueOf() : value;
+                                }
+                            }
+                        }
+                        console.log("DEBUG: Plain upload response - all fields:", plainResponse);
+                        // Log specific fields we care about
+                        console.log("DEBUG: Upload response key fields:", {
+                            name: plainResponse.name,
+                            file_name: plainResponse.file_name,
+                            file_url: plainResponse.file_url,
+                            file_type: plainResponse.file_type,
+                            is_private: plainResponse.is_private,
+                            docstatus: plainResponse.docstatus
+                        });
+                        resolve(plainResponse);
+                    },
+                    error: (xhr, status, error) => {
+                        console.error("DEBUG: File upload failed:", error, "status:", status, "xhr:", xhr);
+                        reject(error);
+                    },
                 });
             });
         },

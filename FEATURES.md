@@ -112,7 +112,7 @@ graph TB
 | **Real-time Streaming** | Chunked responses via Frappe realtime events | ✅ Complete |
 | **Conversation Memory** | Full history passed to LLM each turn | ✅ Complete |
 | **File Attachments** | PDF, images, documents stored as Frappe Files | ✅ Complete |
-| **PDF Text Extraction** | Automatic content extraction using PyPDF2 | ✅ Complete |
+| **File Text Extraction** | Automatic content extraction using markitdown (PDF, DOCX, PPTX, XLSX, HTML, etc.) | ✅ Complete |
 | **Session Management** | Create, browse, delete chat sessions | ✅ Complete |
 | **Message Editing** | Edit user messages with auto-regeneration | ✅ Complete |
 | **Message Regeneration** | Regenerate agent responses with one click | ✅ Complete |

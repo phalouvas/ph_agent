@@ -8,8 +8,11 @@
  "field_order": [
   "tool_name",
   "is_enabled",
+  "script_type",
   "description",
   "python_function",
+  "custom_script",
+  "server_script",
   "parameters_json",
   "requires_approval"
  ],
@@ -30,17 +33,44 @@
    "label": "Enabled"
   },
   {
+   "default": "Existing Function",
+   "fieldname": "script_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Script Type",
+   "options": "Existing Function\nCustom Script\nServer Script",
+   "reqd": 1
+  },
+  {
    "fieldname": "description",
    "fieldtype": "Long Text",
    "label": "Description"
   },
   {
+   "depends_on": "eval:doc.script_type == 'Existing Function'",
    "fieldname": "python_function",
    "fieldtype": "Data",
    "label": "Python Function",
-   "reqd": 1
+   "mandatory_depends_on": "eval:doc.script_type == 'Existing Function'"
   },
   {
+   "depends_on": "eval:doc.script_type == 'Custom Script'",
+   "fieldname": "custom_script",
+   "fieldtype": "Code",
+   "label": "Custom Script",
+   "mandatory_depends_on": "eval:doc.script_type == 'Custom Script'",
+   "options": "Python"
+  },
+  {
+   "depends_on": "eval:doc.script_type == 'Server Script'",
+   "fieldname": "server_script",
+   "fieldtype": "Link",
+   "label": "Server Script",
+   "mandatory_depends_on": "eval:doc.script_type == 'Server Script'",
+   "options": "Server Script"
+  },
+  {
+   "depends_on": "eval:doc.script_type != 'Existing Function'",
    "fieldname": "parameters_json",
    "fieldtype": "Code",
    "label": "Parameters JSON",

@@ -8,12 +8,76 @@ for use with the Microsoft Agent Framework.
 import importlib
 import json
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, get_type_hints
 
 import frappe
 from agent_framework import FunctionInvocationContext, FunctionTool, tool
+from pydantic import BaseModel, Field, create_model
 
 logger = logging.getLogger(__name__)
+
+
+# Safe namespace for executing custom scripts.
+# Provides controlled access to common modules without dangerous builtins.
+SAFE_NAMESPACE = {
+    "__builtins__": {
+        "__import__": __import__,
+        "abs": abs,
+        "all": all,
+        "any": any,
+        "bool": bool,
+        "callable": callable,
+        "chr": chr,
+        "dict": dict,
+        "divmod": divmod,
+        "enumerate": enumerate,
+        "filter": filter,
+        "float": float,
+        "format": format,
+        "frozenset": frozenset,
+        "getattr": getattr,
+        "hasattr": hasattr,
+        "hash": hash,
+        "hex": hex,
+        "id": id,
+        "int": int,
+        "isinstance": isinstance,
+        "issubclass": issubclass,
+        "iter": iter,
+        "len": len,
+        "list": list,
+        "map": map,
+        "max": max,
+        "min": min,
+        "next": next,
+        "object": object,
+        "oct": oct,
+        "ord": ord,
+        "pow": pow,
+        "print": print,
+        "range": range,
+        "repr": repr,
+        "reversed": reversed,
+        "round": round,
+        "set": set,
+        "slice": slice,
+        "sorted": sorted,
+        "str": str,
+        "sum": sum,
+        "tuple": tuple,
+        "type": type,
+        "zip": zip,
+    },
+    "math": __import__("math"),
+    "datetime": __import__("datetime"),
+    "json": __import__("json"),
+    "random": __import__("random"),
+    "re": __import__("re"),
+    "decimal": __import__("decimal"),
+    "statistics": __import__("statistics"),
+    "frappe": frappe,
+    "FunctionInvocationContext": FunctionInvocationContext,
+}
 
 
 class ToolManager:
@@ -58,7 +122,11 @@ class ToolManager:
         tool_records = frappe.get_all(
             "Tool Registry",
             filters={"is_enabled": 1},
-            fields=["name", "tool_name", "description", "python_function", "parameters_json", "requires_approval"]
+            fields=[
+                "name", "tool_name", "description", "script_type",
+                "python_function", "custom_script",
+                "parameters_json", "requires_approval"
+            ]
         )
         
         logger.info("Loading %d enabled tools from Tool Registry", len(tool_records))
@@ -81,11 +149,91 @@ class ToolManager:
         """
         Register a single tool from Tool Registry record.
         
+        Dispatches to the appropriate registration method based on script_type.
+        
         Args:
             record: Tool Registry document as dictionary
             
         Returns:
             Registered tool object or None if registration fails
+        """
+        script_type = record.get("script_type", "Existing Function")
+        
+        if script_type == "Custom Script":
+            return cls._register_custom_script_tool(record)
+        else:
+            return cls._register_existing_function_tool(record)
+    
+    @classmethod
+    def _get_safe_namespace(cls) -> Dict[str, Any]:
+        """Return a copy of the safe namespace dict."""
+        return dict(SAFE_NAMESPACE)
+    
+    @classmethod
+    def _build_input_model_from_schema(cls, parameters_json: Optional[str]) -> Optional[type[BaseModel]]:
+        """
+        Build a Pydantic input model from a JSON Schema string.
+        
+        Args:
+            parameters_json: JSON Schema string describing tool parameters
+            
+        Returns:
+            A Pydantic BaseModel subclass, or None if no schema provided
+        """
+        if not parameters_json:
+            return None
+        
+        schema = json.loads(parameters_json)
+        properties = schema.get("properties", {})
+        required_fields = set(schema.get("required", []))
+        
+        fields = {}
+        for field_name, field_schema in properties.items():
+            field_type = cls._json_schema_type_to_python(field_schema)
+            field_description = field_schema.get("description", "")
+            
+            if field_name in required_fields:
+                # Required — use Field with no default
+                fields[field_name] = (
+                    field_type,
+                    Field(..., description=field_description),
+                )
+            else:
+                # Optional — wrap in Optional and set default None
+                default_value = field_schema.get("default", None)
+                fields[field_name] = (
+                    Optional[field_type],
+                    Field(default=default_value, description=field_description),
+                )
+        
+        if not fields:
+            return None
+        
+        return create_model("ToolInputModel", **fields)
+    
+    @classmethod
+    def _json_schema_type_to_python(cls, field_schema: Dict[str, Any]) -> type:
+        """Map JSON Schema types to Python types."""
+        json_type = field_schema.get("type", "string")
+        
+        type_map = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "array": list,
+            "object": dict,
+        }
+        
+        return type_map.get(json_type, str)
+    
+    @classmethod
+    def _register_existing_function_tool(cls, record: Dict[str, Any]):
+        """
+        Register a tool backed by an existing Python function.
+        
+        This is the original behaviour: import a dotted function path and
+        wrap it with @tool.
         """
         try:
             # Import the function
@@ -125,6 +273,55 @@ class ToolManager:
         except Exception as e:
             logger.error("Unexpected error registering tool %s: %s", record["tool_name"], str(e))
             raise
+    
+    @classmethod
+    def _register_custom_script_tool(cls, record: Dict[str, Any]):
+        """
+        Register a tool backed by a Custom Script stored in the Tool Registry.
+        
+        The script must define a top-level ``run_tool`` function.
+        The ``parameters_json`` field provides the JSON Schema for LLM arguments.
+        """
+        script_code = record.get("custom_script", "")
+        if not script_code:
+            raise ValueError(f"Tool '{record['tool_name']}' has no custom script content.")
+        
+        # Compile and exec in safe namespace
+        namespace = cls._get_safe_namespace()
+        try:
+            exec(script_code, namespace)
+        except Exception as e:
+            raise ValueError(f"Failed to execute custom script for tool '{record['tool_name']}': {e}") from e
+        
+        run_tool_func = namespace.get("run_tool")
+        if not callable(run_tool_func):
+            raise ValueError(
+                f"Custom script for tool '{record['tool_name']}' must define a callable 'run_tool' function."
+            )
+        
+        # Build input model from parameters_json
+        parameters_json = record.get("parameters_json")
+        input_model = cls._build_input_model_from_schema(parameters_json)
+        
+        # Create approval kwargs
+        tool_kwargs = {
+            "name": record["tool_name"],
+            "description": record["description"] or "No description provided",
+        }
+        if record.get("requires_approval"):
+            tool_kwargs["approval_mode"] = "always_require"
+        
+        # If we have an input model (schema defined), use FunctionTool directly
+        # with the model so the LLM sees proper typed parameters.
+        if input_model is not None:
+            return FunctionTool(
+                **tool_kwargs,
+                input_model=input_model,
+                func=run_tool_func,
+            )
+        
+        # Otherwise use the @tool decorator which infers from type hints
+        return tool(**tool_kwargs)(run_tool_func)
     
     @classmethod
     def _inject_context_into_tools(cls, tools: List, session_name: Optional[str] = None, user: Optional[str] = None) -> List:

@@ -1,6 +1,6 @@
 {
  "app": "ph_agent",
- "creation": "2026-04-16 15:12:35.998944",
+ "creation": "2026-04-23 18:51:15.345394",
  "docstatus": 0,
  "doctype": "Workspace Sidebar",
  "idx": 0,
@@ -76,9 +76,21 @@
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "flask-conical",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Skill Registry",
+   "link_to": "Skill Registry",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-04-22 11:24:01.756303",
+ "modified": "2026-04-23 18:56:42.183287",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

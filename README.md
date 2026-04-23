@@ -72,6 +72,59 @@ To add additional providers (e.g. a local Ollama instance):
 9. **Stop generation** — Click the red stop button that appears while the AI is responding to cancel generation
 10. **Regeneration flow** — When regenerating an agent response, the message stays in place with a spinner until the new response arrives
 
+### Agent Skills
+
+PH Agent includes an **Agent Skills** system that lets you teach the AI how to perform domain-specific tasks. Skills follow a **progressive disclosure** pattern — the AI reads a high-level `SKILL.md`, then optionally loads reference resources and executes scripts.
+
+#### Skill Sources
+
+Skills come from two sources (merged at runtime):
+
+1. **DocType-based** — Create records in the **Skill Registry** (`PH Agent → Skill Registry`) with rich content, resources, and scripts.
+2. **File-based** — Place skill folders under `private/files/skills/<skill-name>/` on your site. A skill folder must contain at least a `SKILL.md` file.
+
+If a file-based skill has the same name as a DocType-based skill, the DocType version wins (the file directory is excluded).
+
+#### Skill Structure
+
+Each skill folder (or Skill Registry record) can contain:
+
+```
+<skill-name>/
+├── SKILL.md              # Required: skill instructions with YAML frontmatter
+├── references/           # Optional: reference resources
+│   └── doc_types.md      #   Static content or dynamic functions
+└── scripts/              # Optional: executable scripts
+    └── query_generator.py
+```
+
+- **SKILL.md** — Markdown with YAML frontmatter (`name`, `description`). Contains instructions the AI reads to understand when and how to use the skill.
+- **Resources** — Supplementary reference material. Can be static Markdown text or a dynamic Python function that returns a string.
+- **Scripts** — Executable Python scripts. Can be an **In-Process Function** (imported callable) or a **File Reference** (run as a subprocess with 30s timeout).
+
+#### Security
+
+- **Script approval** is required by default — the AI cannot execute scripts without user confirmation.
+- File-based scripts run in a subprocess with a restricted environment and isolated working directory.
+- DocType-based skills can use `Dynamic Function` resources and `In-Process Function` scripts that are imported from dotted Python paths — only load code you trust.
+
+#### Creating a Sample Skill
+
+PH Agent ships with a `frappe-data-query` sample skill that teaches the AI to query Frappe/ERPNext data safely. To use it after installation:
+
+```bash
+bench --site <your-site> migrate
+```
+
+The migration copies the sample skill files from the app package to your site's `private/files/skills/` directory and seeds a corresponding Skill Registry record.
+
+You can create your own skills:
+
+1. **Via the Desk**: Go to **PH Agent → Skill Registry** and create a new record with `SKILL.md` content, resources, and scripts.
+2. **Via files**: Create a folder in `private/files/skills/<skill-name>/` on your site with a `SKILL.md` file.
+
+> **Tip**: Use the Skill Registry when you need rich content editing. Use file-based skills when you want to version-control skill files directly on the server.
+
 ### Contributing
 
 This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:

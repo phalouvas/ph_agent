@@ -87,6 +87,7 @@ page_js = {"chat": ["public/js/lib/vue-advanced-chat.umd.js", "public/js/chat/lo
 
 # before_install = "ph_agent.install.before_install"
 # after_install = "ph_agent.install.after_install"
+after_migrate = "ph_agent.patches.sample_skills.after_migrate"
 
 # Uninstallation
 # ------------
@@ -137,6 +138,11 @@ doc_events = {
 		"on_update": "ph_agent.agent.tools.tool_manager.invalidate_tool_cache",
 		"on_trash": "ph_agent.agent.tools.tool_manager.invalidate_tool_cache",
 		"after_insert": "ph_agent.agent.tools.tool_manager.invalidate_tool_cache",
+	},
+	"Skill Registry": {
+		"on_update": "ph_agent.agent.skills.skill_manager.invalidate_skill_cache",
+		"on_trash": "ph_agent.agent.skills.skill_manager.invalidate_skill_cache",
+		"after_insert": "ph_agent.agent.skills.skill_manager.invalidate_skill_cache",
 	},
 	# Cascade cancel Tool Approval Requests when session/message is deleted
 	"Chat Session": {

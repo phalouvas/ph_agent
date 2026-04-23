@@ -31,6 +31,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 - **Frappe conventions**: Use `@frappe.whitelist()` for API methods; follow Frappe’s document lifecycle.
 - **Real‑time communication**: Use `frappe.publish_realtime()` for WebSocket events (agent status, new messages).
 - **Background jobs**: Use `frappe.enqueue()` for long‑running tasks (LLM calls, PDF extraction).
+- **Session state persistence**: The `AgentSession.state` from Microsoft Agent Framework is persisted to the `Chat Session` DocType after every turn (sync and streaming). It is loaded before each agent run to preserve memory, skills, and RAG context across conversations. State is automatically cleared when a session is closed or archived (see `chat_session.py` `before_save()`). The `FrappeMemoryProvider` reads message history from the DocType and does not write to state, so only data populated by tools/providers persists.
 
 ## Build and Test
 - **Installation** (see [README.md](../README.md)):
@@ -60,6 +61,11 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   - Handle real‑time events with `frappe.realtime.on()`.
   - Use optimistic UI updates for better user experience.
   - Implement conditional auto‑scroll for streaming responses (see `uiHelpers.js` and `realtimeListeners.js`).
+- **Session state**:
+  - `Chat Session` has two fields: `session_state` (Code/JSON, read_only) and `last_state_update` (Datetime, read_only).
+  - State is serialized via `_filter_session_state()` which removes `in_memory` provider data and converts non‑serializable objects (e.g., Pydantic models, objects with `__dict__`/`to_dict()`).
+  - State is saved every turn, even when tool approval is triggered (stored in `conversation_state.session_state` for continuation).
+  - Approval workflow: `run_after_approval()` loads state from `conversation_state.session_state`, passes it to `_run_agent()`, and saves the updated state back to the Chat Session.
 - **Avoid pitfalls**:
   - Do **not** add `frappe` to dependencies.
   - Always decorate API methods with `@frappe.whitelist()`.
@@ -83,6 +89,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 | `ph_agent/ph_agent/agent/tools/tool_manager.py` | Tool registration and caching |
 | `ph_agent/ph_agent/doctype/tool_registry/tool_registry.py` | Tool Registry DocType controller |
 | `ph_agent/ph_agent/doctype/tool_approval_request/tool_approval_request.py` | Tool approval workflow |
+| `ph_agent/ph_agent/doctype/chat_session/chat_session.py` | Chat Session DocType controller (state cleanup on close/archive) |
 | `ph_agent/ph_agent/page/chat/chat.js` | Chat UI front‑end |
 | `ph_agent/public/css/chat.css` | Chat UI styles |
 

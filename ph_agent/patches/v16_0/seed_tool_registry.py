@@ -45,6 +45,42 @@ TOOL_REGISTRY_SEED = [
         "python_function": "ph_agent.agent.tools.frappe_query_tool.query_frappe_data_tool",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "create_frappe_record",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Create a new record in Frappe/ERPNext. Supply the DocType name and field values as a JSON object. Returns the created record name and details. Allowed DocTypes include: Customer, Lead, Opportunity, Contact, Address, Quotation, Sales Order, Item, Supplier, Purchase Order, Project, Task, Issue, and more.",
+        "python_function": "ph_agent.agent.tools.frappe_crud_tool.create_frappe_record_tool",
+        "requires_approval": 0,
+    },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "update_frappe_record",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Update an existing record in Frappe/ERPNext. Supply the DocType, record name, and field values as a JSON object. Returns the updated record details.",
+        "python_function": "ph_agent.agent.tools.frappe_crud_tool.update_frappe_record_tool",
+        "requires_approval": 0,
+    },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "delete_frappe_record",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Delete or cancel a record in Frappe/ERPNext. USE WITH CAUTION — only use when the user explicitly asks to delete or remove a record. Supports cancellation (soft-delete for submitted docs) and permanent deletion.",
+        "python_function": "ph_agent.agent.tools.frappe_crud_tool.delete_frappe_record_tool",
+        "requires_approval": 0,
+    },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "run_frappe_method",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Run a whitelisted Frappe/ERPNext method by dotted path. Use for calling specific Frappe API endpoints or controller methods not covered by standard CRUD tools. Blocks system-level and dangerous methods. Prefer dedicated CRUD tools when possible.",
+        "python_function": "ph_agent.agent.tools.frappe_crud_tool.run_frappe_method_tool",
+        "requires_approval": 0,
+    },
 ]
 
 

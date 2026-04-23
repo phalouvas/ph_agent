@@ -11,7 +11,7 @@ import logging
 from typing import List, Optional, Dict, Any
 
 import frappe
-from agent_framework import tool, FunctionInvocationContext
+from agent_framework import FunctionInvocationContext, FunctionTool, tool
 
 logger = logging.getLogger(__name__)
 
@@ -154,51 +154,40 @@ class ToolManager:
     @classmethod
     def _create_context_wrapper(cls, original_tool, session_name: Optional[str] = None, user: Optional[str] = None):
         """
-        Create a wrapper function that injects context into tool calls.
-        
-        Args:
-            original_tool: The original tool function
-            session_name: Chat session name
-            user: User name
-            
-        Returns:
-            Wrapped tool function with context injection
+        Create a FunctionTool that injects session/user context into tool calls while
+        preserving the original tool's parameter schema.
+
+        The previous implementation wrapped with ``@tool(*args, **kwargs)`` which lost
+        all type annotations, causing the LLM to see an empty ``properties: {}`` schema.
+        We now build a ``FunctionTool`` directly, passing the original ``input_model``
+        so the schema is identical to the source tool.
         """
-        # Get the original function from the tool
         original_func = original_tool.func if hasattr(original_tool, 'func') else original_tool
-        
-        @tool(
+
+        # Close over session_name and user so the injecting function is self-contained.
+        _session_name = session_name
+        _user = user
+
+        def injecting_func(ctx: FunctionInvocationContext = None, **kwargs):
+            """Thin wrapper: injects user/session into ctx.kwargs, then delegates."""
+            if ctx is not None:
+                if _user and "user" not in ctx.kwargs:
+                    ctx.kwargs["user"] = _user
+                if _session_name and "session_name" not in ctx.kwargs:
+                    ctx.kwargs["session_name"] = _session_name
+                if "frappe_session" not in ctx.kwargs:
+                    ctx.kwargs["frappe_session"] = frappe.session
+            return original_func(ctx=ctx, **kwargs)
+
+        return FunctionTool(
             name=original_tool.name,
             description=original_tool.description,
-            approval_mode=getattr(original_tool, 'approval_mode', 'never_require')
+            approval_mode=getattr(original_tool, 'approval_mode', None),
+            # Reuse the original tool's Pydantic input model so the LLM sees
+            # the same parameter schema (properties, types, descriptions, defaults).
+            input_model=original_tool.input_model,
+            func=injecting_func,
         )
-        def wrapped_tool(*args, ctx: FunctionInvocationContext = None, **kwargs):
-            # Inject context if not already provided
-            if ctx is None:
-                # Create a mock context with our injected values
-                class MockContext:
-                    def __init__(self):
-                        self.kwargs = {}
-                        if user:
-                            self.kwargs["user"] = user
-                        if session_name:
-                            self.kwargs["session_name"] = session_name
-                        self.kwargs["frappe_session"] = frappe.session
-                
-                ctx = MockContext()
-            
-            # Add our values to existing context
-            if user and "user" not in ctx.kwargs:
-                ctx.kwargs["user"] = user
-            if session_name and "session_name" not in ctx.kwargs:
-                ctx.kwargs["session_name"] = session_name
-            if "frappe_session" not in ctx.kwargs:
-                ctx.kwargs["frappe_session"] = frappe.session
-            
-            # Call the original function
-            return original_func(*args, ctx=ctx, **kwargs)
-        
-        return wrapped_tool
     
     @classmethod
     def _get_cached_tools(cls) -> Optional[List]:

@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 
 import frappe
 from ph_agent.agent.framework_agent import (
@@ -13,8 +12,6 @@ from ph_agent.agent.framework_agent import (
 )
 from ph_agent.utils.file_extractor import extract_file_text
 
-
-logger = frappe.logger("ph_agent_streaming")
 
 
 def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
@@ -237,9 +234,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			output_tokens = 0
 			streaming_successful = False
 			approval_data = None
-			stream_chunks = 0
-			stream_start = time.time()
-			logger.info("job.stream.start session=%s", session)
 			
 			try:
 				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status):
@@ -259,14 +253,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					else:
 						# Content chunk
 						full_content += chunk
-						stream_chunks += 1
-						if stream_chunks <= 5 or stream_chunks % 25 == 0:
-							logger.info(
-								"job.stream.chunk session=%s idx=%s len=%s",
-								session,
-								stream_chunks,
-								len(chunk or ""),
-							)
 						# Publish chunk via realtime
 						frappe.publish_realtime(
 							event="message_chunk",
@@ -280,12 +266,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						)
 				
 				if approval_data:
-					logger.info(
-						"job.stream.approval session=%s chunks=%s duration=%.3fs",
-						session,
-						stream_chunks,
-						time.time() - stream_start,
-					)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -293,13 +273,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					return
 				
 				if streaming_successful:
-					logger.info(
-						"job.stream.done session=%s chunks=%s final_len=%s duration=%.3fs",
-						session,
-						stream_chunks,
-						len(full_content),
-						time.time() - stream_start,
-					)
 					# Update the placeholder message with full content and token counts
 					agent_msg.content = full_content
 					agent_msg.input_tokens = input_tokens
@@ -312,12 +285,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					raise Exception("Streaming did not complete successfully")
 				
 			except Exception as stream_error:
-				logger.exception(
-					"job.stream.fallback session=%s chunks=%s err=%s",
-					session,
-					stream_chunks,
-					stream_error,
-				)
 				# If streaming fails, fall back to non-streaming
 				frappe.log_error(
 					title=f"Streaming failed for session {session}, falling back to non-streaming",

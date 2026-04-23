@@ -3,7 +3,6 @@ import inspect
 import json
 import queue
 import threading
-import time
 from collections.abc import Generator, Sequence
 from typing import Any
 
@@ -13,8 +12,6 @@ from agent_framework_openai import OpenAIChatCompletionClient
 from openai import AsyncOpenAI
 from ph_agent.agent.tools.tool_manager import ToolManager
 
-
-logger = frappe.logger("ph_agent_streaming")
 
 
 class FrappeMemoryProvider(HistoryProvider):
@@ -229,14 +226,9 @@ def get_agent_response_stream(
 				if inspect.isawaitable(stream):
 					stream = await stream
 
-				start_ts = time.time()
-				update_count = 0
-				emitted_chunks = 0
 				seen_text = ""
-				logger.info("stream.start session=%s", session_name)
 
 				async for update in stream:
-					update_count += 1
 					if stop_event.is_set():
 						break
 
@@ -257,17 +249,7 @@ def get_agent_response_stream(
 
 					# Emit in smaller pieces for smoother UI rendering.
 					for idx in range(0, len(delta), 80):
-						emitted_chunks += 1
 						result_queue.put(("chunk", delta[idx : idx + 80]))
-
-					if update_count <= 5 or update_count % 20 == 0:
-						logger.info(
-							"stream.update session=%s update=%s chunk_len=%s emitted=%s",
-							session_name,
-							update_count,
-							len(delta),
-							emitted_chunks,
-						)
 
 				if stop_event.is_set():
 					result_queue.put(("done", ("", 0, 0)))
@@ -277,25 +259,10 @@ def get_agent_response_stream(
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
 				approval_data = _extract_approval_data(final_response)
 				if approval_data:
-					logger.info(
-						"stream.final session=%s updates=%s emitted=%s mode=approval duration=%.3fs",
-						session_name,
-						update_count,
-						emitted_chunks,
-						time.time() - start_ts,
-					)
 					result_queue.put(("approval", (approval_data, input_tokens, output_tokens)))
 				else:
-					logger.info(
-						"stream.final session=%s updates=%s emitted=%s mode=done duration=%.3fs",
-						session_name,
-						update_count,
-						emitted_chunks,
-						time.time() - start_ts,
-					)
 					result_queue.put(("done", ("", input_tokens, output_tokens)))
 			except Exception as exc:
-				logger.exception("stream.error session=%s err=%s", session_name, exc)
 				result_queue.put(("error", exc))
 
 		initialized = False

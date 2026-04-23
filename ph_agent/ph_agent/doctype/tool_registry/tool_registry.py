@@ -80,8 +80,6 @@ class ToolRegistry(Document):
                         self._validate_function_path()
                 elif script_type == "Custom Script":
                         self._validate_custom_script()
-                elif script_type == "Server Script":
-                        self._validate_server_script_link()
 
                 # 3. Validate parameters_json is valid JSON
                 self._validate_parameters_json()
@@ -156,47 +154,6 @@ class ToolRegistry(Document):
                                 frappe._(
                                         "Custom Script must define a top-level callable function named 'run_tool' "
                                         "that serves as the tool entry point."
-                                )
-                        )
-
-        def _validate_server_script_link(self):
-                """Validate the linked Server Script exists, is enabled, and defines run_tool."""
-                if not self.server_script:
-                        frappe.throw(frappe._("Server Script is required when Script Type is 'Server Script'."))
-
-                if not frappe.db.exists("Server Script", self.server_script):
-                        frappe.throw(
-                                frappe._("Server Script '{0}' does not exist.").format(self.server_script)
-                        )
-
-                server_script_doc = frappe.get_doc("Server Script", self.server_script)
-
-                # Check the script content for a run_tool function
-                if not server_script_doc.script:
-                        frappe.throw(
-                                frappe._("Server Script '{0}' has no script content.").format(self.server_script)
-                        )
-
-                try:
-                        namespace = dict(SAFE_NAMESPACE_TEMPLATE)
-                        exec(server_script_doc.script, namespace)
-                        if "run_tool" not in namespace or not callable(namespace["run_tool"]):
-                                frappe.throw(
-                                        frappe._(
-                                                "Server Script '{0}' must define a top-level callable function "
-                                                "named 'run_tool'."
-                                        ).format(self.server_script)
-                                )
-                except SyntaxError as e:
-                        frappe.throw(
-                                frappe._("Server Script '{0}' contains syntax error at line {1}: {2}").format(
-                                        self.server_script, e.lineno, e.msg
-                                )
-                        )
-                except Exception as e:
-                        frappe.throw(
-                                frappe._("Server Script '{0}' raised error during validation: {1}").format(
-                                        self.server_script, str(e)
                                 )
                         )
 

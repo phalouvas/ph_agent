@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, create_model
 logger = logging.getLogger(__name__)
 
 
-# Safe namespace for executing custom/server scripts.
+# Safe namespace for executing custom scripts.
 # Provides controlled access to common modules without dangerous builtins.
 SAFE_NAMESPACE = {
     "__builtins__": {
@@ -124,7 +124,7 @@ class ToolManager:
             filters={"is_enabled": 1},
             fields=[
                 "name", "tool_name", "description", "script_type",
-                "python_function", "custom_script", "server_script",
+                "python_function", "custom_script",
                 "parameters_json", "requires_approval"
             ]
         )
@@ -161,8 +161,6 @@ class ToolManager:
         
         if script_type == "Custom Script":
             return cls._register_custom_script_tool(record)
-        elif script_type == "Server Script":
-            return cls._register_server_script_tool(record)
         else:
             return cls._register_existing_function_tool(record)
     
@@ -323,61 +321,6 @@ class ToolManager:
             )
         
         # Otherwise use the @tool decorator which infers from type hints
-        return tool(**tool_kwargs)(run_tool_func)
-    
-    @classmethod
-    def _register_server_script_tool(cls, record: Dict[str, Any]):
-        """
-        Register a tool backed by a Frappe Server Script.
-        
-        Fetches the Server Script document by name, reads its ``script`` field,
-        and expects a top-level ``run_tool`` function.
-        """
-        server_script_name = record.get("server_script", "")
-        if not server_script_name:
-            raise ValueError(f"Tool '{record['tool_name']}' has no server script link.")
-        
-        if not frappe.db.exists("Server Script", server_script_name):
-            raise ValueError(f"Server Script '{server_script_name}' not found for tool '{record['tool_name']}'.")
-        
-        server_script_doc = frappe.get_doc("Server Script", server_script_name)
-        script_code = server_script_doc.get("script", "")
-        if not script_code:
-            raise ValueError(f"Server Script '{server_script_name}' has no script content.")
-        
-        # Compile and exec in safe namespace
-        namespace = cls._get_safe_namespace()
-        try:
-            exec(script_code, namespace)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to execute Server Script '{server_script_name}' for tool '{record['tool_name']}': {e}"
-            ) from e
-        
-        run_tool_func = namespace.get("run_tool")
-        if not callable(run_tool_func):
-            raise ValueError(
-                f"Server Script '{server_script_name}' must define a callable 'run_tool' function."
-            )
-        
-        # Build input model from parameters_json
-        parameters_json = record.get("parameters_json")
-        input_model = cls._build_input_model_from_schema(parameters_json)
-        
-        tool_kwargs = {
-            "name": record["tool_name"],
-            "description": record["description"] or "No description provided",
-        }
-        if record.get("requires_approval"):
-            tool_kwargs["approval_mode"] = "always_require"
-        
-        if input_model is not None:
-            return FunctionTool(
-                **tool_kwargs,
-                input_model=input_model,
-                func=run_tool_func,
-            )
-        
         return tool(**tool_kwargs)(run_tool_func)
     
     @classmethod

@@ -12,7 +12,6 @@
   "description",
   "python_function",
   "custom_script",
-  "server_script",
   "parameters_json",
   "requires_approval"
  ],
@@ -38,7 +37,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Script Type",
-   "options": "Existing Function\nCustom Script\nServer Script",
+   "options": "Existing Function\nCustom Script",
    "reqd": 1
   },
   {
@@ -60,14 +59,6 @@
    "label": "Custom Script",
    "mandatory_depends_on": "eval:doc.script_type == 'Custom Script'",
    "options": "Python"
-  },
-  {
-   "depends_on": "eval:doc.script_type == 'Server Script'",
-   "fieldname": "server_script",
-   "fieldtype": "Link",
-   "label": "Server Script",
-   "mandatory_depends_on": "eval:doc.script_type == 'Server Script'",
-   "options": "Server Script"
   },
   {
    "depends_on": "eval:doc.script_type != 'Existing Function'",

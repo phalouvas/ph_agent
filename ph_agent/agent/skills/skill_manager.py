@@ -254,17 +254,39 @@ class SkillManager:
 				logger.error("File Reference script '%s' has no file attached", name)
 				return None
 
+			# Resolve the script path. Files may be:
+			# 1. Registered in Frappe's File DocType (file_url stored in "file" field)
+			# 2. Plain files on disk at the specified path (e.g. /private/files/skills/...)
+			file_path = None
+
+			# Try resolving via Frappe File DocType first
 			try:
-				# Resolve the attached file to a local path
-				file_doc = frappe.get_doc("File", {"file_url": file_name})
-				file_path = file_doc.get_full_path()
+				if frappe.db.exists("File", {"file_url": file_name}):
+					file_doc = frappe.get_doc("File", {"file_url": file_name})
+					file_path = file_doc.get_full_path()
+			except Exception:
+				pass
+
+			# Fall back to plain file path resolution
+			if not file_path:
+				# Try as a path relative to the site directory
+				site_path = Path(frappe.get_site_path())
+				candidate = site_path / file_name.lstrip("/")
+				if candidate.exists():
+					file_path = str(candidate)
+				else:
+					# Try as a Frappe app file path
+					candidate = Path(frappe.get_app_path("ph_agent")) / "private" / "files" / "skills" / Path(file_name).relative_to("/private/files/skills")
+					if candidate.exists():
+						file_path = str(candidate)
+
+			if file_path:
 				return SkillScript(name=name, description=description, path=file_path)
-			except Exception as e:
+			else:
 				logger.error(
-					"Failed to resolve file '%s' for script '%s': %s",
-					file_name,
+					"Failed to resolve path for script '%s' from file '%s'",
 					name,
-					str(e),
+					file_name,
 				)
 				return None
 

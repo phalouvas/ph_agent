@@ -24,31 +24,29 @@ def _build_skills_provider() -> SkillsProvider:
 	File-based skills are auto-discovered from the site's ``private/files/skills/``
 	directory. DocType-based skills (code-defined) come from the Skill Registry.
 
-	When a DocType skill has the same name as a file-based skill, the file-based
-	one takes precedence. To make DocType the system of record, file-based skill
-	directories whose names match enabled DocType skills are excluded.
+	When a DocType skill has the same name as a file-based skill, DocType
+	takes precedence — the file-based skill directory with the matching name
+	is excluded.
 	"""
 	# Get enabled DocType skill names
-	from ph_agent.agent.skills.skill_manager import SkillManager
-	doctype_skill_names = set(SkillManager.get_enabled_skill_names())
+	code_skills = get_code_skills()
+	doctype_skill_names = set(s.name for s in code_skills)
 
 	# Resolve the site's private files path
 	site_path = Path(frappe.get_site_path())
 	skills_dir = site_path / "private" / "files" / "skills"
 
-	# Determine file-based skill paths, excluding those whose names match DocType skills
+	# Determine file-based skill paths. Only exclude file-based skills when a
+	# DocType skill with the same name exists AND is enabled, so the DocType
+	# version takes precedence.
 	skill_paths = None
 	if skills_dir.exists():
-		# Filter out directories whose names match enabled DocType skills
 		all_dirs = [str(d) for d in skills_dir.iterdir() if d.is_dir()]
 		filtered_dirs = [
 			d for d in all_dirs
 			if Path(d).name not in doctype_skill_names
 		]
 		skill_paths = filtered_dirs if filtered_dirs else None
-
-	# Get code-defined skills from Skill Registry
-	code_skills = get_code_skills()
 
 	return SkillsProvider(
 		skill_paths=skill_paths,

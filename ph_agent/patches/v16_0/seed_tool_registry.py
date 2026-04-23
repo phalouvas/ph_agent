@@ -36,6 +36,15 @@ TOOL_REGISTRY_SEED = [
         "parameters_json": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"radius\": {\n      \"type\": \"number\",\n      \"description\": \"The radius of the circle\"\n    },\n    \"unit\": {\n      \"type\": \"string\",\n      \"description\": \"Unit of measurement (e.g., meters, feet)\"\n    }\n  },\n  \"required\": [\"radius\"]\n}",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "query_frappe_data",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Query Frappe/ERPNext data using the Frappe ORM. Can list records (get_all), fetch a single record (get_doc), or count records (count). Supports filters, field selection, sorting, and limiting. Always limits to 100 records max. Blocks sensitive DocTypes (User, __Auth) for non-Administrator users.",
+        "python_function": "ph_agent.agent.tools.frappe_query_tool.query_frappe_data_tool",
+        "requires_approval": 0,
+    },
 ]
 
 

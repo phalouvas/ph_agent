@@ -325,6 +325,28 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         },
         
         /**
+         * Summarize the current conversation via API.
+         * @param {string} roomId - Room/session ID to summarize
+         * @returns {Promise} Promise that resolves with summary result
+         */
+        summarizeSession: function(roomId) {
+            return new Promise((resolve, reject) => {
+                frappe.call({
+                    method: "ph_agent.api.chat.summarize_conversation",
+                    args: { session: roomId },
+                    callback: (r) => {
+                        if (r.message && r.message.status === "success") {
+                            resolve(r.message);
+                        } else {
+                            reject(new Error("Summarization failed"));
+                        }
+                    },
+                    error: (err) => reject(err),
+                });
+            });
+        },
+        
+        /**
          * Get the current chat component
          * @returns {HTMLElement} Chat component
          */

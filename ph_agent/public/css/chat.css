@@ -110,3 +110,43 @@ vue-advanced-chat {
 	content: "📋";
 	font-size: 1.2em;
 }
+
+/* Pulse animation for emergency token threshold */
+@keyframes ph-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.6; }
+}
+
+/* Collapsible summary message styling */
+.ph-summary-collapsible {
+	cursor: pointer;
+	user-select: none;
+}
+
+.ph-summary-collapsible .ph-summary-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 0;
+	font-size: 12px;
+	font-weight: 600;
+	color: #0c4a6e;
+}
+
+.ph-summary-collapsible .ph-summary-arrow {
+	transition: transform 0.2s ease;
+	font-size: 10px;
+}
+
+.ph-summary-collapsible .ph-summary-arrow.expanded {
+	transform: rotate(90deg);
+}
+
+.ph-summary-collapsible .ph-summary-body {
+	padding: 4px 0 0 16px;
+	font-size: 12px;
+	color: #334155;
+	line-height: 1.5;
+	border-left: 2px solid #7dd3fc;
+	margin-top: 4px;
+}

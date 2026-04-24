@@ -500,13 +500,19 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 
                 // Token counter already visible with display: flex
                 
-                // Add warning class if over 75%
-                if (percentage > 75) {
-                    $tokenCounter.css("color", "#f59e0b"); // Amber color for warning
-                } else if (percentage > 90) {
-                    $tokenCounter.css("color", "#ef4444"); // Red color for critical
+                // Progressive threshold colors
+                if (percentage > 95) {
+                    $tokenCounter.css("color", "#7f1d1d"); // Dark red for emergency
+                    $tokenCounter.css("animation", "ph-pulse 1.5s ease-in-out infinite");
+                } else if (percentage > 85) {
+                    $tokenCounter.css("color", "#ef4444"); // Red for critical
+                    $tokenCounter.css("animation", "none");
+                } else if (percentage > 70) {
+                    $tokenCounter.css("color", "#f59e0b"); // Amber for warning
+                    $tokenCounter.css("animation", "none");
                 } else {
-                    $tokenCounter.css("color", "#6b7280"); // Gray color for normal
+                    $tokenCounter.css("color", "#6b7280"); // Gray for normal
+                    $tokenCounter.css("animation", "none");
                 }
             }
         },

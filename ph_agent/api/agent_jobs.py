@@ -10,8 +10,266 @@ from ph_agent.agent.framework_agent import (
 	get_agent_response_stream,
 	run_after_approval,
 )
+from ph_agent.agent.tools.tool_manager import ToolManager
 from ph_agent.utils.file_extractor import extract_file_text
 
+
+
+# ---------------------------------------------------------------------------
+# Auto-compaction helpers
+# ---------------------------------------------------------------------------
+
+def _is_recently_summarized(session: str, min_interval_seconds: int = 60) -> bool:
+	"""Check if an auto-summary was created recently to avoid churn."""
+	last_summary = frappe.db.get_value("Chat Session", session, "last_summary_message")
+	if not last_summary:
+		return False
+	creation = frappe.db.get_value("Chat Message", last_summary, "creation")
+	if not creation:
+		return False
+	elapsed = (frappe.utils.now_datetime() - creation).total_seconds()
+	return elapsed < min_interval_seconds
+
+
+def _estimate_system_overhead(session_name: str) -> int:
+	"""Estimate token overhead from system prompt + tool definitions.
+
+	Returns the estimated token count for static overhead that is not
+	accounted for by ``estimated_conversation_tokens`` (which only tracks
+	user+assistant API tokens).
+	"""
+	session_doc = frappe.get_doc("Chat Session", session_name)
+	system_prompt = session_doc.system_prompt or ""
+	overhead = 0
+
+	# System prompt: ~4 chars per token for English text
+	if system_prompt:
+		overhead += len(system_prompt) // 4
+
+	# Tool definitions: ~2 chars per token for JSON schemas
+	try:
+		tools = ToolManager.get_tools(session_name=session_name)
+		for tool_obj in tools:
+			if hasattr(tool_obj, "schema") and tool_obj.schema:
+				schema_str = json.dumps(tool_obj.schema, separators=(",", ":"))
+				overhead += len(schema_str) // 2
+			elif hasattr(tool_obj, "description") and tool_obj.description:
+				overhead += len(tool_obj.description) // 4
+	except Exception:
+		pass  # Best-effort; overhead is a soft estimate
+
+	# Conversation structure overhead (~20 % buffer)
+	overhead = int(overhead * 1.2)
+	return overhead
+
+
+def _get_total_estimated_tokens(session: str) -> tuple[int, int]:
+	"""Return (total_estimated_tokens, overhead_tokens) for threshold checks."""
+	session_doc = frappe.get_doc("Chat Session", session)
+	conversation_tokens = session_doc.estimated_conversation_tokens or 0
+	overhead = _estimate_system_overhead(session)
+	return conversation_tokens + overhead, overhead
+
+
+def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
+	"""Delete oldest non-summary messages when auto-summary fails and tokens exceed 95 %.
+
+	Returns the number of messages deleted.
+	"""
+	from frappe.utils import now_datetime
+
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	context_length = provider_doc.context_length or 128000
+
+	total_tokens, _ = _get_total_estimated_tokens(session)
+	token_percentage = (total_tokens / context_length) * 100 if context_length > 0 else 0
+
+	if token_percentage < 95:
+		return 0  # Not emergency territory
+
+	last_summary = session_doc.last_summary_message
+	deleted_count = 0
+
+	while True:
+		total_tokens, _ = _get_total_estimated_tokens(session)
+		token_percentage = (total_tokens / context_length) * 100 if context_length > 0 else 0
+
+		if token_percentage < target_percentage:
+			break
+
+		# Check how many non-summary messages remain
+		filters = {"chat_session": session, "message_type": ["!=", "Summary"]}
+		if last_summary:
+			last_summary_doc = frappe.get_doc("Chat Message", last_summary)
+			filters["creation"] = [">", last_summary_doc.creation]
+
+		remaining = frappe.get_all(
+			"Chat Message",
+			filters=filters,
+			fields=["name", "content"],
+			order_by="creation asc",
+		)
+
+		# Keep at least 2 turns (4 messages) to preserve conversation quality
+		if len(remaining) <= 4:
+			break
+
+		# Delete the oldest non-summary message
+		oldest = remaining[0]
+		try:
+			frappe.delete_doc("Chat Message", oldest["name"], ignore_permissions=True)
+			deleted_count += 1
+		except Exception:
+			# If one fails, skip it
+			pass
+
+	if deleted_count:
+		frappe.db.commit()
+		# Recompute and publish a token update
+		frappe.publish_realtime(
+			event="token_update",
+			message={
+				"session": session,
+				"current_tokens": 0,  # Reset view; pruning resets the estimate
+				"context_length": context_length,
+				"percentage": 0,
+			},
+			user=frappe.session.user,
+		)
+
+	return deleted_count
+
+
+def _perform_auto_summary(session: str, enqueued_by: str | None = None,
+						  emit_status: callable | None = None,
+						  is_async: bool = False) -> bool:
+	"""Summarize conversation since last summary. Returns True if summary was created.
+
+	Args:
+		session: Chat Session name.
+		enqueued_by: User to notify via real-time events.
+		emit_status: Status callback function (optional).
+		is_async: If True, skip real-time event emission (for post-response async jobs).
+
+	Returns:
+		True if a summary was successfully created, False otherwise.
+	"""
+	if emit_status is None:
+		def _noop(msg):
+			pass
+		emit_status = _noop
+
+	session_doc = frappe.get_doc("Chat Session", session)
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	context_length = provider_doc.context_length or 128000
+
+	# Get messages since last summary
+	last_summary = session_doc.last_summary_message
+	if last_summary:
+		last_summary_doc = frappe.get_doc("Chat Message", last_summary)
+		messages = frappe.get_all(
+			"Chat Message",
+			filters={
+				"chat_session": session,
+				"creation": [">", last_summary_doc.creation],
+				"message_type": ["!=", "Summary"],
+			},
+			fields=["name", "sender_type", "content", "creation"],
+			order_by="creation asc",
+		)
+	else:
+		messages = frappe.get_all(
+			"Chat Message",
+			filters={
+				"chat_session": session,
+				"message_type": ["!=", "Summary"],
+			},
+			fields=["name", "sender_type", "content", "creation"],
+			order_by="creation asc",
+		)
+
+	if not messages:
+		return False
+
+	# Format conversation history
+	conversation_history = []
+	for msg in messages:
+		role = "user" if msg.sender_type == "User" else "assistant"
+		conversation_history.append({"role": role, "content": msg.content or ""})
+
+	emit_status(frappe._("Summarizing conversation…"))
+
+	# Generate summary
+	try:
+		summary = generate_conversation_summary(session, conversation_history)
+	except Exception as e:
+		frappe.log_error(
+			title=f"Auto-summarization failed for session {session}",
+			message=str(e),
+		)
+		# Emergency fallback: if tokens exceed 95 %, prune oldest messages
+		total_tokens, _ = _get_total_estimated_tokens(session)
+		token_percentage = (total_tokens / context_length) * 100 if context_length > 0 else 0
+		if token_percentage >= 95:
+			emit_status(frappe._("Freeing up context space…"))
+			_emergency_prune_messages(session)
+		return False
+
+	if not summary:
+		return False
+
+	# Create summary message
+	summary_msg = frappe.get_doc(
+		{
+			"doctype": "Chat Message",
+			"chat_session": session,
+			"sender_type": "Agent",
+			"message_type": "Summary",
+			"content": "*📋 Summary*\n\n" + summary,
+		}
+	).insert(ignore_permissions=False)
+	frappe.db.commit()
+
+	# Update session with summary reference and reset token count
+	frappe.db.set_value(
+		"Chat Session",
+		session,
+		{
+			"last_summary_message": summary_msg.name,
+			"estimated_conversation_tokens": 0,
+			"token_warning_sent": 0,
+		},
+	)
+	frappe.db.commit()
+
+	# Publish real-time events (skip if running asynchronously after user moved on)
+	if not is_async:
+		frappe.publish_realtime(
+			event="token_update",
+			message={
+				"session": session,
+				"current_tokens": 0,
+				"context_length": context_length,
+				"percentage": 0,
+			},
+			user=enqueued_by,
+		)
+
+		frappe.publish_realtime(
+			event="new_message",
+			message={
+				"session": session,
+				"name": summary_msg.name,
+				"sender_type": "Agent",
+				"message_type": "Summary",
+				"content": "*📋 Summary*\n\n" + summary,
+				"creation": str(summary_msg.creation),
+			},
+			user=enqueued_by,
+		)
+
+	return True
 
 
 def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
@@ -116,6 +374,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		message=placeholder_payload,
 		user=enqueued_by,
 	)
+	# Track whether auto-summary ran in pre-call phase
+	_auto_summary_performed = False
+	
 	# Check if we need to auto-summarize before making the API call
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
@@ -128,104 +389,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	current_tokens = session_doc.estimated_conversation_tokens or 0
 	token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
 	
-	# Auto-summarize if threshold exceeded
-	if token_percentage > auto_summary_threshold:
-		emit_status(frappe._("Summarizing conversation..."))
-		
-		# Get messages since last summary
-		last_summary = session_doc.last_summary_message
-		if last_summary:
-			last_summary_doc = frappe.get_doc("Chat Message", last_summary)
-			messages = frappe.get_all(
-				"Chat Message",
-				filters={
-					"chat_session": session,
-					"creation": [">", last_summary_doc.creation],
-					"message_type": ["!=", "Summary"]
-				},
-				fields=["name", "sender_type", "content", "creation"],
-				order_by="creation asc",
-			)
-		else:
-			# No previous summary, get all non-summary messages
-			messages = frappe.get_all(
-				"Chat Message",
-				filters={
-					"chat_session": session,
-					"message_type": ["!=", "Summary"]
-				},
-				fields=["name", "sender_type", "content", "creation"],
-				order_by="creation asc",
-			)
-		
-		if messages:
-			# Format conversation history
-			conversation_history = []
-			for msg in messages:
-				role = "user" if msg.sender_type == "User" else "assistant"
-				conversation_history.append({"role": role, "content": msg.content or ""})
-			
-			# Generate summary
-			try:
-				summary = generate_conversation_summary(session, conversation_history)
-				if summary:
-					# Create summary message with *📋 Summary* prefix
-					summary_msg = frappe.get_doc(
-						{
-							"doctype": "Chat Message",
-							"chat_session": session,
-							"sender_type": "Agent",
-							"message_type": "Summary",
-							"content": "*📋 Summary*\n\n" + summary,
-						}
-					).insert(ignore_permissions=False)
-					frappe.db.commit()
-					
-					# Update session with summary reference and reset token count
-					frappe.db.set_value(
-						"Chat Session",
-						session,
-						{
-							"last_summary_message": summary_msg.name,
-							"estimated_conversation_tokens": 0,
-							"token_warning_sent": 0,
-						}
-					)
-					frappe.db.commit()
-					
-					# Publish token update event (tokens reset to 0)
-					frappe.publish_realtime(
-						event="token_update",
-						message={
-							"session": session,
-							"current_tokens": 0,
-							"context_length": context_length,
-							"percentage": 0,
-						},
-						user=enqueued_by,
-					)
-					
-					# Publish realtime event for new summary message
-					frappe.publish_realtime(
-						event="new_message",
-						message={
-							"session": session,
-							"name": summary_msg.name,
-							"sender_type": "Agent",
-							"message_type": "Summary",
-							"content": "*📋 Summary*\n\n" + summary,
-							"creation": str(summary_msg.creation),
-						},
-						user=enqueued_by,
-					)
-					
-					emit_status(frappe._("Conversation summarized. Continuing..."))
-			except Exception as e:
-				frappe.log_error(
-					title=f"Auto-summarization failed for session {session}",
-					message=str(e)
-				)
-				# Continue without summary if generation fails
+	# Auto-summarize if threshold exceeded and not recently summarized
+	if token_percentage > auto_summary_threshold and not _is_recently_summarized(session):
+		_auto_summary_performed = _perform_auto_summary(session, enqueued_by, emit_status)
+		if _auto_summary_performed:
+			emit_status(frappe._("Conversation summarized. Continuing..."))
 	try:
 		if use_streaming:
 			# Streaming path
@@ -446,6 +614,22 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		# Mark warning as sent
 		frappe.db.set_value("Chat Session", session, "token_warning_sent", 1)
 		frappe.db.commit()
+
+	# Post-response auto-compaction check
+	# If a single large response pushed us past the threshold, compact now.
+	# Only run if no auto-summary ran in the pre-call phase (avoid duplicate).
+	auto_summary_threshold = provider_doc.auto_summary_threshold or 85
+	if not _auto_summary_performed and token_percentage > auto_summary_threshold and not _is_recently_summarized(session):
+		# Enqueue asynchronously — purely preparatory for the next user turn
+		frappe.enqueue(
+			"ph_agent.api.agent_jobs._perform_auto_summary",
+			session=session,
+			enqueued_by=enqueued_by,
+			emit_status=None,
+			is_async=True,
+			queue="short",
+			timeout=120,
+		)
 
 	# Auto-generate a title after the first exchange (title is still default "New Chat")
 	current_title = frappe.db.get_value("Chat Session", session, "title")
@@ -740,6 +924,24 @@ def _execute_approved_tool(approval_name):
 			},
 		)
 		frappe.db.commit()
+
+		# Post-response auto-compaction check for approved tool execution
+		session_doc = frappe.get_doc("Chat Session", session)
+		provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+		context_length = provider_doc.context_length or 128000
+		auto_summary_threshold = provider_doc.auto_summary_threshold or 85
+		current_tokens = session_doc.estimated_conversation_tokens or 0
+		token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
+		if token_percentage > auto_summary_threshold and not _is_recently_summarized(session):
+			frappe.enqueue(
+				"ph_agent.api.agent_jobs._perform_auto_summary",
+				session=session,
+				enqueued_by=notify_user,
+				emit_status=None,
+				is_async=True,
+				queue="short",
+				timeout=120,
+			)
 		
 		# Generate follow-up suggestions if enabled
 		if session_doc.enable_suggestions:

@@ -17,62 +17,50 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	// Add summary button as a custom button in the page actions area
 	// First, let's add it manually to the page actions container
 	
-	// Create summary button
+	// Create summary button (hidden by default; shown when token % > 20)
 	const summaryButton = $(`
-		<button class="btn btn-default btn-sm btn-summary-conversation" style="margin-left: 8px;">
+		<button class="btn btn-default btn-sm btn-summary-conversation" style="margin-left: 8px; display: none;">
 			<i class="fa fa-refresh" style="margin-right: 4px;"></i>
 			${__("Summarize")}
 		</button>
 	`);
 	
-	// Add click handler
+	// Add click handler — uses roomService.summarizeSession if available
 	summaryButton.on("click", () => {
-		// Get active session from state module
 		const session = window.phAgent?.state?.getActiveRoomId?.();
-		
-		if (session) {
-			// Get the summary button to show loading state
+		if (!session) {
+			frappe.show_alert({
+				message: __("No active chat session. Please create or select a chat first."),
+				indicator: "orange"
+			});
+			return;
+		}
+		if (window.phAgent?.roomService?.summarizeSession) {
 			const $summaryBtn = $(".page-actions .btn-summary-conversation");
-			const originalText = $summaryBtn.text();
-			
-			// Show loading state
 			$summaryBtn.prop("disabled", true).html(`
 				<span class="fa fa-spinner fa-spin"></span>
 				<span>${__("Summarizing...")}</span>
 			`);
-			
-			frappe.call({
-				method: "ph_agent.api.chat.summarize_conversation",
-				args: {
-					session: session
-				},
-				callback: function(response) {
-					// Restore button state
-					$summaryBtn.prop("disabled", false).html(originalText);
-					
-					if (response.message && response.message.status === "success") {
-						frappe.show_alert({
-							message: __("Conversation summarized successfully"),
-							indicator: "green"
-						});
-					}
-				},
-				error: function(err) {
-					// Restore button state
-					$summaryBtn.prop("disabled", false).html(originalText);
-					
+			window.phAgent.roomService.summarizeSession(session)
+				.then(() => {
+					frappe.show_alert({
+						message: __("Conversation summarized successfully"),
+						indicator: "green"
+					});
+				})
+				.catch((err) => {
 					console.error("Failed to summarize conversation:", err);
 					frappe.show_alert({
 						message: __("Failed to summarize conversation"),
 						indicator: "red"
 					});
-				}
-			});
-		} else {
-			frappe.show_alert({
-				message: __("No active chat session. Please create or select a chat first."),
-				indicator: "orange"
-			});
+				})
+				.finally(() => {
+					$summaryBtn.prop("disabled", false).html(`
+						<i class="fa fa-refresh" style="margin-right: 4px;"></i>
+						${__("Summarize")}
+					`);
+				});
 		}
 	});
 	
@@ -147,6 +135,33 @@ function initPhChat(container, page, $status) {
 	const currentUserId = frappe.session.user;
 	const agentId = "ph_agent";
 
+	// ── Token-based Summmarize button visibility ────────────────────
+	function updateSummarizeButtonVisibility() {
+		const $btn = $(".page-actions .btn-summary-conversation");
+		if (!$btn.length) return;
+		const roomId = window.phAgent?.state?.getActiveRoomId?.();
+		if (!roomId) { $btn.hide(); return; }
+		window.phAgent.roomService.getTokenInfo(roomId).then((info) => {
+			if (info.percentage > 20 && info.current_tokens > 0) {
+				$btn.show();
+			} else {
+				$btn.hide();
+			}
+		}).catch(() => { $btn.hide(); });
+	}
+
+	// Watch for token updates to show/hide Summarize button
+	frappe.realtime.on("token_update", (data) => {
+		if (data.session !== window.phAgent?.state?.getActiveRoomId?.()) return;
+		const $btn = $(".page-actions .btn-summary-conversation");
+		if (!$btn.length) return;
+		if (data.percentage > 20 && data.current_tokens > 0) {
+			$btn.show();
+		} else {
+			$btn.hide();
+		}
+	});
+
 	// ── Create Vue Advanced Chat web component ──────────────────────
 	const chat = document.createElement("vue-advanced-chat");
 	chat.setAttribute("height", "100%");
@@ -212,6 +227,9 @@ function initPhChat(container, page, $status) {
 				detail: [stateRooms[0]]
 			});
 			chat.dispatchEvent(fetchMessagesEvent);
+			
+			// Show Summarize button if token % > 20
+			updateSummarizeButtonVisibility();
 		}
 	}).catch(error => {
 		console.error("Failed to load initial rooms:", error);

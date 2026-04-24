@@ -75,8 +75,18 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
          * @param {Event} event - Event object with room details
          */
         handleFetchMessages: function(event) {
-            const room = event.detail[0];
-            if (!room || !room.roomId) return;
+            const detail = event.detail;
+            
+            // Support two detail formats:
+            // 1. Vue Advanced Chat emits: event.detail = [{ room: {...}, options: {...} }]
+            //    -> Use detail[0].room
+            // 2. Manual dispatch uses:     event.detail = [{ roomId: '...', ... }]
+            //    -> Use detail[0]
+            const room = detail[0]?.room || detail[0];
+            
+            if (!room || !room.roomId) {
+                return;
+            }
             
             const state = window.phAgent.state;
             const roomService = window.phAgent.roomService;
@@ -119,12 +129,19 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     }
                 })
                 .catch((err) => {
+                    // Silently handle token info errors
                 });
             
             frappe.call({
                 method: "ph_agent.api.chat.get_history",
                 args: { session: room.roomId },
                 callback: (r) => {
+                    // Guard: only apply messages if this room is still the active one
+                    const currentActive = window.phAgent.state.getActiveRoomId();
+                    if (currentActive !== room.roomId) {
+                        return;
+                    }
+                    
                     const currentUserId = roomService.getCurrentUserId();
                     const agentId = roomService.getAgentId();
                     

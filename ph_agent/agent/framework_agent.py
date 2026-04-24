@@ -339,55 +339,25 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	)
 
 
-def _make_json_serializable(obj: Any) -> Any:
-	"""Convert an object to JSON-serializable form, handling common non-serializable types."""
-	try:
-		# First try to serialize directly
-		json.dumps(obj)
-		return obj
-	except (TypeError, ValueError):
-		# If direct serialization fails, convert recursively
-		if obj is None:
-			return None
-		elif isinstance(obj, (str, int, float, bool)):
-			return obj
-		elif isinstance(obj, dict):
-			return {k: _make_json_serializable(v) for k, v in obj.items()}
-		elif isinstance(obj, (list, tuple, set)):
-			return [_make_json_serializable(item) for item in obj]
-		elif hasattr(obj, 'to_dict'):
-			# Try to use to_dict() method if available
-			try:
-				return _make_json_serializable(obj.to_dict())
-			except Exception:
-				return str(obj)
-		elif hasattr(obj, '__dict__'):
-			# Convert object to dict
-			return _make_json_serializable(obj.__dict__)
-		else:
-			# For other types, convert to string representation
-			return str(obj)
-
-
-def _filter_session_state(state: dict[str, Any] | None) -> dict[str, Any]:
-	"""Filter session state to remove non-serializable data."""
-	if not state:
-		return {}
-	
-	filtered_state = {}
-	for key, value in state.items():
-		if key != "in_memory":  # Remove in_memory provider data
-			filtered_state[key] = _make_json_serializable(value)
-	return filtered_state
-
-
 def _load_session_state(session_name: str) -> dict[str, Any]:
-	"""Load session state from Chat Session DocType."""
+	"""Load session state from Chat Session DocType.
+
+	Uses ``AgentSession.from_dict()`` to properly restore ``SerializationProtocol``
+	objects (e.g. ``Message`` instances from ``InMemoryHistoryProvider``) so that
+	provider state survives server restarts.
+	"""
 	try:
 		session_doc = frappe.get_doc("Chat Session", session_name)
 		if session_doc.session_state:
-			state = json.loads(session_doc.session_state)
-			return state
+			data = json.loads(session_doc.session_state)
+			# Restore full AgentSession with proper object deserialization
+			restored = AgentSession.from_dict(data)
+			logger.debug(
+				"Loaded session state for %s (%d keys in state)",
+				session_name,
+				len(restored.state),
+			)
+			return restored.state
 		return {}
 	except Exception as e:
 		frappe.log_error(
@@ -397,25 +367,29 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		return {}
 
 
-def _save_session_state(session_name: str, state: dict[str, Any]) -> None:
+def _save_session_state(session_name: str, session: AgentSession) -> None:
 	"""Save session state to Chat Session DocType.
+
+	Uses ``AgentSession.to_dict()`` for proper round-trip serialization of all
+	provider state (including ``InMemoryHistoryProvider`` messages), then stores
+	as JSON in the ``session_state`` field.
 
 	Uses ``frappe.db.set_value`` to avoid TimestampMismatchError from concurrent
 	saves (e.g. streaming producer thread vs. main thread updating token counts).
 	"""
 	try:
-		if not state:
+		if not session:
 			return
-		
-		filtered_state = _filter_session_state(state)
-		if not filtered_state:
+
+		serialized = session.to_dict()
+		if not serialized:
 			return
-		
+
 		frappe.db.set_value(
 			"Chat Session",
 			session_name,
 			{
-				"session_state": json.dumps(filtered_state, indent=2),
+				"session_state": json.dumps(serialized, indent=2, default=str),
 				"last_state_update": frappe.utils.now(),
 			},
 		)
@@ -482,18 +456,29 @@ def _extract_approval_data(response) -> dict[str, Any] | None:
 	}
 
 
-def _run_agent(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None):
+def _run_agent(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None) -> tuple[Any, AgentSession]:
+	"""Run agent (non-streaming) and return (response, agent_session).
+
+	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
+	so that provider state (including ``InMemoryHistoryProvider`` messages)
+	survives across invocations.
+	"""
 	agent = _build_agent(session_name=session_name, user=user)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
 		agent_session.state.update(session_state)
 	messages = message if isinstance(message, list) else [message]
 	result = asyncio.run(agent.run(messages, session=agent_session))
-	return result, agent_session.state
+	return result, agent_session
 
 
-async def _run_agent_stream(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None):
-	"""Run agent with streaming support."""
+async def _run_agent_stream(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None) -> tuple[Any, AgentSession]:
+	"""Run agent with streaming support and return (stream, agent_session).
+
+	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
+	so that provider state (including ``InMemoryHistoryProvider`` messages)
+	survives across invocations.
+	"""
 	agent = _build_agent(session_name=session_name, user=user)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
@@ -502,7 +487,7 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 	stream = agent.run(messages, session=agent_session, stream=True)
 	if inspect.isawaitable(stream):
 		stream = await stream
-	return stream, agent_session.state
+	return stream, agent_session
 
 
 def _extract_reasoning_from_response(response) -> str:
@@ -527,7 +512,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	# Load session state before running agent
 	stored_state = _load_session_state(session_name)
 	
-	response, session_state = _run_agent(session_name, Message("user", [user_message]), session_state=stored_state)
+	response, agent_session = _run_agent(session_name, Message("user", [user_message]), session_state=stored_state)
 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
@@ -537,11 +522,12 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	reasoning_content = _extract_reasoning_from_response(response)
 	
 	# Always save session state, regardless of approval flow
-	_save_session_state(session_name, session_state)
+	_save_session_state(session_name, agent_session)
 	
-	if approval_data and session_state:
-		# Also store session state in approval data for continuation
-		approval_data["conversation_state"]["session_state"] = _filter_session_state(session_state)
+	if approval_data and agent_session.state:
+		# Also store full session dict in approval data for continuation.
+		# run_after_approval will reconstruct the AgentSession from this.
+		approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
 	
 	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, approval_data, reasoning_content
 
@@ -567,8 +553,8 @@ def get_agent_response_stream(
 				# Load session state before running agent
 				stored_state = _load_session_state(session_name)
 				
-				# Use streaming agent runner
-				stream, agent_session_state = await _run_agent_stream(
+				# Use streaming agent runner — returns (stream, AgentSession)
+				stream, agent_session = await _run_agent_stream(
 					session_name, 
 					Message("user", [user_message]), 
 					session_state=stored_state
@@ -630,11 +616,12 @@ def get_agent_response_stream(
 				approval_data = _extract_approval_data(final_response)
 				
 				# Always save session state, regardless of approval flow
-				_save_session_state(session_name, agent_session_state)
+				_save_session_state(session_name, agent_session)
 				
 				if approval_data:
-					# Also store session state in approval data for continuation
-					approval_data["conversation_state"]["session_state"] = _filter_session_state(agent_session_state)
+					# Also store full session dict in approval data for continuation.
+					# run_after_approval will reconstruct the AgentSession from this.
+					approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
 					result_queue.put(("approval", (approval_data, input_tokens, output_tokens)))
 				else:
 					result_queue.put(("done", ("", input_tokens, output_tokens)))
@@ -751,8 +738,19 @@ def run_after_approval(
 		)
 		raise
 
-	# Get session state from conversation_state
-	session_state = conversation_state.get("session_state", {})
+	# Get session state from conversation_state.
+	# This is now a full AgentSession.to_dict() output (with "type": "session").
+	# Reconstruct the AgentSession to extract the state dict with proper
+	# SerializationProtocol objects restored.
+	session_data = conversation_state.get("session_state", {})
+	if isinstance(session_data, dict) and session_data.get("type") == "session":
+		try:
+			restored_session = AgentSession.from_dict(session_data)
+			session_state = restored_session.state
+		except Exception:
+			session_state = session_data.get("state", {})
+	else:
+		session_state = session_data if isinstance(session_data, dict) else {}
 	
 	try:
 		# Per the Microsoft Agent Framework documentation, provide:
@@ -764,7 +762,7 @@ def run_after_approval(
 			Message("user", [approval_response]),
 		]
 		
-		response, updated_state = _run_agent(
+		response, agent_session = _run_agent(
 			session_name, 
 			messages,  # Pass both messages
 			user=user,
@@ -774,7 +772,7 @@ def run_after_approval(
 		reasoning_content = _extract_reasoning_from_response(response)
 		
 		# Save updated session state to Chat Session
-		_save_session_state(session_name, updated_state)
+		_save_session_state(session_name, agent_session)
 		
 		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, reasoning_content
 	except Exception as e:

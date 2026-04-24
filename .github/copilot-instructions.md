@@ -63,7 +63,8 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   - Implement conditional auto‑scroll for streaming responses (see `uiHelpers.js` and `realtimeListeners.js`).
 - **Session state**:
   - `Chat Session` has two fields: `session_state` (Code/JSON, read_only) and `last_state_update` (Datetime, read_only).
-  - State is serialized via `_filter_session_state()` which removes `in_memory` provider data and converts non‑serializable objects (e.g., Pydantic models, objects with `__dict__`/`to_dict()`).
+  - State is serialized via `AgentSession.to_dict()` which preserves `SerializationProtocol` type info for proper round‑trip deserialization (including `InMemoryHistoryProvider` messages).
+  - State is restored via `AgentSession.from_dict()` which reconstructs `SerializationProtocol` objects (e.g., `Message` instances) from the stored JSON.
   - State is saved every turn, even when tool approval is triggered (stored in `conversation_state.session_state` for continuation).
   - Approval workflow: `run_after_approval()` loads state from `conversation_state.session_state`, passes it to `_run_agent()`, and saves the updated state back to the Chat Session.
 - **Avoid pitfalls**:

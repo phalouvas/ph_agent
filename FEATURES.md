@@ -66,19 +66,36 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 ---
 
-### 🔥 3. Conversation Compaction / Summarization Pipeline
+### ✅ 3. Conversation Compaction / Summarization Pipeline (Completed)
 
-**What**: The Microsoft docs show `MessageCountingChatReducer`. Your app already has `generate_conversation_summary()`, but it's not fully integrated into the provider pipeline.
+**Status**: ✅ **Fully implemented** — all 9 steps across 3 phases are complete.
 
-**How**: Enhance `FrappeMemoryProvider` to:
-- Automatically detect when conversation tokens approach the context limit (already tracked in `estimated_conversation_tokens`)
-- Trigger summarization **transparently** via `after_run()` (not as a separate API call)
-- Store the summary as a `Chat Message` with `message_type = "Summary"`
-- Serve only the summary + recent messages in subsequent `get_messages()`
+**What was built**:
 
-**Already partially done**: `last_summary_message` and `generate_conversation_summary()` exist, but the auto-triggering isn't wired into the provider pipeline.
+#### Phase 1: Core Auto-Compaction Pipeline
+- **Post-response auto-compaction check** — after the LLM response token counts are updated, automatically triggers summarization if the threshold is now exceeded (`_call_agent_background` → async enqueue of `_perform_auto_summary`)
+- **Shared auto-summary helper** — `_perform_auto_summary(session, enqueued_by, emit_status, is_async)` extracted as a reusable function returning `bool`
+- **Rate-limiting** — `_is_recently_summarized(session, min_interval_seconds=60)` prevents auto-summary from running more than once per minute
 
-**Why high value**: Long sessions hit context limits and the user gets an error. Auto-compaction fixes this.
+#### Phase 2: Robustness & Edge Cases
+- **Progressive thresholds** — 4-tier system: Normal (0-69%), Warning (70-84%), Critical (85-94%), Emergency (≥95%)
+- **Emergency compaction fallback** — `_emergency_prune_messages(session)` deletes oldest non-summary messages when LLM fails at ≥95% tokens, preserving at least 4 messages (2 turns)
+- **Accurate token estimation** — `_estimate_system_overhead()` accounts for system prompt, tool schemas (JSON ~2 chars/token), and a 20% conversation structure buffer
+- **Stacked summaries** — LLM prompt instructs: *"build upon previous summaries, focus on new discussion since last summary point"*
+
+#### Phase 3: Frontend & UX
+- **Collapsible summary styling** — `.ph-summary-collapsible` with arrow indicator, light blue gradient background, border-left accent
+- **Manual Summarize button** — hidden by default, appears when token % > 20%, calls `summarize_conversation` API with loading spinner
+- **Color-coded token thresholds** — dark red + pulse (>95%), red (>85%), amber (>70%), gray (normal)
+- **Real-time visibility** — `token_update` event drives Summarize button show/hide
+
+**Key files modified**:
+- `ph_agent/api/agent_jobs.py` — all Phase 1 & 2 logic
+- `ph_agent/agent/framework_agent.py` — stacked summary prompt
+- `ph_agent/public/js/chat/modules/realtimeListeners.js` — progressive threshold colors
+- `ph_agent/public/css/chat.css` — collapsible summary + pulse animation styles
+- `ph_agent/ph_agent/page/chat/chat.js` — Summarize button + real-time visibility
+- `ph_agent/public/js/chat/modules/roomService.js` — `summarizeSession()` method
 
 ---
 
@@ -140,13 +157,13 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 |---|---|---|---|
 | **1. LLM Memory Provider** | Medium | 🔥🔥🔥🔥🔥 | LLM provider (already have) |
 | **2. RAG Search Tool** | Medium-High | 🔥🔥🔥🔥🔥 | Vector DB or Semantic Kernel |
-| **3. Auto-Compaction** | Low-Medium | 🔥🔥🔥🔥 | Already partially built |
+| **3. Auto-Compaction** | ✅ **Done** | 🔥🔥🔥🔥 | — |
 | **4. Session Persistence** | Low | 🔥🔥🔥 | Already have `session_state` field |
 | **5. Mem0** | Low (just `pip install`) | 🔥🔥🔥🔥 | API key, external service |
 | **6. Audit Trail** | Very Low | 🔥🔥 | None |
 
 ---
 
-**My recommendation**: Start with **#3 (Auto-Compaction)** since it's already half-built and solves a real pain point (context limit errors). Then **#1 (LLM Memory Provider)** for the biggest leap in capability. Add **#4 (Session Persistence)** alongside both as it's low effort.
+**My recommendation**: Now that **#3 (Auto-Compaction)** is fully implemented, tackle **#1 (LLM Memory Provider)** for the biggest leap in capability. Then **#5 (Mem0)** for a managed memory service. Add **#4 (Session Persistence)** alongside both as it's low effort.
 
 Would you like me to dive deeper into the design for any of these?

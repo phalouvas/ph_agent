@@ -252,5 +252,7 @@ function initPhChat(container, page, $status) {
 				}
 			});
 		}
+
+		uiHelpers.applySummaryMessageStyles(state.getMessages());
 	}).observe(root, { childList: true, subtree: true });
 }

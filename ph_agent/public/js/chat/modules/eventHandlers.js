@@ -155,6 +155,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     // Update chat component
                     _chat.messages = messages;
                     _chat.setAttribute("messages-loaded", "true");
+
+                    const uiHelpers = window.phAgent.uiHelpers;
+                    uiHelpers.applySummaryMessageStyles(messages);
                 },
                 error: (err) => {
                     _chat.setAttribute("messages-loaded", "true"); // Still mark as loaded

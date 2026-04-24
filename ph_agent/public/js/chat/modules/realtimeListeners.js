@@ -297,6 +297,10 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 }),
                 saved: true,
             };
+
+            if (data.message_type) {
+                newMsg.message_type = data.message_type;
+            }
             
             if (data.is_streaming_placeholder || data.content === "⏳ Generating response...") {
                 
@@ -373,6 +377,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             }
             
             _chat.messages = state.getMessages();
+            uiHelpers.applySummaryMessageStyles(state.getMessages());
         },
         
         /**

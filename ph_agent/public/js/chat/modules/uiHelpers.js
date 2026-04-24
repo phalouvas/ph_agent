@@ -96,8 +96,106 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                     border-color: var(--primary, #4f72b8);
                     color: #fff;
                 }
+
+                /* Summary message styling (shadow DOM) */
+                .ph-summary-message .vac-message-card {
+                    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+                    border: 1px solid #7dd3fc;
+                    border-left: 4px solid #0ea5e9;
+                    border-radius: 8px;
+                }
+                .ph-summary-message .vac-message-card:hover {
+                    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+                    border-color: #38bdf8;
+                }
+                .ph-summary-message .vac-text-timestamp {
+                    color: #0c4a6e;
+                }
+                .ph-summary-message .vac-format-container:first-child {
+                    font-weight: 600;
+                }
+                .ph-summary-message .vac-message-card {
+                    cursor: pointer;
+                }
+                .ph-summary-message .vac-format-container:first-child::after {
+                    content: "▾";
+                    display: inline-block;
+                    margin-left: 8px;
+                    font-size: 11px;
+                    color: #0369a1;
+                    transition: transform 0.2s ease;
+                }
+                .ph-summary-message.ph-summary-collapsed .vac-format-container:first-child::after {
+                    transform: rotate(-90deg);
+                }
+                .ph-summary-message.ph-summary-collapsed .vac-format-container:nth-child(2) {
+                    display: none;
+                }
             `;
             root.appendChild(_suggestionStyle);
+        },
+
+        /**
+         * Apply summary message class to message wrapper elements.
+         * Messages are rendered inside shadow DOM, so we tag wrappers directly.
+         * @param {Object[]} messages - Chat messages array
+         */
+        applySummaryMessageStyles: function(messages) {
+            const root = _chat.shadowRoot || _container;
+            if (!root) return;
+
+            // If the component created/changed its shadow root after init,
+            // make sure our style tag is injected into the current root.
+            if (!_suggestionStyle || _suggestionStyle.parentNode !== root) {
+                this.injectSuggestionStyles();
+            }
+
+            const summaryIds = new Set(
+                (messages || [])
+                    .filter((msg) => msg && msg.message_type === "Summary")
+                    .map((msg) => String(msg._id))
+            );
+
+            // Remove stale summary classes first.
+            root.querySelectorAll(".ph-summary-message").forEach((el) => {
+                if (!summaryIds.has(el.id)) {
+                    el.classList.remove("ph-summary-message");
+                }
+            });
+
+            // Apply class to currently visible summary message wrappers.
+            summaryIds.forEach((messageId) => {
+                const msgEl = root.querySelector(`[id="${messageId}"]`);
+                if (msgEl) {
+                    msgEl.classList.add("ph-summary-message");
+                }
+            });
+
+            // Fallback: mark rendered summary cards by visible title text
+            // (handles cases where message_type is missing in frontend payload).
+            root.querySelectorAll(".vac-message-wrapper").forEach((wrapper) => {
+                const titleEl = wrapper.querySelector(".vac-format-container:first-child");
+                const titleText = (titleEl?.textContent || "").trim().toLowerCase();
+                if (titleText.includes("summary")) {
+                    wrapper.classList.add("ph-summary-message");
+                }
+            });
+
+            // Add collapsible behavior (default: collapsed) for summary cards.
+            root.querySelectorAll(".ph-summary-message").forEach((wrapper) => {
+                const card = wrapper.querySelector(".vac-message-card");
+                const body = wrapper.querySelector(".vac-format-container:nth-child(2)");
+                if (!card || !body) return;
+
+                if (!wrapper.dataset.summaryCollapseInit) {
+                    wrapper.classList.add("ph-summary-collapsed");
+                    wrapper.dataset.summaryCollapseInit = "1";
+
+                    card.addEventListener("click", () => {
+                        wrapper.classList.toggle("ph-summary-collapsed");
+                    });
+                }
+            });
         },
         
         /**

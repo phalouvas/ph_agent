@@ -729,28 +729,59 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                             primary_action_label: __("Save"),
                             primary_action: (values) => {
                                 dialog.hide();
-                                // Update title if changed
-                                const titlePromise = values.title !== roomInfo.title
-                                    ? roomService.updateRoomTitle(room.roomId, values.title)
-                                    : Promise.resolve();
-                                // Update provider if changed
-                                const providerPromise = values.provider !== roomInfo.provider
-                                    ? roomService.updateRoomProvider(room.roomId, values.provider)
-                                    : Promise.resolve();
                                 
-                                Promise.all([titlePromise, providerPromise])
-                                    .then(() => {
-                                        frappe.show_alert({ 
-                                            message: __("Room settings updated"), 
-                                            indicator: "green" 
-                                        });
-                                    })
-                                    .catch(err => {
+                                // Collect only changed values
+                                const args = { session: room.roomId };
+                                if (values.title !== roomInfo.title) {
+                                    args.title = values.title;
+                                }
+                                if (values.provider !== roomInfo.provider) {
+                                    args.provider_name = values.provider;
+                                }
+                                
+                                if (!args.title && !args.provider_name) {
+                                    // Nothing changed
+                                    return;
+                                }
+                                
+                                // Single API call to avoid deadlocks
+                                frappe.call({
+                                    method: "ph_agent.api.chat.update_session_settings",
+                                    args: args,
+                                    callback: (r) => {
+                                        if (r.message && r.message.status === "ok") {
+                                            // Update local state for changed fields
+                                            const state = window.phAgent.state;
+                                            const room = state.getRoomById(room.roomId);
+                                            
+                                            if (args.title) {
+                                                const provider = state.getRoomProvider(room.roomId) || "";
+                                                state.updateRoom(room.roomId, {
+                                                    roomName: args.title + " — " + provider
+                                                });
+                                            }
+                                            if (args.provider_name) {
+                                                state.setRoomProvider(room.roomId, args.provider_name);
+                                                const currentTitle = room?.roomName.split(" — ")[0] || roomInfo.title;
+                                                state.updateRoom(room.roomId, {
+                                                    roomName: currentTitle + " — " + args.provider_name
+                                                });
+                                            }
+                                            window.phAgent.roomService.getChat().rooms = state.getRooms();
+                                            
+                                            frappe.show_alert({ 
+                                                message: __("Room settings updated"), 
+                                                indicator: "green" 
+                                            });
+                                        }
+                                    },
+                                    error: (err) => {
                                         frappe.show_alert({ 
                                             message: __("Failed to update room settings"), 
                                             indicator: "red" 
                                         });
-                                    });
+                                    }
+                                });
                             },
                         });
                         dialog.show();

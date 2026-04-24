@@ -162,14 +162,12 @@ class UserPreferenceProvider(ContextProvider):
 		state: dict[str, Any],
 	) -> None:
 		"""Load preferences from the User Preference DocType and inject as instructions."""
-		frappe.log_error("UserPreferenceProvider.before_run called", "PH Agent Debug")
 		user = self._get_user(session)
 		if not user:
 			frappe.log_error(f"before_run: no user resolved from session.session_id={getattr(session, 'session_id', None)}", "PH Agent Debug")
 			return
 
 		prefs = self._load_preferences(user)
-		frappe.log_error(f"before_run: user={user}, loaded prefs={prefs}", "PH Agent Debug")
 
 		# Also cache in session state for same-turn access by after_run
 		state[self.PREFERENCES_KEY] = prefs
@@ -187,7 +185,6 @@ class UserPreferenceProvider(ContextProvider):
 		state: dict[str, Any],
 	) -> None:
 		"""Scan new messages for preference signals and persist to the DocType."""
-		frappe.log_error("UserPreferenceProvider.after_run called", "PH Agent Debug")
 		user = self._get_user(session)
 		if not user:
 			frappe.log_error(f"after_run: no user resolved from session.session_id={getattr(session, 'session_id', None)}", "PH Agent Debug")
@@ -198,7 +195,6 @@ class UserPreferenceProvider(ContextProvider):
 			msg for msg in context.input_messages
 			if msg.role == "user"
 		]
-		frappe.log_error(f"after_run: user={user}, user_messages count={len(user_messages)}, input_messages count={len(context.input_messages)}", "PH Agent Debug")
 
 		if user_messages:
 			msg_text = " | ".join(
@@ -206,13 +202,11 @@ class UserPreferenceProvider(ContextProvider):
 				else str(c) for msg in user_messages
 				for c in (msg.contents or [])
 			)
-			frappe.log_error(f"after_run: user message text={msg_text[:500]}", "PH Agent Debug")
 
 		if not user_messages:
 			return
 
 		signals = self._extract_preferences(user_messages)
-		frappe.log_error(f"after_run: signals extracted={signals}", "PH Agent Debug")
 		if not signals:
 			return
 
@@ -221,7 +215,6 @@ class UserPreferenceProvider(ContextProvider):
 		existing = self._load_preferences(user)
 		now = datetime.utcnow().isoformat()
 		merged = self._merge_preferences(existing, signals, now=now)
-		frappe.log_error(f"after_run: merged prefs={merged}", "PH Agent Debug")
 
 		self._save_preferences(user, merged)
 
@@ -262,7 +255,6 @@ class UserPreferenceProvider(ContextProvider):
 				if isinstance(doc.preferences, str):
 					return json.loads(doc.preferences)
 				return dict(doc.preferences)
-			frappe.log_error(f"_load_preferences: user={user} has empty preferences field", "PH Agent Debug")
 			return {}
 		except frappe.DoesNotExistError:
 			frappe.log_error(f"_load_preferences: no User Preference doc for user={user}", "PH Agent Debug")
@@ -282,14 +274,12 @@ class UserPreferenceProvider(ContextProvider):
 				"preferences": json.dumps(prefs),
 			})
 			doc.save(ignore_permissions=True)
-			frappe.log_error(f"_save_preferences: created for user={user}, prefs={prefs}", "PH Agent Debug")
 		except frappe.DuplicateEntryError:
 			# Document already exists — update it
 			try:
 				doc = frappe.get_doc("User Preference", user)
 				doc.preferences = json.dumps(prefs)
 				doc.save(ignore_permissions=True)
-				frappe.log_error(f"_save_preferences: updated for user={user}, prefs={prefs}", "PH Agent Debug")
 			except Exception as e:
 				frappe.log_error(f"_save_preferences update failed for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
 		except Exception as e:

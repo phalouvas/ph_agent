@@ -164,7 +164,6 @@ class UserPreferenceProvider(ContextProvider):
 		"""Load preferences from the User Preference DocType and inject as instructions."""
 		user = self._get_user(session)
 		if not user:
-			frappe.log_error(f"before_run: no user resolved from session.session_id={getattr(session, 'session_id', None)}", "PH Agent Debug")
 			return
 
 		prefs = self._load_preferences(user)
@@ -187,7 +186,6 @@ class UserPreferenceProvider(ContextProvider):
 		"""Scan new messages for preference signals and persist to the DocType."""
 		user = self._get_user(session)
 		if not user:
-			frappe.log_error(f"after_run: no user resolved from session.session_id={getattr(session, 'session_id', None)}", "PH Agent Debug")
 			return
 
 		# Collect user messages from this turn
@@ -234,14 +232,11 @@ class UserPreferenceProvider(ContextProvider):
 		"""Resolve the Frappe user from the session's Chat Session doc."""
 		session_id = getattr(session, "session_id", None)
 		if not session_id:
-			frappe.log_error("_get_user: session has no session_id", "PH Agent Debug")
 			return None
 		try:
 			user = frappe.db.get_value("Chat Session", session_id, "user")
-			frappe.log_error(f"_get_user: session_id={session_id} -> user={user}", "PH Agent Debug")
 			return user
-		except Exception as e:
-			frappe.log_error(f"_get_user error: {type(e).__name__}: {e}", "PH Agent Debug")
+		except Exception:
 			return None
 
 	@staticmethod
@@ -256,10 +251,8 @@ class UserPreferenceProvider(ContextProvider):
 					return json.loads(doc.preferences)
 				return dict(doc.preferences)
 			return {}
-		except frappe.DoesNotExistError:
-			frappe.log_error(f"_load_preferences: no User Preference doc for user={user}", "PH Agent Debug")
-		except Exception as e:
-			frappe.log_error(f"_load_preferences error for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
+		except (frappe.DoesNotExistError, Exception):
+			pass
 		return {}
 
 	@staticmethod
@@ -280,10 +273,10 @@ class UserPreferenceProvider(ContextProvider):
 				doc = frappe.get_doc("User Preference", user)
 				doc.preferences = json.dumps(prefs)
 				doc.save(ignore_permissions=True)
-			except Exception as e:
-				frappe.log_error(f"_save_preferences update failed for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
-		except Exception as e:
-			frappe.log_error(f"_save_preferences create failed for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
+			except Exception:
+				pass
+		except Exception:
+			pass
 
 	# ------------------------------------------------------------------
 	# Preference formatting

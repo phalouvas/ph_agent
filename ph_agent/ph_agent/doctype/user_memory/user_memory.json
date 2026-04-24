@@ -1,0 +1,135 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "hash",
+ "creation": "2026-04-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "fact",
+  "category",
+  "confidence",
+  "source_session",
+  "source_message",
+  "section_tracking",
+  "last_encountered_at",
+  "encounter_count"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "fact",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Fact",
+   "reqd": 1
+  },
+  {
+   "default": "Fact",
+   "fieldname": "category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Category",
+   "options": "Fact\nPreference\nGoal\nContext\nPersonal\nOther",
+   "reqd": 1
+  },
+  {
+   "default": "0.7",
+   "description": "LLM-assigned confidence score (0.0 to 1.0). Higher values indicate more reliable memories.",
+   "fieldname": "confidence",
+   "fieldtype": "Float",
+   "label": "Confidence",
+   "precision": "2"
+  },
+  {
+   "fieldname": "source_session",
+   "fieldtype": "Link",
+   "label": "Source Session",
+   "options": "Chat Session",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_message",
+   "fieldtype": "Link",
+   "label": "Source Message",
+   "options": "Chat Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_tracking",
+   "fieldtype": "Section Break",
+   "label": "Tracking"
+  },
+  {
+   "fieldname": "last_encountered_at",
+   "fieldtype": "Datetime",
+   "label": "Last Encountered At",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "description": "How many times this fact has been re-detected across conversations.",
+   "fieldname": "encounter_count",
+   "fieldtype": "Int",
+   "label": "Encounter Count",
+   "read_only": 1
+  }
+ ],
+ "indexes": [
+  {
+   "fields": ["user", "fact(100)"],
+   "unique": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-04-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "User Memory",
+ "naming_rule": "Random (hash)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Script Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

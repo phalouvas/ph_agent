@@ -100,9 +100,21 @@
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "memory-stick",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "User Memory",
+   "link_to": "User Memory",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-04-24 06:27:37.245687",
+ "modified": "2026-04-24 09:16:38.403579",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

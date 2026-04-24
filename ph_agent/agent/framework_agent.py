@@ -20,6 +20,97 @@ from ph_agent.agent.tools.tool_manager import ToolManager
 
 
 # ---------------------------------------------------------------------------
+# Patch agent_framework_openai to handle DeepSeek's reasoning_content
+# ---------------------------------------------------------------------------
+# The library reads ``reasoning_details`` from the OpenAI response object,
+# but DeepSeek returns ``reasoning_content``. Since the OpenAI SDK v2.32.0
+# models have ``extra="allow"``, ``reasoning_content`` lands in Pydantic's
+# ``model_extra`` dict rather than as a named attribute.
+#
+# We patch the two parsing methods to also extract reasoning from model_extra.
+
+import agent_framework_openai._chat_completion_client as _openai_client_mod
+
+
+def _extract_reasoning_from_message(msg) -> str | None:
+	"""Extract reasoning_content text from an OpenAI message/delta object.
+	
+	Checks both direct attribute (``reasoning_details``) and Pydantic
+	``model_extra`` (``reasoning_content`` from DeepSeek).
+	Returns the raw reasoning text string, or None.
+	"""
+	# Check direct attribute (standard agent_framework_openai path)
+	reasoning = getattr(msg, "reasoning_details", None)
+	if reasoning is not None:
+		return str(reasoning)
+	# Check model_extra for DeepSeek's reasoning_content
+	if hasattr(msg, "model_extra") and msg.model_extra:
+		reasoning = msg.model_extra.get("reasoning_content")
+		if reasoning is not None:
+			return str(reasoning)
+	return None
+
+
+_orig_parse_response = _openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai
+
+
+def _patched_parse_response(self, response, options):
+	"""Patched non-streaming parser: also extracts reasoning from model_extra."""
+	result = _orig_parse_response(self, response, options)
+	# Check each choice for reasoning_content that the original parser missed
+	for choice in getattr(response, "choices", []) or []:
+		msg = getattr(choice, "message", None)
+		if msg is None:
+			continue
+		reasoning_text = _extract_reasoning_from_message(msg)
+		if reasoning_text:
+			# Find the assistant message in the result and add reasoning content
+			for m in result.messages:
+				if m.role == "assistant":
+					# Only add if not already present (avoid duplicates)
+					has_reasoning = any(
+						getattr(c, 'type', None) == "text_reasoning"
+						for c in getattr(m, 'contents', []) or []
+					)
+					if not has_reasoning:
+						m.contents.append(
+							Content.from_text_reasoning(text=reasoning_text)
+						)
+					break
+	return result
+
+
+_orig_parse_update = _openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai
+
+
+def _patched_parse_update(self, chunk):
+	"""Patched streaming parser: also extracts reasoning from model_extra."""
+	update = _orig_parse_update(self, chunk)
+	# Check each choice's delta for reasoning_content
+	for choice in getattr(chunk, "choices", []) or []:
+		delta = getattr(choice, "delta", None)
+		if delta is None:
+			continue
+		reasoning_text = _extract_reasoning_from_message(delta)
+		if reasoning_text:
+			# Only add if not already present
+			has_reasoning = any(
+				getattr(c, 'type', None) == "text_reasoning"
+				for c in getattr(update, 'contents', []) or []
+			)
+			if not has_reasoning:
+				update.contents.append(
+					Content.from_text_reasoning(text=reasoning_text)
+				)
+	return update
+
+
+# Apply patches
+_openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai = _patched_parse_response
+_openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai = _patched_parse_update
+
+
+# ---------------------------------------------------------------------------
 # Text post-processing helpers
 # ---------------------------------------------------------------------------
 
@@ -222,9 +313,35 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	if enable_thinking:
 		default_options["extra_body"] = {"thinking": {"type": "enabled"}}
 		default_options["reasoning_effort"] = provider_doc.reasoning_effort or "high"
+		try:
+			frappe.log_error(
+				title="[Thinking Debug] Agent config",
+				message=(
+					f"Session: {session_name}\n"
+					f"Thinking: ENABLED\n"
+					f"extra_body: {default_options.get('extra_body')}\n"
+					f"reasoning_effort: {default_options.get('reasoning_effort')}\n"
+					f"model: {provider_doc.default_model}\n"
+					f"max_tokens: {max_tokens}"
+				),
+			)
+		except Exception:
+			pass
 	else:
 		default_options["temperature"] = temperature
 		default_options["extra_body"] = {"thinking": {"type": "disabled"}}
+		try:
+			frappe.log_error(
+				title="[Thinking Debug] Agent config",
+				message=(
+					f"Session: {session_name}\n"
+					f"Thinking: DISABLED\n"
+					f"temperature: {temperature}\n"
+					f"model: {provider_doc.default_model}"
+				),
+			)
+		except Exception:
+			pass
 
 	# Build skills provider from both file-based and DocType-based sources
 	skills_provider = _build_skills_provider()
@@ -413,11 +530,27 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 def _extract_reasoning_from_response(response) -> str:
 	"""Extract reasoning content from a non-streaming agent response."""
 	reasoning_parts = []
-	for msg in getattr(response, 'messages', []) or []:
-		for content in getattr(msg, 'contents', []) or []:
-			if getattr(content, 'type', None) == "text_reasoning":
-				reasoning_parts.append(content.text or "")
-	return "\n".join(reasoning_parts)
+	content_types = set()
+	for msg_idx, msg in enumerate(getattr(response, 'messages', []) or []):
+		for c_idx, content in enumerate(getattr(msg, 'contents', []) or []):
+			c_type = getattr(content, 'type', None)
+			content_types.add(c_type)
+			if c_type == "text_reasoning":
+				text = content.text or ""
+				reasoning_parts.append(text)
+	result = "\n".join(reasoning_parts)
+	try:
+		frappe.log_error(
+			title="[Thinking Debug] Non-streaming reasoning extraction",
+			message=(
+				f"Content types seen: {content_types}\n"
+				f"text_reasoning count: {len(reasoning_parts)}\n"
+				f"total reasoning len: {len(result)}"
+			),
+		)
+	except Exception:
+		pass
+	return result
 
 
 def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None, str]:
@@ -482,16 +615,18 @@ def get_agent_response_stream(
 				seen_text = ""
 				seen_reasoning = ""
 				chunk_count = 0
+				reasoning_chunk_count = 0
 
 				async for update in stream:
 					if stop_event.is_set():
 						break
 
-					# Check for reasoning content in the update's contents
+					# Debug: log all content types in each update
 					if hasattr(update, 'contents') and update.contents:
-						for content in update.contents:
-							if getattr(content, 'type', None) == "text_reasoning":
-								reasoning_text = content.text or ""
+						for c in update.contents:
+							c_type = getattr(c, 'type', 'unknown')
+							if c_type == "text_reasoning":
+								reasoning_text = c.text or ""
 								if reasoning_text.startswith(seen_reasoning):
 									reasoning_delta = reasoning_text[len(seen_reasoning):]
 									seen_reasoning = reasoning_text
@@ -499,7 +634,10 @@ def get_agent_response_stream(
 									reasoning_delta = reasoning_text
 									seen_reasoning += reasoning_delta
 								if reasoning_delta:
+									reasoning_chunk_count += 1
 									result_queue.put(("reasoning_chunk", reasoning_delta))
+							elif c_type not in ("text", "function_call", "function_result"):
+								pass  # silently ignore other types
 
 					chunk = update.text or ""
 					if not chunk:
@@ -525,6 +663,19 @@ def get_agent_response_stream(
 				if stop_event.is_set():
 					result_queue.put(("done", ("", 0, 0)))
 					return
+
+				try:
+					frappe.log_error(
+						title="[Thinking Debug] Stream finished",
+						message=(
+							f"Session: {session_name}\n"
+							f"reasoning_chunks: {reasoning_chunk_count}\n"
+							f"seen_reasoning_len: {len(seen_reasoning)}\n"
+							f"total_chunks: {chunk_count}"
+						),
+					)
+				except Exception:
+					pass
 
 				final_response = await stream.get_final_response()
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)

@@ -160,6 +160,44 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 
 ---
 
+### ✅ 7. Saved Prompts with Variable Substitution
+
+**Status**: ✅ **Fully implemented**.
+
+**What**: Per-user saved prompt library (like Open WebUI) where users can save reusable prompt templates with `{{variable}}` placeholders. A 📋 button appears in the chat input footer (via Vue Advanced Chat's `textareaActionEnabled` slot). Clicking it opens a Frappe Dialog to browse/search saved prompts. Prompts with `{{variables}}` trigger a second dialog for filling values before insertion into the textarea.
+
+**How it works**:
+- **Saved Prompt DocType** — stores prompts per-user with fields: `user`, `title`, `content` (Text Editor), `category` (free-text Data), `is_favorite` (Check), `usage_count` (Int, read-only)
+- **API endpoints** in `ph_agent/api/chat.py`:
+  - `list_saved_prompts(category)` — user's prompts, sorted favorites-first then by usage
+  - `save_prompt(title, content, category, is_favorite, prompt_id)` — create or update
+  - `delete_prompt(prompt_id)` — owner-checked delete
+  - `get_prompt(prompt_id)` — single prompt details
+  - `increment_prompt_usage(prompt_id)` — track usage count
+- **Frontend module** (`promptManager.js`):
+  - `openPromptLibrary()` — Frappe Dialog with search, grouped list (⭐Favorites / Category / Other), click-to-select
+  - `selectPrompt(prompt)` — parses `{{variable}}` patterns, shows fill dialog if variables detected, inserts directly if none
+  - `openManageDialog()` — full CRUD (new, edit, delete prompts)
+  - `openEditDialog()` — create/edit form with title, content (Text Editor), category, favorite checkbox
+- **Variable substitution**: Regex `/\{\{(\w+)\}\}/g` extracts variable names. Fill dialog shows a preview with highlighted placeholders and one input per variable. On "Insert", replaces all `{{var}}` with user values and inserts into textarea via shadow DOM.
+
+**Files created**:
+- `ph_agent/ph_agent/doctype/saved_prompt/saved_prompt.json` — DocType schema
+- `ph_agent/ph_agent/doctype/saved_prompt/saved_prompt.py` — DocType controller
+- `ph_agent/ph_agent/doctype/saved_prompt/__init__.py` — package init
+- `ph_agent/public/js/chat/modules/promptManager.js` — full prompt management module (~430 lines)
+
+**Files modified**:
+- `ph_agent/api/chat.py` — added 5 saved prompt API endpoints
+- `ph_agent/public/js/chat/loader.js` — registered `promptManager.js` in module load order
+- `ph_agent/ph_agent/page/chat/chat.js` — enabled `textarea-action-enabled`, initialized promptManager
+- `ph_agent/public/js/chat/modules/eventHandlers.js` — bound `textarea-action-handler` event
+- `ph_agent/public/css/chat.css` — added prompt library, card, badge, variable placeholder, and manage dialog styles
+
+**Why high value**: Users can save frequently-used prompts (e.g., "Write a professional email about {{topic}}", "Summarize this {{document_type}}") and quickly insert them with variable substitution — dramatically reducing repetitive typing.
+
+---
+
 ## Priority Matrix
 
 | Feature | Effort | Impact | Dependencies |

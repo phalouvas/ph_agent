@@ -63,7 +63,8 @@ window.phAgent.moduleLoadOrder = [
     'roomService.js',
     'eventHandlers.js',
     'uiHelpers.js',
-    'realtimeListeners.js'
+    'realtimeListeners.js',
+    'promptManager.js'
 ];
 
 /**

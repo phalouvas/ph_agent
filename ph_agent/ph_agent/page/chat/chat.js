@@ -179,6 +179,7 @@ function initPhChat(container, page, $status) {
 	]));
 	chat.setAttribute("message-selection-actions", JSON.stringify([{ name: "deleteMessages", title: __("Delete") }]));
 	chat.setAttribute("room-info-enabled", "true");
+	chat.setAttribute("textarea-action-enabled", "true");
 	container.appendChild(chat);
 
 	// Prevent Frappe global keyboard shortcuts (e.g. Shift+/ = "?") from
@@ -205,6 +206,10 @@ function initPhChat(container, page, $status) {
 	// Initialize real-time listeners
 	const realtimeListeners = window.phAgent.realtimeListeners;
 	realtimeListeners.init(chat, container, $status, agentId);
+	
+	// Initialize prompt manager
+	const promptManager = window.phAgent.promptManager;
+	promptManager.init(chat, container);
 	
 	// Bind event handlers to the chat component
 	eventHandlers.bindAll();

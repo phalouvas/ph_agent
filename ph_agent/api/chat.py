@@ -649,3 +649,96 @@ def regenerate_message(message_id):
 	frappe.cache().set_value(f"ph_agent:job:{session}", job.id, expires_in_sec=600)
 
 	return {"status": "queued"}
+
+
+# ── Saved Prompts API ──────────────────────────────────────────────
+
+
+@frappe.whitelist()
+def list_saved_prompts(category=None):
+	"""List saved prompts for the current user, ordered by favorites first, then usage count."""
+	filters = {"user": frappe.session.user}
+	if category:
+		filters["category"] = category
+
+	prompts = frappe.get_all(
+		"Saved Prompt",
+		filters=filters,
+		fields=["name", "title", "content", "category", "is_favorite", "usage_count", "modified"],
+		order_by="is_favorite desc, usage_count desc, modified desc",
+	)
+	return prompts
+
+
+@frappe.whitelist()
+def save_prompt(title, content, category=None, is_favorite=0, prompt_id=None):
+	"""Create or update a saved prompt for the current user."""
+	if not title or not title.strip():
+		frappe.throw(frappe._("Title is required."))
+	if not content or not content.strip():
+		frappe.throw(frappe._("Content is required."))
+
+	if prompt_id:
+		# Update existing prompt
+		prompt = frappe.get_doc("Saved Prompt", prompt_id)
+		if prompt.user != frappe.session.user:
+			frappe.throw(frappe._("You can only edit your own prompts."), frappe.exceptions.PermissionError)
+		prompt.title = title
+		prompt.content = content
+		prompt.category = category
+		prompt.is_favorite = 1 if is_favorite in (1, "1", True) else 0
+		prompt.save(ignore_permissions=True)
+		frappe.db.commit()
+		return {"status": "ok", "name": prompt.name}
+	else:
+		# Create new prompt
+		prompt = frappe.get_doc({
+			"doctype": "Saved Prompt",
+			"user": frappe.session.user,
+			"title": title,
+			"content": content,
+			"category": category,
+			"is_favorite": 1 if is_favorite in (1, "1", True) else 0,
+		})
+		prompt.insert(ignore_permissions=True)
+		frappe.db.commit()
+		return {"status": "ok", "name": prompt.name}
+
+
+@frappe.whitelist()
+def delete_prompt(prompt_id):
+	"""Delete a saved prompt. Only the owner can delete."""
+	prompt = frappe.get_doc("Saved Prompt", prompt_id)
+	if prompt.user != frappe.session.user:
+		frappe.throw(frappe._("You can only delete your own prompts."), frappe.exceptions.PermissionError)
+	frappe.delete_doc("Saved Prompt", prompt_id, ignore_permissions=True)
+	frappe.db.commit()
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def get_prompt(prompt_id):
+	"""Get a single saved prompt by ID."""
+	prompt = frappe.get_doc("Saved Prompt", prompt_id)
+	if prompt.user != frappe.session.user:
+		frappe.throw(frappe._("Prompt not found."), frappe.exceptions.PermissionError)
+	return {
+		"name": prompt.name,
+		"title": prompt.title,
+		"content": prompt.content,
+		"category": prompt.category,
+		"is_favorite": prompt.is_favorite,
+		"usage_count": prompt.usage_count,
+		"modified": str(prompt.modified),
+	}
+
+
+@frappe.whitelist()
+def increment_prompt_usage(prompt_id):
+	"""Increment the usage count for a saved prompt."""
+	prompt = frappe.get_doc("Saved Prompt", prompt_id)
+	if prompt.user != frappe.session.user:
+		frappe.throw(frappe._("Prompt not found."), frappe.exceptions.PermissionError)
+	prompt.db_set("usage_count", (prompt.usage_count or 0) + 1)
+	frappe.db.commit()
+	return {"status": "ok"}

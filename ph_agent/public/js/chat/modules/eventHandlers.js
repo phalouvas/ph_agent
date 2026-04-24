@@ -55,6 +55,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             _chat.addEventListener("add-room", this.handleAddRoom.bind(this));
             _chat.addEventListener("room-action-handler", this.handleRoomAction.bind(this));
             _chat.addEventListener("open-file", this.handleOpenFile.bind(this));
+            _chat.addEventListener("textarea-action-handler", this.handleTextareaAction.bind(this));
         },
         
         /**
@@ -1091,6 +1092,24 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             } else if (file.action === "preview") {
                 // Preview action - let Vue Advanced Chat handle it
                 // The library will show media preview for images/videos
+            }
+        },
+        
+        // --- Textarea Action Handler ---
+        
+        /**
+         * Handle textarea-action-handler event (custom action button in input footer).
+         * Opens the saved prompts library.
+         * @param {Event} event - Event object
+         */
+        handleTextareaAction: function(event) {
+            if (window.phAgent && window.phAgent.promptManager) {
+                window.phAgent.promptManager.openPromptLibrary();
+            } else {
+                frappe.show_alert({
+                    message: __("Prompt manager not available."),
+                    indicator: "orange",
+                });
             }
         },
         

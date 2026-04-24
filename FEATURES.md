@@ -137,17 +137,24 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 ---
 
-### 🔥 4. AgentSession Persistence (survive restarts)
+### ✅ 4. AgentSession Persistence (survive restarts)
+
+**Status**: ✅ **Fully implemented**.
 
 **What**: Persist the full `AgentSession` (including provider state, not just chat messages) so that sessions survive server restarts.
 
-**How**: The `Chat Session` DocType already has a `session_state` field. Use `agent.serialize_session()` and `agent.deserialize_session_async()` to persist/restore session state.
-- On `after_run()` or at session close, call `session_state = agent.serialize_session(session)` and store it
-- On session resume, call `session = await agent.deserialize_session_async(session_state)`
+**How it works**:
+- `_load_session_state()` now uses `AgentSession.from_dict()` to restore `SerializationProtocol` objects (e.g., `Message` instances from `InMemoryHistoryProvider`) with proper type metadata
+- `_save_session_state()` now uses `AgentSession.to_dict()` for proper round-trip serialization of all provider state — including `in_memory` messages (previously stripped)
+- `_run_agent()` and `_run_agent_stream()` return the `AgentSession` object instead of just the state dict
+- `run_after_approval()` reconstructs the `AgentSession` from stored approval data to get properly deserialized state
+- Removed custom `_make_json_serializable()` and `_filter_session_state()` utilities — no longer needed
 
-**Files to modify**: framework_agent.py — `get_agent_response_stream()` or a new middleware
+**Files modified**:
+- `ph_agent/agent/framework_agent.py` — all 8 functions updated
+- `.github/copilot-instructions.md` — documentation updated
 
-**Why high value**: Currently, in-memory history (`InMemoryHistoryProvider`) is lost on restart. Service restart means the agent forgets the current conversation.
+**Why high value**: Previously, `InMemoryHistoryProvider` messages were explicitly stripped from saved state. After a server restart, the agent forgot the current conversation context. Now all provider state survives restarts with proper object deserialization.
 
 ---
 
@@ -235,10 +242,10 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 | **1b. Relevance Retrieval** | ✅ **Done** | 🔥🔥🔥🔥🔥 | LLM provider, User Memory DocType |
 | **2. RAG Search Tool** | Medium-High | 🔥🔥🔥🔥🔥 | Vector DB or Semantic Kernel |
 | **3. Auto-Compaction** | ✅ **Done** | 🔥🔥🔥🔥 | — |
-| **4. Session Persistence** | Low | 🔥🔥🔥 | Already have `session_state` field |
+| **4. Session Persistence** | ✅ **Done** | 🔥🔥🔥 | Already have `session_state` field |
 | **5. Mem0** | Low (just `pip install`) | 🔥🔥🔥🔥 | API key, external service |
 | **6. Audit Trail** | Very Low | 🔥🔥 | None |
 
 ---
 
-**Now that #1 (LLM Memory Provider), #1b (Relevance Retrieval), and #3 (Auto-Compaction)** are all fully implemented, the recommended next priorities are **#4 (Session Persistence)** for crash-resilience at low effort, followed by **#2 (RAG)** to let the agent query the user's own data.
+**Now that #1 (LLM Memory Provider), #1b (Relevance Retrieval), #3 (Auto-Compaction), and #4 (Session Persistence)** are all fully implemented, the recommended next priority is **#2 (RAG)** to let the agent query the user's own data, followed by **#5 (Mem0)** for a managed memory service.

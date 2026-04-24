@@ -12,6 +12,7 @@ from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMem
 from agent_framework_openai import OpenAIChatCompletionClient
 from agent_framework._skills import SkillsProvider
 from openai import AsyncOpenAI
+from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider
 from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
 from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
@@ -187,6 +188,7 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 			InMemoryHistoryProvider(),
 			FrappeMemoryProvider(),
 			skills_provider,
+			UserPreferenceProvider(),
 		],
 	)
 
@@ -461,6 +463,8 @@ def get_agent_response_stream(
 			asyncio.run(_consume())
 		finally:
 			if initialized:
+				# Commit any pending DB operations (e.g., UserPreferenceProvider saves)
+				frappe.db.commit()
 				frappe.destroy()
 
 	thread = threading.Thread(target=_producer, daemon=True)

@@ -29,18 +29,27 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 ---
 
-### 🔥 1. LLM-Driven Memory Provider (replace regex with AI extraction)
+### ✅ 1. LLM-Driven Memory Provider (replace regex with AI extraction)
 
-**What**: Replace or augment the regex-based `UserPreferenceProvider` with a provider that uses the LLM itself to extract and store arbitrary facts — names, preferences, project details, decisions, etc.
+**Status**: ✅ **Fully implemented**.
 
-**How**: Build a `UserMemoryProvider` (separate from `UserPreferenceProvider`) that:
-- In `after_run()`, asks the LLM: *"What facts about the user can you extract from this conversation turn?"*
-- Stores extracted facts as structured JSON in a new **User Memory** DocType (or the existing `User Preference` DocType)
-- In `before_run()`, retrieves relevant facts (using keyword matching or embedding similarity) and injects them as system instructions
+**What**: Replaces/augments the regex-based `UserPreferenceProvider` with a provider that uses the LLM itself to extract and store arbitrary facts — names, preferences, project details, decisions, etc.
 
-**Files to create**:
-- `ph_agent/agent/context/user_memory_provider.py` — new `ContextProvider`
-- `ph_agent/ph_agent/doctype/user_memory/` — new DocType for arbitrary key-value memories
+**How it works**:
+- `LLMMemoryProvider.before_run()` — loads memories with confidence ≥ 0.6 from **User Memory** DocType and injects them as system instructions into the agent's context
+- `LLMMemoryProvider.after_run()` — gets the LLM client from the session's `LLM Provider`, calls the LLM with an extraction system prompt, parses the JSON response, deduplicates against existing records, and persists new/updated memories to the **User Memory** DocType
+- Rate-limited to one extraction per 30 seconds per session to avoid excessive API calls
+- Extraction prompt focuses on: personal details, goals/tasks, preferences, facts/context, and relationship information
+- Deduplication merges by exact (user, fact) match: increments `encounter_count`, boosts `confidence` by +0.05, updates `last_encountered_at`
+
+**Files created**:
+- `ph_agent/agent/context/llm_memory_provider.py` — the `ContextProvider` implementation (~330 lines)
+- `ph_agent/ph_agent/doctype/user_memory/user_memory.json` — User Memory DocType schema with fields: `user`, `fact`, `category`, `confidence`, `source_session`, `source_message`, `last_encountered_at`, `encounter_count`
+- `ph_agent/ph_agent/doctype/user_memory/user_memory.py` — DocType controller (normalizes fact, sets timestamps)
+- `ph_agent/ph_agent/doctype/user_memory/__init__.py` — package init
+
+**Files modified**:
+- `ph_agent/agent/framework_agent.py` — registered `LLMMemoryProvider()` in the `context_providers` list after `UserPreferenceProvider`
 
 **Why high value**: Regex can only detect 6 fixed patterns. LLM-driven extraction can learn *anything* the user says — preferred units, industry, company name, feature requests, past decisions, etc.
 
@@ -155,7 +164,7 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 
 | Feature | Effort | Impact | Dependencies |
 |---|---|---|---|
-| **1. LLM Memory Provider** | Medium | 🔥🔥🔥🔥🔥 | LLM provider (already have) |
+| **1. LLM Memory Provider** | ✅ **Done** | 🔥🔥🔥🔥🔥 | LLM provider (already have) |
 | **2. RAG Search Tool** | Medium-High | 🔥🔥🔥🔥🔥 | Vector DB or Semantic Kernel |
 | **3. Auto-Compaction** | ✅ **Done** | 🔥🔥🔥🔥 | — |
 | **4. Session Persistence** | Low | 🔥🔥🔥 | Already have `session_state` field |
@@ -164,6 +173,6 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 
 ---
 
-**My recommendation**: Now that **#3 (Auto-Compaction)** is fully implemented, tackle **#1 (LLM Memory Provider)** for the biggest leap in capability. Then **#5 (Mem0)** for a managed memory service. Add **#4 (Session Persistence)** alongside both as it's low effort.
+**Now that #1 (LLM Memory Provider) and #3 (Auto-Compaction)** are both fully implemented, the recommended next priorities are **#5 (Mem0)** for a managed memory service and **#4 (Session Persistence)** for low-effort resilience gains.
 
 Would you like me to dive deeper into the design for any of these?

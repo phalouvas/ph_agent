@@ -752,21 +752,22 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                         if (r.message && r.message.status === "ok") {
                                             // Update local state for changed fields
                                             const state = window.phAgent.state;
-                                            const room = state.getRoomById(room.roomId);
+                                            const roomId = room.roomId;
                                             
-                                            if (args.title) {
-                                                const provider = state.getRoomProvider(room.roomId) || "";
-                                                state.updateRoom(room.roomId, {
-                                                    roomName: args.title + " — " + provider
-                                                });
-                                            }
+                                            // Determine final title and provider
+                                            const finalTitle = args.title || roomInfo.title;
+                                            const finalProvider = args.provider_name || roomInfo.provider;
+                                            
                                             if (args.provider_name) {
-                                                state.setRoomProvider(room.roomId, args.provider_name);
-                                                const currentTitle = room?.roomName.split(" — ")[0] || roomInfo.title;
-                                                state.updateRoom(room.roomId, {
-                                                    roomName: currentTitle + " — " + args.provider_name
-                                                });
+                                                state.setRoomProvider(roomId, finalProvider);
                                             }
+                                            
+                                            // Single updateRoom call with the correct roomName
+                                            state.updateRoom(roomId, {
+                                                roomName: finalTitle + " — " + finalProvider
+                                            });
+                                            
+                                            // Reassign rooms to trigger Vue Advanced Chat reactivity
                                             window.phAgent.roomService.getChat().rooms = state.getRooms();
                                             
                                             frappe.show_alert({ 

@@ -463,6 +463,8 @@ def get_agent_response_stream(
 			asyncio.run(_consume())
 		finally:
 			if initialized:
+				# Commit any pending DB operations (e.g., UserPreferenceProvider saves)
+				frappe.db.commit()
 				frappe.destroy()
 
 	thread = threading.Thread(target=_producer, daemon=True)

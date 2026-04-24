@@ -5,19 +5,19 @@ preferred doctypes) via regex pattern matching on user messages, then
 injects them as system instructions in subsequent turns via the
 ContextProvider.before_run() hook.
 
-Preferences are stored in the provider-scoped ``state`` dict under the
-``preferences`` key. Because the session state is persisted by
-``_save_session_state()``, preferences survive across turns in the same
-session.
+Preferences are stored in the **User Preference** Frappe DocType keyed by
+the Frappe user (looked up from the Chat Session). This means preferences
+are shared across **all sessions** belonging to the same user.
 """
 
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
+import frappe
 from agent_framework import ContextProvider, Message
 
 
@@ -129,192 +129,292 @@ _PREFERENCE_PATTERNS: list[dict[str, Any]] = [
 
 
 class UserPreferenceProvider(ContextProvider):
-    """ContextProvider that learns and injects user preferences.
+	"""ContextProvider that learns and injects user preferences.
 
-    On each ``before_run()``, reads stored preferences from the provider-
-    scoped ``state`` dict and appends them as system instructions.
+	Preferences are persisted in the **User Preference** Frappe DocType,
+	keyed by the Frappe user. This makes them available across all Chat
+	Sessions for the same user.
 
-    On each ``after_run()``, scans the new conversation messages for
-    preference signals (name, date format, style requests, etc.) using
-    the defined regex patterns, and merges findings into the preference
-    store.
-    """
+	On each ``before_run()``, loads preferences from the DB and injects
+	them as system instructions.
 
-    PREFERENCES_KEY = "preferences"
+	On each ``after_run()``, scans new conversation messages for preference
+	signals (name, date format, style requests, etc.) using regex patterns,
+	and persists merged preferences back to the DocType.
+	"""
 
-    def __init__(self) -> None:
-        super().__init__("user_preferences")
-        self._patterns = _PREFERENCE_PATTERNS
+	PREFERENCES_KEY = "preferences"
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+	def __init__(self) -> None:
+		super().__init__("user_preferences")
+		self._patterns = _PREFERENCE_PATTERNS
 
-    async def before_run(
-        self,
-        *,
-        agent: Any,
-        session: Any,
-        context: Any,
-        state: dict[str, Any],
-    ) -> None:
-        """Load preferences from state and inject as system instructions."""
-        prefs = state.get(self.PREFERENCES_KEY)
-        if not prefs:
-            return
+	# ------------------------------------------------------------------
+	# Public API
+	# ------------------------------------------------------------------
 
-        instructions_text = self._format_preferences(prefs)
-        if instructions_text:
-            context.extend_instructions(self.source_id, instructions_text)
+	async def before_run(
+		self,
+		*,
+		agent: Any,
+		session: Any,
+		context: Any,
+		state: dict[str, Any],
+	) -> None:
+		"""Load preferences from the User Preference DocType and inject as instructions."""
+		frappe.log_error("UserPreferenceProvider.before_run called", "PH Agent Debug")
+		user = self._get_user(session)
+		if not user:
+			frappe.log_error(f"before_run: no user resolved from session.session_id={getattr(session, 'session_id', None)}", "PH Agent Debug")
+			return
 
-    async def after_run(
-        self,
-        *,
-        agent: Any,
-        session: Any,
-        context: Any,
-        state: dict[str, Any],
-    ) -> None:
-        """Scan new messages for preference signals and update stored preferences."""
-        # Collect all user messages from the new input
-        user_messages = [
-            msg for msg in context.input_messages
-            if msg.role == "user"
-        ]
+		prefs = self._load_preferences(user)
+		frappe.log_error(f"before_run: user={user}, loaded prefs={prefs}", "PH Agent Debug")
 
-        if not user_messages:
-            return
+		# Also cache in session state for same-turn access by after_run
+		state[self.PREFERENCES_KEY] = prefs
 
-        signals = self._extract_preferences(user_messages)
-        if not signals:
-            return
+		instructions_text = self._format_preferences(prefs)
+		if instructions_text:
+			context.extend_instructions(self.source_id, instructions_text)
 
-        # Merge with existing preferences in provider-scoped state
-        now = datetime.utcnow().isoformat()
-        existing = state.get(self.PREFERENCES_KEY, {})
-        merged = self._merge_preferences(existing, signals, now=now)
-        state[self.PREFERENCES_KEY] = merged
+	async def after_run(
+		self,
+		*,
+		agent: Any,
+		session: Any,
+		context: Any,
+		state: dict[str, Any],
+	) -> None:
+		"""Scan new messages for preference signals and persist to the DocType."""
+		frappe.log_error("UserPreferenceProvider.after_run called", "PH Agent Debug")
+		user = self._get_user(session)
+		if not user:
+			frappe.log_error(f"after_run: no user resolved from session.session_id={getattr(session, 'session_id', None)}", "PH Agent Debug")
+			return
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+		# Collect user messages from this turn
+		user_messages = [
+			msg for msg in context.input_messages
+			if msg.role == "user"
+		]
+		frappe.log_error(f"after_run: user={user}, user_messages count={len(user_messages)}, input_messages count={len(context.input_messages)}", "PH Agent Debug")
 
-    @staticmethod
-    def _format_preferences(prefs: dict[str, Any]) -> str:
-        """Format stored preferences into a human-readable instruction string.
+		if user_messages:
+			msg_text = " | ".join(
+				c.text if hasattr(c, "text") and c.text
+				else str(c) for msg in user_messages
+				for c in (msg.contents or [])
+			)
+			frappe.log_error(f"after_run: user message text={msg_text[:500]}", "PH Agent Debug")
 
-        Only includes preferences with confidence >= 0.5 to avoid injecting
-        noisy or unconfirmed signals.
-        """
-        parts: list[str] = []
-        for key, pref in prefs.items():
-            confidence = pref.get("confidence", 0)
-            if confidence < 0.5:
-                continue
+		if not user_messages:
+			return
 
-            value = pref.get("value")
-            if not value:
-                continue
+		signals = self._extract_preferences(user_messages)
+		frappe.log_error(f"after_run: signals extracted={signals}", "PH Agent Debug")
+		if not signals:
+			return
 
-            fmt_key = key.replace("_", " ").title()
-            parts.append(f"- {fmt_key}: {value}")
+		# Merge with existing from DocType (not from state — it may be stale
+		# if another session updated it)
+		existing = self._load_preferences(user)
+		now = datetime.utcnow().isoformat()
+		merged = self._merge_preferences(existing, signals, now=now)
+		frappe.log_error(f"after_run: merged prefs={merged}", "PH Agent Debug")
 
-        if not parts:
-            return ""
+		self._save_preferences(user, merged)
 
-        lines = [
-            "The following user preferences have been learned from previous conversation turns:",
-            *parts,
-            "Please take these into account when generating your response.",
-        ]
-        return "\n".join(lines)
+		# Commit explicitly — after_run may run in a frappe context (streaming thread)
+		# where automatic commit doesn't happen before frappe.destroy()
+		frappe.db.commit()
 
-    def _extract_preferences(
-        self,
-        messages: list[Message],
-    ) -> dict[str, dict[str, Any]]:
-        """Analyze a list of user messages and extract preference signals.
+		# Also update session state cache so same-turn references are fresh
+		state[self.PREFERENCES_KEY] = merged
 
-        Returns:
-            A dict mapping preference keys to extracted info:
-            ``{key: {"value": ..., "confidence": ...}}``.
-        """
-        signals: dict[str, dict[str, Any]] = {}
+	# ------------------------------------------------------------------
+	# Frappe DB persistence
+	# ------------------------------------------------------------------
 
-        for msg in messages:
-            text = " ".join(
-                str(c) for c in (msg.contents or [])
-                if isinstance(c, str)
-            )
-            if not text:
-                continue
+	@staticmethod
+	def _get_user(session: Any) -> str | None:
+		"""Resolve the Frappe user from the session's Chat Session doc."""
+		session_id = getattr(session, "session_id", None)
+		if not session_id:
+			frappe.log_error("_get_user: session has no session_id", "PH Agent Debug")
+			return None
+		try:
+			user = frappe.db.get_value("Chat Session", session_id, "user")
+			frappe.log_error(f"_get_user: session_id={session_id} -> user={user}", "PH Agent Debug")
+			return user
+		except Exception as e:
+			frappe.log_error(f"_get_user error: {type(e).__name__}: {e}", "PH Agent Debug")
+			return None
 
-            for pattern_def in self._patterns:
-                key = pattern_def["key"]
-                transform = pattern_def.get("transform")
-                for pattern_str in pattern_def["patterns"]:
-                    match = re.search(pattern_str, text, re.IGNORECASE)
-                    if not match:
-                        continue
+	@staticmethod
+	def _load_preferences(user: str) -> dict[str, Any]:
+		"""Load preferences dict from the User Preference DocType for this user."""
+		if not user:
+			return {}
+		try:
+			doc = frappe.get_doc("User Preference", user)
+			if doc.preferences:
+				if isinstance(doc.preferences, str):
+					return json.loads(doc.preferences)
+				return dict(doc.preferences)
+			frappe.log_error(f"_load_preferences: user={user} has empty preferences field", "PH Agent Debug")
+			return {}
+		except frappe.DoesNotExistError:
+			frappe.log_error(f"_load_preferences: no User Preference doc for user={user}", "PH Agent Debug")
+		except Exception as e:
+			frappe.log_error(f"_load_preferences error for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
+		return {}
 
-                    raw_value = match.group(pattern_def["group"])
-                    value = transform(match) if transform else raw_value
+	@staticmethod
+	def _save_preferences(user: str, prefs: dict[str, Any]) -> None:
+		"""Save preferences dict to the User Preference DocType for this user."""
+		if not prefs:
+			return
+		try:
+			doc = frappe.get_doc({
+				"doctype": "User Preference",
+				"user": user,
+				"preferences": json.dumps(prefs),
+			})
+			doc.save(ignore_permissions=True)
+			frappe.log_error(f"_save_preferences: created for user={user}, prefs={prefs}", "PH Agent Debug")
+		except frappe.DuplicateEntryError:
+			# Document already exists — update it
+			try:
+				doc = frappe.get_doc("User Preference", user)
+				doc.preferences = json.dumps(prefs)
+				doc.save(ignore_permissions=True)
+				frappe.log_error(f"_save_preferences: updated for user={user}, prefs={prefs}", "PH Agent Debug")
+			except Exception as e:
+				frappe.log_error(f"_save_preferences update failed for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
+		except Exception as e:
+			frappe.log_error(f"_save_preferences create failed for user={user}: {type(e).__name__}: {e}", "PH Agent Debug")
 
-                    # Keep the highest-confidence extraction for this key
-                    existing = signals.get(key)
-                    new_conf = pattern_def["confidence"]
-                    if existing and existing.get("confidence", 0) >= new_conf:
-                        continue
+	# ------------------------------------------------------------------
+	# Preference formatting
+	# ------------------------------------------------------------------
 
-                    signals[key] = {
-                        "value": value,
-                        "confidence": new_conf,
-                    }
-                    break  # First pattern match wins for this preference key
+	@staticmethod
+	def _format_preferences(prefs: dict[str, Any]) -> str:
+		"""Format stored preferences into a human-readable instruction string.
 
-        return signals
+		Only includes preferences with confidence >= 0.5 to avoid injecting
+		noisy or unconfirmed signals.
+		"""
+		parts: list[str] = []
+		for key, pref in prefs.items():
+			confidence = pref.get("confidence", 0)
+			if confidence < 0.5:
+				continue
 
-    @staticmethod
-    def _merge_preferences(
-        existing: dict[str, Any],
-        signals: dict[str, dict[str, Any]],
-        *,
-        now: str,
-    ) -> dict[str, Any]:
-        """Merge newly extracted signals with existing preferences.
+			value = pref.get("value")
+			if not value:
+				continue
 
-        For existing preferences:
-        - If the same key is detected again with higher or equal confidence,
-          update the value and increase confidence (up to 1.0).
-        - If detected with lower confidence, increment confidence slightly.
+			fmt_key = key.replace("_", " ").title()
+			parts.append(f"- {fmt_key}: {value}")
 
-        For new preferences not yet stored, add them with ``first_seen_at``
-        and ``updated_at`` timestamps.
-        """
-        result = dict(existing)
+		if not parts:
+			return ""
 
-        for key, signal in signals.items():
-            prev = result.get(key)
-            if prev is None:
-                # Brand new preference
-                result[key] = {
-                    "value": signal["value"],
-                    "confidence": signal["confidence"],
-                    "first_seen_at": now,
-                    "updated_at": now,
-                }
-            else:
-                # Existing preference — reinforce or update
-                prev_conf = prev.get("confidence", 0)
-                new_conf = signal["confidence"]
+		lines = [
+			"The following user preferences have been learned from previous conversation turns:",
+			*parts,
+			"Please take these into account when generating your response.",
+		]
+		return "\n".join(lines)
 
-                if new_conf >= prev_conf:
-                    # Update value and boost confidence
-                    prev["value"] = signal["value"]
-                    prev["confidence"] = min(prev_conf + 0.1, 1.0)
-                else:
-                    # Lower confidence detection — just nudge upward
-                    prev["confidence"] = min(prev_conf + 0.05, 1.0)
-                prev["updated_at"] = now
+	def _extract_preferences(
+		self,
+		messages: list[Message],
+	) -> dict[str, dict[str, Any]]:
+		"""Analyze a list of user messages and extract preference signals.
 
-        return result
+		Returns:
+			A dict mapping preference keys to extracted info:
+			``{key: {"value": ..., "confidence": ...}}``.
+		"""
+		signals: dict[str, dict[str, Any]] = {}
+
+		for msg in messages:
+			text = " ".join(
+				c.text if hasattr(c, "text") and c.text
+				else str(c) for c in (msg.contents or [])
+			)
+			if not text:
+				continue
+
+			for pattern_def in self._patterns:
+				key = pattern_def["key"]
+				transform = pattern_def.get("transform")
+				for pattern_str in pattern_def["patterns"]:
+					match = re.search(pattern_str, text, re.IGNORECASE)
+					if not match:
+						continue
+
+					raw_value = match.group(pattern_def["group"])
+					value = transform(match) if transform else raw_value
+
+					# Keep the highest-confidence extraction for this key
+					existing = signals.get(key)
+					new_conf = pattern_def["confidence"]
+					if existing and existing.get("confidence", 0) >= new_conf:
+						continue
+
+					signals[key] = {
+						"value": value,
+						"confidence": new_conf,
+					}
+					break  # First pattern match wins for this preference key
+
+		return signals
+
+	@staticmethod
+	def _merge_preferences(
+		existing: dict[str, Any],
+		signals: dict[str, dict[str, Any]],
+		*,
+		now: str,
+	) -> dict[str, Any]:
+		"""Merge newly extracted signals with existing preferences.
+
+		For existing preferences:
+		- If the same key is detected again with higher or equal confidence,
+		  update the value and increase confidence (up to 1.0).
+		- If detected with lower confidence, increment confidence slightly.
+
+		For new preferences not yet stored, add them with ``first_seen_at``
+		and ``updated_at`` timestamps.
+		"""
+		result = dict(existing)
+
+		for key, signal in signals.items():
+			prev = result.get(key)
+			if prev is None:
+				# Brand new preference
+				result[key] = {
+					"value": signal["value"],
+					"confidence": signal["confidence"],
+					"first_seen_at": now,
+					"updated_at": now,
+				}
+			else:
+				# Existing preference — reinforce or update
+				prev_conf = prev.get("confidence", 0)
+				new_conf = signal["confidence"]
+
+				if new_conf >= prev_conf:
+					# Update value and boost confidence
+					prev["value"] = signal["value"]
+					prev["confidence"] = min(prev_conf + 0.1, 1.0)
+				else:
+					# Lower confidence detection — just nudge upward
+					prev["confidence"] = min(prev_conf + 0.05, 1.0)
+				prev["updated_at"] = now
+
+		return result

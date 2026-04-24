@@ -29,9 +29,9 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 ---
 
-### ⚠️ 1. LLM-Driven Memory Provider (extraction done, relevance retrieval needed)
+### ✅ 1. LLM-Driven Memory Provider
 
-**Status**: ⚠️ **Extraction implemented, retrieval is naive (loads ALL memories)**.
+**Status**: ✅ **Fully implemented — extraction + relevance-filtered retrieval + cross-session context**.
 
 **What**: Replaces/augments the regex-based `UserPreferenceProvider` with a provider that uses the LLM itself to extract and store arbitrary facts — names, preferences, project details, decisions, etc.
 
@@ -53,19 +53,11 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 **Why high value**: Regex can only detect 6 fixed patterns. LLM-driven extraction can learn *anything* the user says — preferred units, industry, company name, feature requests, past decisions, etc.
 
-### ⚠️ Known Gap — The "Dilution Problem"
+### ✅ Resolved — The "Dilution Problem"
 
-**Current behavior**: `_load_memories()` retrieves **ALL** memories with confidence ≥ 0.6 and injects them all. As sessions accumulate (50+ sessions → 200+ memories), this causes:
+**Previous behavior**: `_load_memories()` retrieved ALL memories, causing dilution as sessions accumulated.
 
-| Sessions | Memories | Effect |
-|---|---|---|
-| 5 | ~20 | ✅ Works great — all memories fit in context |
-| 20 | ~80 | ⚠️ Irrelevant memories dilute focus |
-| 50+ | 200+ | ❌ Context window overflow, irrelevant facts distract the agent |
-
-**Why this matters**: GitHub Copilot stays focused across sessions because it only retrieves **semantically relevant** memories per query, not all memories. Your current implementation lacks this filtering.
-
-**Fix**: See **Feature 1b: Relevance-Based Memory Retrieval** below.
+**Fix applied**: Relevance-filtered retrieval with word-overlap scoring, capped at 15 most-relevant memories per turn. See **Feature 1b** below for implementation details.
 
 ---
 
@@ -89,54 +81,26 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 ---
 
-### 🔥 1b. Relevance-Based Memory Retrieval (fix dilution problem)
+### ✅ 1b. Relevance-Based Memory Retrieval (fix dilution problem)
 
-**What**: Instead of loading ALL memories, only retrieve memories semantically relevant to the current query, so sessions stay focused as memory accumulates over time.
+**Status**: ✅ **Fully implemented** — keyword-level relevance scoring + hard cap + cross-session context continuity.
 
-**Three-phase approach**:
+**What**: Instead of loading ALL memories, only retrieve memories with word overlap against the current query, capped at 15 per turn. Also injects previous session summaries when creating new sessions.
 
-#### Phase A: Keyword/BM25 Filtering (quick win, ~30 lines)
-In `_load_memories()`, score memories by word overlap with the current user query and return top-K (10-15):
+**Implementation details**:
 
-```python
-def _load_memories(user, query="", top_k=15):
-    records = frappe.get_all("User Memory", filters={...})
-    if not query:
-        return records[:top_k]
-    query_words = set(query.lower().split())
-    scored = [(len(query_words & set(r.fact.lower().split())), r) for r in records]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for s, r in scored if s > 0][:top_k]
-```
+- `_load_memories(user, query, top_k=15)` — scores all memories by word overlap (`re.findall(r"\b\w+\b")` on both query and fact), sorts by (overlap DESC, confidence DESC), returns top-K. Falls back to top-K by confidence when query is empty.
+- `_MAX_INJECTED_MEMORIES = 15` — hard cap on number of memories injected per turn, with defense-in-depth cap in `_format_memories()`.
+- `_MAX_INJECTED_PREFERENCES = 20` — same cap applied to `UserPreferenceProvider` for defensive consistency.
+- `_get_recent_session_context(user, limit=3)` — reads `last_summary_message` from the user's 3 most recent sessions, strips `*📋 Summary*` header, injects as `[Previous conversation context]` block into the system prompt on `create_session()`. Falls back to the first user message if no summary exists.
+- Context injection block is prefixed with "use for continuity but do not mention explicitly" so the agent doesn't awkwardly reference old sessions.
 
-**Pro**: Zero new dependencies, immediate fix for dilution. **Con**: Misses semantic matches (e.g., "invoice" ≠ "billing").
+**Files modified**:
+- `ph_agent/agent/context/llm_memory_provider.py` — `before_run()` passes user query to `_load_memories()`; `_load_memories()` now does relevance scoring
+- `ph_agent/agent/context/user_preference_provider.py` — `_MAX_INJECTED_PREFERENCES` cap in `_format_preferences()`
+- `ph_agent/api/chat.py` — `_get_recent_session_context()` + injection in `create_session()`
 
-#### Phase B: Embedding-Based Semantic Search (medium effort)
-1. Add an `embedding` vector field to **User Memory** DocType
-2. On memory creation, generate embedding via `client.embeddings.create()` 
-3. On retrieval, embed the user query and find top-K by cosine similarity
-4. Reuses the same embedding infrastructure later needed for RAG (#2)
-
-**Pro**: True semantic matching. **Con**: Requires embedding API calls + vector storage.
-
-#### Phase C: Previous Session Context Injection (complementary)
-When a **new** session is created, inject summaries of the last N sessions as grounding context. This mirrors Copilot's session memory scope — the agent is aware of "what we were just discussing" even in a fresh session.
-
-```python
-@frappe.whitelist()
-def create_session(provider_name=None):
-    # ... existing creation ...
-    previous_context = _get_recent_session_context(user, limit=3)
-    if previous_context:
-        session.system_prompt = f"Previous conversations:\n{previous_context}\n\n{session.system_prompt or ''}"
-```
-
-**Files to modify**:
-- `ph_agent/agent/context/llm_memory_provider.py` — Phase A+B retrieval logic
-- `ph_agent/api/chat.py` — Phase C session context injection
-- `ph_agent/ph_agent/doctype/user_memory/user_memory.json` — Phase B embedding field
-
-**Why high value**: This is the missing piece that makes memory actually useful at scale. Without it, the more you use ph_agent, the *worse* it gets. With it, it behaves like Copilot — staying focused and learning over time.
+**Why high value**: Without this, the more you use ph_agent, the *worse* it gets. With relevance filtering, it behaves like Copilot — staying focused and learning over time.
 
 ---
 
@@ -267,8 +231,8 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 
 | Feature | Effort | Impact | Dependencies |
 |---|---|---|---|
-| **1. LLM Memory Provider** | ✅ Extraction done, ⚠️ retrieval naive | 🔥🔥🔥🔥🔥 | LLM provider (already have) |
-| **1b. Relevance Retrieval** | Low (Phase A), Medium (Phase B) | 🔥🔥🔥🔥🔥 | LLM provider, User Memory DocType |
+| **1. LLM Memory Provider** | ✅ **Done** | 🔥🔥🔥🔥🔥 | LLM provider (already have) |
+| **1b. Relevance Retrieval** | ✅ **Done** | 🔥🔥🔥🔥🔥 | LLM provider, User Memory DocType |
 | **2. RAG Search Tool** | Medium-High | 🔥🔥🔥🔥🔥 | Vector DB or Semantic Kernel |
 | **3. Auto-Compaction** | ✅ **Done** | 🔥🔥🔥🔥 | — |
 | **4. Session Persistence** | Low | 🔥🔥🔥 | Already have `session_state` field |
@@ -277,6 +241,4 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 
 ---
 
-**Now that #1 (LLM Memory Provider) and #3 (Auto-Compaction)** are both implemented, the **highest priority is #1b (Relevance-Based Memory Retrieval)** — without it, memory *harms* focus as usage grows. Start with Phase A (keyword filtering, ~30 lines) for an immediate fix, then Phase B (semantic search) which also lays groundwork for RAG (#2).
-
-**Second priority**: #4 (Session Persistence) for crash-resilience at low effort, then #2 (RAG) to let the agent query the user's own data.
+**Now that #1 (LLM Memory Provider), #1b (Relevance Retrieval), and #3 (Auto-Compaction)** are all fully implemented, the recommended next priorities are **#4 (Session Persistence)** for crash-resilience at low effort, followed by **#2 (RAG)** to let the agent query the user's own data.

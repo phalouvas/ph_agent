@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -29,6 +30,9 @@ _EXTRACTION_INTERVAL = 30
 
 # Minimum confidence to inject a memory as a system instruction
 _INJECTION_CONFIDENCE_THRESHOLD = 0.6
+
+# Maximum number of memories to inject as system instructions per turn
+_MAX_INJECTED_MEMORIES = 15
 
 # Default model to use for extraction if the provider doesn't specify one
 _DEFAULT_EXTRACTION_MODEL = "gpt-4o-mini"
@@ -81,12 +85,19 @@ class LLMMemoryProvider(ContextProvider):
 		context: Any,
 		state: dict[str, Any],
 	) -> None:
-		"""Load high-confidence memories and inject as system instructions."""
+		"""Load high-confidence memories and inject as system instructions.
+
+		Only memories relevant to the current user query are injected, capped
+		at ``_MAX_INJECTED_MEMORIES`` to avoid context dilution.
+		"""
 		user = self._get_user(session)
 		if not user:
 			return
 
-		memories = self._load_memories(user)
+		# Extract the current user query for relevance filtering
+		user_message = self._get_latest_user_message(context) or ""
+
+		memories = self._load_memories(user, query=user_message, top_k=_MAX_INJECTED_MEMORIES)
 
 		# Cache in session state for same-turn access
 		state[self.MEMORIES_KEY] = memories
@@ -348,8 +359,19 @@ class LLMMemoryProvider(ContextProvider):
 	# ------------------------------------------------------------------
 
 	@staticmethod
-	def _load_memories(user: str) -> list[dict[str, Any]]:
-		"""Load all memories for a user from the User Memory DocType.
+	def _load_memories(user: str, query: str = "", top_k: int = 15) -> list[dict[str, Any]]:
+		"""Load memories for a user, filtered by relevance to the current query.
+
+		When ``query`` is non-empty, memories are scored by word overlap with
+		the query and only the top-K most relevant are returned. This prevents
+		context dilution as the memory store grows over time.
+
+		When ``query`` is empty, falls back to top-K by confidence.
+
+		Args:
+			user: The Frappe user to load memories for.
+			query: The current user message text for relevance scoring.
+			top_k: Maximum number of memories to return.
 
 		Returns:
 			List of dicts with keys ``fact``, ``category``, ``confidence``.
@@ -363,16 +385,53 @@ class LLMMemoryProvider(ContextProvider):
 				fields=["fact", "category", "confidence"],
 				order_by="confidence desc",
 			)
-			return [
-				{
-					"fact": r.fact,
-					"category": r.category,
-					"confidence": r.confidence,
-				}
-				for r in records
-			]
 		except Exception:
 			return []
+
+		if not records:
+			return []
+
+		# Build result dicts
+		all_memories = [
+			{
+				"fact": r.fact,
+				"category": r.category,
+				"confidence": r.confidence,
+			}
+			for r in records
+		]
+
+		# If no query, return top-K by confidence (existing behavior with cap)
+		query = (query or "").strip()
+		if not query:
+			return all_memories[:top_k]
+
+		# Relevance scoring: count overlapping words between query and fact
+		query_words = set(re.findall(r"\b\w+\b", query.lower()))
+		if not query_words:
+			return all_memories[:top_k]
+
+		scored: list[tuple[int, dict[str, Any]]] = []
+		for mem in all_memories:
+			fact_words = set(re.findall(r"\b\w+\b", mem["fact"].lower()))
+			overlap = len(query_words & fact_words)
+			if overlap > 0:
+				scored.append((overlap, mem))
+
+		# Sort by overlap score DESC, then confidence DESC
+		scored.sort(key=lambda x: (x[0], x[1].get("confidence", 0)), reverse=True)
+
+		result = [mem for _, mem in scored[:top_k]]
+
+		logger.debug(
+			"LLMMemoryProvider: relevance-filtered %d/%d memories for user %s (query=%s)",
+			len(result),
+			len(all_memories),
+			user,
+			query[:60],
+		)
+
+		return result
 
 	@staticmethod
 	def _deduplicate_and_merge(
@@ -517,9 +576,13 @@ class LLMMemoryProvider(ContextProvider):
 		"""Format memories into a human-readable instruction string.
 
 		Only includes memories with confidence >= ``_INJECTION_CONFIDENCE_THRESHOLD``.
+		Capped at ``_MAX_INJECTED_MEMORIES`` as defense-in-depth.
 		"""
 		if not memories:
 			return ""
+
+		# Defense-in-depth cap
+		memories = memories[:_MAX_INJECTED_MEMORIES]
 
 		lines = [
 			"The following information about the user has been learned from past conversations:",

@@ -34,6 +34,75 @@ def _delete_files_attached_to_message(message_id):
 			)
 
 
+def _get_recent_session_context(user: str, limit: int = 3) -> str | None:
+	"""Build a grounding context string from the user's recent sessions.
+
+	Reads the ``last_summary_message`` content from the most recent sessions
+	to provide cross-session continuity when starting a new conversation.
+
+	Args:
+		user: The Frappe user to look up sessions for.
+		limit: Maximum number of recent sessions to include.
+
+	Returns:
+		A formatted string with previous session context, or None if no
+		sessions with summaries are found.
+	"""
+	try:
+		sessions = frappe.get_all(
+			"Chat Session",
+			filters={"user": user, "status": ["in", ["Open", "Closed"]]},
+			fields=["name", "title", "last_summary_message"],
+			order_by="modified desc",
+			limit_page_length=limit,
+		)
+	except Exception:
+		return None
+
+	if not sessions:
+		return None
+
+	context_parts: list[str] = []
+	for session_doc in sessions:
+		title = session_doc.title or "Untitled"
+		summary_msg = session_doc.last_summary_message
+
+		if summary_msg:
+			# Use the LLM-generated summary
+			try:
+				summary_content = frappe.db.get_value(
+					"Chat Message", summary_msg, "content"
+				)
+				if summary_content:
+					# Strip the "📋 Summary" header if present
+					clean = summary_content
+					if clean.startswith("*📋 Summary*"):
+						clean = clean[len("*📋 Summary*"):].strip()
+					context_parts.append(f'In session "{title}": {clean}')
+			except Exception:
+				pass
+		else:
+			# Fallback: get the first user message as minimal context
+			try:
+				first_msg = frappe.get_all(
+					"Chat Message",
+					filters={"chat_session": session_doc.name, "sender_type": "User"},
+					fields=["content"],
+					order_by="creation asc",
+					limit_page_length=1,
+				)
+				if first_msg and first_msg[0].content:
+					content = first_msg[0].content[:200]
+					context_parts.append(f'In session "{title}": user asked about "{content}"')
+			except Exception:
+				pass
+
+	if not context_parts:
+		return None
+
+	return "\n".join(context_parts)
+
+
 @frappe.whitelist()
 def update_session_provider(session, provider_name):
 	"""Change the LLM Provider on an existing Chat Session."""
@@ -96,6 +165,21 @@ def create_session(provider_name=None):
 	)
 	session.insert(ignore_permissions=False)
 	frappe.db.commit()
+
+	# Inject previous session context for cross-session continuity
+	previous_context = _get_recent_session_context(frappe.session.user)
+	if previous_context:
+		current_prompt = session.system_prompt or ""
+		context_block = (
+			"[Previous conversation context from recent sessions - "
+			"use for continuity but do not mention explicitly]\n"
+			f"{previous_context}"
+		)
+		if current_prompt:
+			context_block += f"\n\n---\n\n{current_prompt}"
+		frappe.db.set_value("Chat Session", session.name, "system_prompt", context_block)
+		frappe.db.commit()
+
 	return {"session": session.name, "title": session.title, "llm_provider": session.llm_provider}
 
 

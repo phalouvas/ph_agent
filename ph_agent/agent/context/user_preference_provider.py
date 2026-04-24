@@ -128,6 +128,10 @@ _PREFERENCE_PATTERNS: list[dict[str, Any]] = [
 ]
 
 
+# Maximum number of preferences to inject as system instructions per turn
+_MAX_INJECTED_PREFERENCES = 20
+
+
 class UserPreferenceProvider(ContextProvider):
 	"""ContextProvider that learns and injects user preferences.
 
@@ -287,7 +291,7 @@ class UserPreferenceProvider(ContextProvider):
 		"""Format stored preferences into a human-readable instruction string.
 
 		Only includes preferences with confidence >= 0.5 to avoid injecting
-		noisy or unconfirmed signals.
+		noisy or unconfirmed signals. Capped at ``_MAX_INJECTED_PREFERENCES``.
 		"""
 		parts: list[str] = []
 		for key, pref in prefs.items():
@@ -301,6 +305,10 @@ class UserPreferenceProvider(ContextProvider):
 
 			fmt_key = key.replace("_", " ").title()
 			parts.append(f"- {fmt_key}: {value}")
+
+			# Defense-in-depth cap
+			if len(parts) >= _MAX_INJECTED_PREFERENCES:
+				break
 
 		if not parts:
 			return ""

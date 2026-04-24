@@ -290,8 +290,12 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 
 	max_tokens = _validate_context_limit(session_doc, provider_doc)
 
-	# Resolve thinking mode: session override takes precedence over provider
-	enable_thinking = bool(session_doc.enable_thinking) if session_doc.enable_thinking else bool(provider_doc.enable_thinking)
+	# Resolve thinking mode: session override (1=force on) takes precedence
+	# When session override is 0, inherit from provider setting
+	if session_doc.enable_thinking:
+		enable_thinking = True
+	else:
+		enable_thinking = bool(provider_doc.enable_thinking)
 
 	temperature = (
 		session_doc.temperature
@@ -313,35 +317,9 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	if enable_thinking:
 		default_options["extra_body"] = {"thinking": {"type": "enabled"}}
 		default_options["reasoning_effort"] = provider_doc.reasoning_effort or "high"
-		try:
-			frappe.log_error(
-				title="[Thinking Debug] Agent config",
-				message=(
-					f"Session: {session_name}\n"
-					f"Thinking: ENABLED\n"
-					f"extra_body: {default_options.get('extra_body')}\n"
-					f"reasoning_effort: {default_options.get('reasoning_effort')}\n"
-					f"model: {provider_doc.default_model}\n"
-					f"max_tokens: {max_tokens}"
-				),
-			)
-		except Exception:
-			pass
 	else:
 		default_options["temperature"] = temperature
 		default_options["extra_body"] = {"thinking": {"type": "disabled"}}
-		try:
-			frappe.log_error(
-				title="[Thinking Debug] Agent config",
-				message=(
-					f"Session: {session_name}\n"
-					f"Thinking: DISABLED\n"
-					f"temperature: {temperature}\n"
-					f"model: {provider_doc.default_model}"
-				),
-			)
-		except Exception:
-			pass
 
 	# Build skills provider from both file-based and DocType-based sources
 	skills_provider = _build_skills_provider()
@@ -530,27 +508,11 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 def _extract_reasoning_from_response(response) -> str:
 	"""Extract reasoning content from a non-streaming agent response."""
 	reasoning_parts = []
-	content_types = set()
-	for msg_idx, msg in enumerate(getattr(response, 'messages', []) or []):
-		for c_idx, content in enumerate(getattr(msg, 'contents', []) or []):
-			c_type = getattr(content, 'type', None)
-			content_types.add(c_type)
-			if c_type == "text_reasoning":
-				text = content.text or ""
-				reasoning_parts.append(text)
-	result = "\n".join(reasoning_parts)
-	try:
-		frappe.log_error(
-			title="[Thinking Debug] Non-streaming reasoning extraction",
-			message=(
-				f"Content types seen: {content_types}\n"
-				f"text_reasoning count: {len(reasoning_parts)}\n"
-				f"total reasoning len: {len(result)}"
-			),
-		)
-	except Exception:
-		pass
-	return result
+	for msg in getattr(response, 'messages', []) or []:
+		for content in getattr(msg, 'contents', []) or []:
+			if getattr(content, 'type', None) == "text_reasoning":
+				reasoning_parts.append(content.text or "")
+	return "\n".join(reasoning_parts)
 
 
 def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None, str]:
@@ -621,7 +583,6 @@ def get_agent_response_stream(
 					if stop_event.is_set():
 						break
 
-					# Debug: log all content types in each update
 					if hasattr(update, 'contents') and update.contents:
 						for c in update.contents:
 							c_type = getattr(c, 'type', 'unknown')
@@ -637,7 +598,7 @@ def get_agent_response_stream(
 									reasoning_chunk_count += 1
 									result_queue.put(("reasoning_chunk", reasoning_delta))
 							elif c_type not in ("text", "function_call", "function_result"):
-								pass  # silently ignore other types
+								pass
 
 					chunk = update.text or ""
 					if not chunk:
@@ -663,19 +624,6 @@ def get_agent_response_stream(
 				if stop_event.is_set():
 					result_queue.put(("done", ("", 0, 0)))
 					return
-
-				try:
-					frappe.log_error(
-						title="[Thinking Debug] Stream finished",
-						message=(
-							f"Session: {session_name}\n"
-							f"reasoning_chunks: {reasoning_chunk_count}\n"
-							f"seen_reasoning_len: {len(seen_reasoning)}\n"
-							f"total_chunks: {chunk_count}"
-						),
-					)
-				except Exception:
-					pass
 
 				final_response = await stream.get_final_response()
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)

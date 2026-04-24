@@ -682,57 +682,79 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             roomService.getRoomInfo(room.roomId)
                 .then((roomInfo) => {
-                    const dialog = new frappe.ui.Dialog({
-                        title: __("Room Information"),
-                        fields: [
-                            {
-                                fieldname: "title",
-                                fieldtype: "Data",
-                                label: __("Title"),
-                                default: roomInfo.title,
-                                read_only: false,
-                            },
-                            {
-                                fieldname: "provider",
-                                fieldtype: "Data",
-                                label: __("LLM Provider"),
-                                default: roomInfo.provider,
-                                read_only: true,
-                            },
-                            {
-                                fieldname: "created",
-                                fieldtype: "Data",
-                                label: __("Created"),
-                                default: new Date(roomInfo.created).toLocaleString(),
-                                read_only: true,
-                            },
-                            {
-                                fieldname: "modified",
-                                fieldtype: "Data",
-                                label: __("Last Modified"),
-                                default: new Date(roomInfo.modified).toLocaleString(),
-                                read_only: true,
-                            },
-                        ],
-                        primary_action_label: __("Update Title"),
-                        primary_action: (values) => {
-                            dialog.hide();
-                            roomService.updateRoomTitle(room.roomId, values.title)
-                                .then(() => {
-                                    frappe.show_alert({ 
-                                        message: __("Room title updated"), 
-                                        indicator: "green" 
+                    // Fetch enabled providers for the dropdown
+                    frappe.db.get_list("LLM Provider", {
+                        filters: { is_enabled: 1 },
+                        fields: ["name", "is_default"],
+                        order_by: "is_default desc, name asc",
+                    }).then((providers) => {
+                        const providerOptions = providers.map((p) => ({
+                            label: p.name + (p.is_default ? " (" + __("default") + ")" : ""),
+                            value: p.name,
+                        }));
+                        
+                        const dialog = new frappe.ui.Dialog({
+                            title: __("Room Information"),
+                            fields: [
+                                {
+                                    fieldname: "title",
+                                    fieldtype: "Data",
+                                    label: __("Title"),
+                                    default: roomInfo.title,
+                                    read_only: false,
+                                },
+                                {
+                                    fieldname: "provider",
+                                    fieldtype: "Select",
+                                    label: __("LLM Provider"),
+                                    options: providerOptions.map((o) => o.value).join("\n"),
+                                    default: roomInfo.provider,
+                                    read_only: false,
+                                },
+                                {
+                                    fieldname: "created",
+                                    fieldtype: "Data",
+                                    label: __("Created"),
+                                    default: new Date(roomInfo.created).toLocaleString(),
+                                    read_only: true,
+                                },
+                                {
+                                    fieldname: "modified",
+                                    fieldtype: "Data",
+                                    label: __("Last Modified"),
+                                    default: new Date(roomInfo.modified).toLocaleString(),
+                                    read_only: true,
+                                },
+                            ],
+                            primary_action_label: __("Save"),
+                            primary_action: (values) => {
+                                dialog.hide();
+                                // Update title if changed
+                                const titlePromise = values.title !== roomInfo.title
+                                    ? roomService.updateRoomTitle(room.roomId, values.title)
+                                    : Promise.resolve();
+                                // Update provider if changed
+                                const providerPromise = values.provider !== roomInfo.provider
+                                    ? roomService.updateRoomProvider(room.roomId, values.provider)
+                                    : Promise.resolve();
+                                
+                                Promise.all([titlePromise, providerPromise])
+                                    .then(() => {
+                                        frappe.show_alert({ 
+                                            message: __("Room settings updated"), 
+                                            indicator: "green" 
+                                        });
+                                    })
+                                    .catch(err => {
+                                        frappe.show_alert({ 
+                                            message: __("Failed to update room settings"), 
+                                            indicator: "red" 
+                                        });
                                     });
-                                })
-                                .catch(err => {
-                                    frappe.show_alert({ 
-                                        message: __("Failed to update room title"), 
-                                        indicator: "red" 
-                                    });
-                                });
-                        },
+                            },
+                        });
+                        dialog.show();
                     });
-                    dialog.show();
                 })
                 .catch(err => {
                     frappe.show_alert({ 

@@ -82,115 +82,61 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         },
         
         /**
-         * Create a new chat session with provider selection
+         * Create a new chat session with the default LLM provider
          * @returns {Promise} Promise that resolves with new room data
          */
         createNewSession: function() {
             return new Promise((resolve, reject) => {
-                // Fetch enabled providers
-                frappe.db
-                    .get_list("LLM Provider", {
-                        filters: { is_enabled: 1 },
-                        fields: ["name", "is_default"],
-                        order_by: "is_default desc, name asc",
-                    })
-                    .then((providers) => {
-                        if (!providers.length) {
-                            frappe.msgprint({
-                                title: __("No LLM Provider Configured"),
-                                message: __(
-                                    "Please go to <b>PH Agent → LLM Provider</b> and create an enabled provider before starting a chat."
-                                ),
-                                indicator: "red",
-                            });
-                            reject(new Error("No LLM providers configured"));
+                frappe.call({
+                    method: "ph_agent.api.chat.create_session",
+                    args: {},
+                    callback: (r) => {
+                        if (!r.message) {
+                            reject(new Error("Failed to create session"));
                             return;
                         }
-
-                        const defaultProvider = (providers.find((p) => p.is_default) || providers[0]).name;
-
-                        const options = providers.map((p) => ({
-                            label: p.name + (p.is_default ? " (" + __("default") + ")" : ""),
-                            value: p.name,
-                        }));
-
-                        const d = new frappe.ui.Dialog({
-                            title: __("New Chat"),
-                            fields: [
-                                {
-                                    fieldname: "provider_name",
-                                    fieldtype: "Select",
-                                    label: __("LLM Provider"),
-                                    options: options.map((o) => o.value).join("\n"),
-                                    default: defaultProvider,
-                                    reqd: 1,
-                                },
+                        
+                        const state = window.phAgent.state;
+                        const session = r.message;
+                        
+                        // Update state
+                        state.setRoomProvider(session.session, session.llm_provider);
+                        
+                        const newRoom = {
+                            roomId: session.session,
+                            roomName: session.title + " — " + session.llm_provider,
+                            users: [
+                                { _id: _currentUserId, username: frappe.boot.user.full_name || _currentUserId },
+                                { _id: _agentId, username: "AI Agent" },
                             ],
-                            primary_action_label: __("Start Chat"),
-                            primary_action: (values) => {
-                                d.hide();
-                                frappe.call({
-                                    method: "ph_agent.api.chat.create_session",
-                                    args: { provider_name: values.provider_name },
-                                    callback: (r) => {
-                                        if (!r.message) {
-                                            reject(new Error("Failed to create session"));
-                                            return;
-                                        }
-                                        
-                                        const state = window.phAgent.state;
-                                        const session = r.message;
-                                        
-                                        // Update state
-                                        state.setRoomProvider(session.session, session.llm_provider);
-                                        
-                                        const newRoom = {
-                                            roomId: session.session,
-                                            roomName: session.title + " — " + session.llm_provider,
-                                            users: [
-                                                { _id: _currentUserId, username: frappe.boot.user.full_name || _currentUserId },
-                                                { _id: _agentId, username: "AI Agent" },
-                                            ],
-                                        };
-                                        
-                                        // Add new room to state (at beginning of list)
-                                        const currentRooms = state.getRooms();
-                                        state.setRooms([newRoom, ...currentRooms]);
-                                        
-                                        // Update chat component
-                                        _chat.rooms = [newRoom, ...currentRooms];
-                                        _chat.setAttribute("room-id", session.session);
-                                        
-                                        // Set as active room and trigger message loading
-                                        state.setActiveRoomId(session.session);
-                                        // Also update realtime listeners with the new active room
-                                        if (window.phAgent.realtimeListeners) {
-                                            window.phAgent.realtimeListeners.setActiveRoomId(session.session);
-                                        }
-                                        const fetchMessagesEvent = new CustomEvent("fetch-messages", {
-                                            detail: [newRoom]
-                                        });
-                                        _chat.dispatchEvent(fetchMessagesEvent);
-                                        
-                                        resolve(newRoom);
-                                    },
-                                    error: (err) => {
-                                        console.error("Failed to create session:", err);
-                                        reject(err);
-                                    }
-                                });
-                            },
-                            secondary_action: () => {
-                                d.hide();
-                                reject(new Error("Dialog cancelled"));
-                            }
+                        };
+                        
+                        // Add new room to state (at beginning of list)
+                        const currentRooms = state.getRooms();
+                        state.setRooms([newRoom, ...currentRooms]);
+                        
+                        // Update chat component
+                        _chat.rooms = [newRoom, ...currentRooms];
+                        _chat.setAttribute("room-id", session.session);
+                        
+                        // Set as active room and trigger message loading
+                        state.setActiveRoomId(session.session);
+                        // Also update realtime listeners with the new active room
+                        if (window.phAgent.realtimeListeners) {
+                            window.phAgent.realtimeListeners.setActiveRoomId(session.session);
+                        }
+                        const fetchMessagesEvent = new CustomEvent("fetch-messages", {
+                            detail: [newRoom]
                         });
-                        d.show();
-                    })
-                    .catch(error => {
-                        console.error("Failed to fetch providers:", error);
-                        reject(error);
-                    });
+                        _chat.dispatchEvent(fetchMessagesEvent);
+                        
+                        resolve(newRoom);
+                    },
+                    error: (err) => {
+                        console.error("Failed to create session:", err);
+                        reject(err);
+                    }
+                });
             });
         },
         
@@ -335,6 +281,48 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         },
         
         // --- Utility Methods ---
+        
+        /**
+         * Update room's LLM provider
+         * @param {string} roomId - ID of the room
+         * @param {string} providerName - New provider name
+         * @returns {Promise} Promise that resolves when provider is updated
+         */
+        updateRoomProvider: function(roomId, providerName) {
+            return new Promise((resolve, reject) => {
+                frappe.call({
+                    method: "ph_agent.api.chat.update_session_provider",
+                    args: {
+                        session: roomId,
+                        provider_name: providerName
+                    },
+                    callback: (r) => {
+                        if (r.message && r.message.status === "ok") {
+                            // Update room provider in state
+                            const state = window.phAgent.state;
+                            state.setRoomProvider(roomId, providerName);
+                            
+                            // Update room display name
+                            const room = state.getRoomById(roomId);
+                            if (room) {
+                                const title = room.roomName.split(" — ")[0] || room.roomName;
+                                state.updateRoom(roomId, {
+                                    roomName: title + " — " + providerName
+                                });
+                                _chat.rooms = state.getRooms();
+                            }
+                            resolve();
+                        } else {
+                            reject(new Error("Failed to update provider"));
+                        }
+                    },
+                    error: (err) => {
+                        console.error("Failed to update provider:", err);
+                        reject(err);
+                    }
+                });
+            });
+        },
         
         /**
          * Get the current chat component

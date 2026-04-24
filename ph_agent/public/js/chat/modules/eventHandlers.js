@@ -702,16 +702,20 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             roomService.getRoomInfo(room.roomId)
                 .then((roomInfo) => {
-                    // Fetch enabled providers for the dropdown
-                    frappe.db.get_list("LLM Provider", {
-                        filters: { is_enabled: 1 },
-                        fields: ["name", "is_default"],
-                        order_by: "is_default desc, name asc",
-                    }).then((providers) => {
+                    // Fetch enabled providers and session thinking mode in parallel
+                    return Promise.all([
+                        frappe.db.get_list("LLM Provider", {
+                            filters: { is_enabled: 1 },
+                            fields: ["name", "is_default"],
+                            order_by: "is_default desc, name asc",
+                        }),
+                        frappe.db.get_value("Chat Session", room.roomId, "enable_thinking")
+                    ]).then(([providers, sessionRes]) => {
                         const providerOptions = providers.map((p) => ({
                             label: p.name + (p.is_default ? " (" + __("default") + ")" : ""),
                             value: p.name,
                         }));
+                        const sessionThinking = sessionRes.message?.enable_thinking || false;
                         
                         const dialog = new frappe.ui.Dialog({
                             title: __("Room Information"),
@@ -730,6 +734,13 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                     options: providerOptions.map((o) => o.value).join("\n"),
                                     default: roomInfo.provider,
                                     read_only: false,
+                                },
+                                {
+                                    fieldname: "enable_thinking",
+                                    fieldtype: "Check",
+                                    label: __("Override Thinking Mode"),
+                                    default: sessionThinking,
+                                    description: __("When checked, enables thinking/reasoning regardless of provider setting. When unchecked, inherits from LLM Provider."),
                                 },
                                 {
                                     fieldname: "created",
@@ -758,23 +769,21 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 if (values.provider !== roomInfo.provider) {
                                     args.provider_name = values.provider;
                                 }
+                                if (values.enable_thinking !== sessionThinking) {
+                                    args.enable_thinking = values.enable_thinking ? 1 : 0;
+                                }
                                 
-                                if (!args.title && !args.provider_name) {
-                                    // Nothing changed
+                                if (!args.title && !args.provider_name && args.enable_thinking === undefined) {
                                     return;
                                 }
                                 
-                                // Single API call to avoid deadlocks
                                 frappe.call({
                                     method: "ph_agent.api.chat.update_session_settings",
                                     args: args,
                                     callback: (r) => {
                                         if (r.message && r.message.status === "ok") {
-                                            // Update local state for changed fields
                                             const state = window.phAgent.state;
                                             const roomId = room.roomId;
-                                            
-                                            // Determine final title and provider
                                             const finalTitle = args.title || roomInfo.title;
                                             const finalProvider = args.provider_name || roomInfo.provider;
                                             
@@ -782,12 +791,10 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                                 state.setRoomProvider(roomId, finalProvider);
                                             }
                                             
-                                            // Single updateRoom call with the correct roomName
                                             state.updateRoom(roomId, {
                                                 roomName: finalTitle + " — " + finalProvider
                                             });
                                             
-                                            // Reassign rooms to trigger Vue Advanced Chat reactivity
                                             window.phAgent.roomService.getChat().rooms = state.getRooms();
                                             
                                             frappe.show_alert({ 
@@ -803,7 +810,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                         });
                                     }
                                 });
-                            },
+                            }
                         });
                         dialog.show();
                     });

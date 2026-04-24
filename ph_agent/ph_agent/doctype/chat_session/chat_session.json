@@ -13,6 +13,7 @@
   "temperature",
   "enable_suggestions",
   "enable_streaming",
+  "enable_thinking",
   "column_break_1",
   "input_tokens",
   "output_tokens",
@@ -84,6 +85,13 @@
    "fieldname": "enable_streaming",
    "fieldtype": "Check",
    "label": "Enable Streaming"
+  },
+  {
+   "default": "0",
+   "description": "Override thinking mode for this session. When checked, enables thinking regardless of provider setting. When unchecked, inherits from LLM Provider.",
+   "fieldname": "enable_thinking",
+   "fieldtype": "Check",
+   "label": "Override Thinking Mode"
   },
   {
    "fieldname": "column_break_1",

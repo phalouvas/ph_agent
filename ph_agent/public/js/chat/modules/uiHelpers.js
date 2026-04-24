@@ -131,6 +131,32 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                 .ph-summary-message.ph-summary-collapsed .vac-format-container:nth-child(2) {
                     display: none;
                 }
+
+                /* Reasoning block styling */
+                .ph-reasoning-block {
+                    margin-bottom: 12px;
+                    padding: 8px 12px;
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    border-left: 3px solid #94a3b8;
+                    font-size: 0.9em;
+                    color: #64748b;
+                }
+                .ph-reasoning-block summary {
+                    cursor: pointer;
+                    font-weight: 500;
+                    color: #475569;
+                    user-select: none;
+                }
+                .ph-reasoning-block[open] summary {
+                    margin-bottom: 8px;
+                }
+                .ph-reasoning-content {
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    line-height: 1.5;
+                }
             `;
             root.appendChild(_suggestionStyle);
         },

@@ -16,6 +16,9 @@
   "api_url",
   "default_model",
   "temperature",
+  "section_thinking",
+  "enable_thinking",
+  "reasoning_effort",
   "section_token_limits",
   "max_output_tokens",
   "context_length",
@@ -80,7 +83,7 @@
    "reqd": 1
   },
   {
-   "default": "deepseek-chat",
+   "default": "deepseek-v4-flash",
    "fieldname": "default_model",
    "fieldtype": "Data",
    "label": "Default Model",
@@ -88,11 +91,32 @@
   },
   {
    "default": "1",
-   "description": "Default temperature for this provider (0\u20111.5). Recommended values: Coding/Math: 0.0, Data Cleaning/Analysis: 1.0, General Conversation/Translation: 1.3, Creative Writing/Poetry: 1.5. Leave empty to use default value of 1.0.",
+   "description": "Default temperature for this provider (0\u20111.5). Recommended values: Coding/Math: 0.0, Data Cleaning/Analysis: 1.0, General Conversation/Translation: 1.3, Creative Writing/Poetry: 1.5. Leave empty to use default value of 1.0. Ignored when thinking mode is enabled.",
    "fieldname": "temperature",
    "fieldtype": "Float",
    "label": "Temperature",
    "precision": "1"
+  },
+  {
+   "fieldname": "section_thinking",
+   "fieldtype": "Section Break",
+   "label": "Thinking / Reasoning"
+  },
+  {
+   "default": "1",
+   "description": "Enable thinking/reasoning mode (DeepSeek's chain-of-thought). When enabled, the model shows its reasoning process before the final answer. Temperature and top_p are ignored when thinking is active.",
+   "fieldname": "enable_thinking",
+   "fieldtype": "Check",
+   "label": "Enable Thinking Mode"
+  },
+  {
+   "default": "high",
+   "depends_on": "eval:doc.enable_thinking==1",
+   "description": "Controls how much effort the model spends on reasoning before answering. 'high' is recommended for most tasks; 'max' uses maximum reasoning depth.",
+   "fieldname": "reasoning_effort",
+   "fieldtype": "Select",
+   "label": "Reasoning Effort",
+   "options": "high\nmax"
   },
   {
    "description": "Default system prompt for all sessions using this provider. Can be overridden per session.",
@@ -106,15 +130,15 @@
    "label": "Token Limits"
   },
   {
-   "default": "4096",
-   "description": "Maximum tokens the model can generate per response. Default: 4096 for deepseek-chat, 32768 for deepseek-reasoner.",
+   "default": "32768",
+   "description": "Maximum tokens the model can generate per response. Default: 32768 (recommended for thinking models).",
    "fieldname": "max_output_tokens",
    "fieldtype": "Int",
    "label": "Max Output Tokens"
   },
   {
    "default": "128000",
-   "description": "Maximum total tokens (prompt + completion) the model supports. Default: 128000 (DeepSeek's 128K context).",
+   "description": "Maximum total tokens (prompt + completion) the model supports. Default: 128000. DeepSeek supports up to 1M tokens for compatible models.",
    "fieldname": "context_length",
    "fieldtype": "Int",
    "label": "Context Length"

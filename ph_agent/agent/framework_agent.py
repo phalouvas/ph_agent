@@ -167,10 +167,7 @@ def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int]:
 def _validate_context_limit(session_doc, provider_doc) -> int:
 	context_length = provider_doc.context_length or 128000
 	estimated_tokens = session_doc.estimated_conversation_tokens or 0
-	max_tokens = provider_doc.max_output_tokens
-	if not max_tokens:
-		model_name = (provider_doc.default_model or "").lower()
-		max_tokens = 32768 if "reasoner" in model_name else 4096
+	max_tokens = provider_doc.max_output_tokens or 32768
 
 	if estimated_tokens + max_tokens > context_length:
 		frappe.throw(
@@ -201,6 +198,10 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		)
 
 	max_tokens = _validate_context_limit(session_doc, provider_doc)
+
+	# Resolve thinking mode: session override takes precedence over provider
+	enable_thinking = bool(session_doc.enable_thinking) if session_doc.enable_thinking else bool(provider_doc.enable_thinking)
+
 	temperature = (
 		session_doc.temperature
 		if session_doc.temperature is not None
@@ -215,7 +216,15 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		api_key=api_key,
 		base_url=provider_doc.api_url,
 	)
-	default_options = {"temperature": temperature, "max_tokens": max_tokens}
+
+	# Build default_options — skip temperature when thinking is enabled (ignored by DeepSeek)
+	default_options = {"max_tokens": max_tokens}
+	if enable_thinking:
+		default_options["extra_body"] = {"thinking": {"type": "enabled"}}
+		default_options["reasoning_effort"] = provider_doc.reasoning_effort or "high"
+	else:
+		default_options["temperature"] = temperature
+		default_options["extra_body"] = {"thinking": {"type": "disabled"}}
 
 	# Build skills provider from both file-based and DocType-based sources
 	skills_provider = _build_skills_provider()
@@ -294,7 +303,11 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 
 
 def _save_session_state(session_name: str, state: dict[str, Any]) -> None:
-	"""Save session state to Chat Session DocType."""
+	"""Save session state to Chat Session DocType.
+
+	Uses ``frappe.db.set_value`` to avoid TimestampMismatchError from concurrent
+	saves (e.g. streaming producer thread vs. main thread updating token counts).
+	"""
 	try:
 		if not state:
 			return
@@ -303,10 +316,14 @@ def _save_session_state(session_name: str, state: dict[str, Any]) -> None:
 		if not filtered_state:
 			return
 		
-		session_doc = frappe.get_doc("Chat Session", session_name)
-		session_doc.session_state = json.dumps(filtered_state, indent=2)
-		session_doc.last_state_update = frappe.utils.now()
-		session_doc.save(ignore_permissions=True)
+		frappe.db.set_value(
+			"Chat Session",
+			session_name,
+			{
+				"session_state": json.dumps(filtered_state, indent=2),
+				"last_state_update": frappe.utils.now(),
+			},
+		)
 	except Exception as e:
 		frappe.log_error(
 			title="Error saving session state",
@@ -393,7 +410,22 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 	return stream, agent_session.state
 
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None]:
+def _extract_reasoning_from_response(response) -> str:
+	"""Extract reasoning content from a non-streaming agent response."""
+	reasoning_parts = []
+	for msg in getattr(response, 'messages', []) or []:
+		for content in getattr(msg, 'contents', []) or []:
+			if getattr(content, 'type', None) == "text_reasoning":
+				reasoning_parts.append(content.text or "")
+	return "\n".join(reasoning_parts)
+
+
+def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None, str]:
+	"""Get agent response (non-streaming).
+	
+	Returns:
+		tuple of (response_text, input_tokens, output_tokens, approval_data, reasoning_content)
+	"""
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
@@ -407,6 +439,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 
 	input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
 	approval_data = _extract_approval_data(response)
+	reasoning_content = _extract_reasoning_from_response(response)
 	
 	# Always save session state, regardless of approval flow
 	_save_session_state(session_name, session_state)
@@ -415,7 +448,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		# Also store session state in approval data for continuation
 		approval_data["conversation_state"]["session_state"] = _filter_session_state(session_state)
 	
-	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, approval_data
+	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, approval_data, reasoning_content
 
 
 def get_agent_response_stream(
@@ -447,11 +480,26 @@ def get_agent_response_stream(
 				)
 
 				seen_text = ""
+				seen_reasoning = ""
 				chunk_count = 0
 
 				async for update in stream:
 					if stop_event.is_set():
 						break
+
+					# Check for reasoning content in the update's contents
+					if hasattr(update, 'contents') and update.contents:
+						for content in update.contents:
+							if getattr(content, 'type', None) == "text_reasoning":
+								reasoning_text = content.text or ""
+								if reasoning_text.startswith(seen_reasoning):
+									reasoning_delta = reasoning_text[len(seen_reasoning):]
+									seen_reasoning = reasoning_text
+								else:
+									reasoning_delta = reasoning_text
+									seen_reasoning += reasoning_delta
+								if reasoning_delta:
+									result_queue.put(("reasoning_chunk", reasoning_delta))
 
 					chunk = update.text or ""
 					if not chunk:
@@ -512,6 +560,8 @@ def get_agent_response_stream(
 	thread = threading.Thread(target=_producer, daemon=True)
 	thread.start()
 
+	full_reasoning = ""
+
 	while True:
 		if cancel_check and cancel_check():
 			stop_event.set()
@@ -522,6 +572,10 @@ def get_agent_response_stream(
 		except queue.Empty:
 			continue
 
+		if event_type == "reasoning_chunk":
+			full_reasoning += payload
+			yield ("reasoning_chunk", payload), False, 0, 0
+			continue
 		if event_type == "chunk":
 			yield payload, False, 0, 0
 			continue
@@ -531,7 +585,7 @@ def get_agent_response_stream(
 			break
 		if event_type == "done":
 			chunk, input_tokens, output_tokens = payload
-			yield chunk, True, input_tokens, output_tokens
+			yield (chunk, full_reasoning), True, input_tokens, output_tokens
 			break
 		if event_type == "error":
 			raise payload
@@ -542,7 +596,7 @@ def run_after_approval(
 	conversation_state: dict[str, Any],
 	approved: bool,
 	user: str | None = None,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, str]:
 	import traceback
 	
 	approval_requests = (conversation_state or {}).get("approval_requests") or []
@@ -618,11 +672,12 @@ def run_after_approval(
 			session_state=session_state
 		)
 		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
+		reasoning_content = _extract_reasoning_from_response(response)
 		
 		# Save updated session state to Chat Session
 		_save_session_state(session_name, updated_state)
 		
-		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens
+		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, reasoning_content
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error in _run_agent for {session_name}",
@@ -632,11 +687,7 @@ def run_after_approval(
 
 
 def _provider_max_tokens(provider_doc) -> int:
-	max_tokens = provider_doc.max_output_tokens
-	if not max_tokens:
-		model_name = (provider_doc.default_model or "").lower()
-		max_tokens = 32768 if "reasoner" in model_name else 4096
-	return max_tokens
+	return provider_doc.max_output_tokens or 32768
 
 
 def generate_session_title(session_name: str, user_message: str, agent_reply: str) -> str:

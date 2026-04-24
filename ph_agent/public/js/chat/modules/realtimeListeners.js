@@ -75,6 +75,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.on("new_message", this.handleNewMessage.bind(this));
             frappe.realtime.on("suggestions_ready", this.handleSuggestionsReady.bind(this));
             frappe.realtime.on("message_chunk", this.handleMessageChunk.bind(this));
+            frappe.realtime.on("reasoning_chunk", this.handleReasoningChunk.bind(this));
             frappe.realtime.on("token_update", this.handleTokenUpdate.bind(this));
             frappe.realtime.on("token_warning", this.handleTokenWarning.bind(this));
             frappe.realtime.on("approval_needed", this.handleApprovalNeeded.bind(this));
@@ -94,6 +95,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.off("new_message");
             frappe.realtime.off("suggestions_ready");
             frappe.realtime.off("message_chunk");
+            frappe.realtime.off("reasoning_chunk");
             frappe.realtime.off("approval_needed");
             frappe.realtime.off("approval_resolved");
         },
@@ -407,6 +409,16 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Clear processing state (stop button should now be hidden)
                 state.setIsProcessing(false);
                 
+                // Auto-collapse reasoning block after streaming completes
+                const root = uiHelpers.getRoot();
+                const msgEl = root.querySelector(`[id="${data.message_id}"]`);
+                if (msgEl) {
+                    const detailsEl = msgEl.querySelector('.ph-reasoning-block');
+                    if (detailsEl) {
+                        detailsEl.removeAttribute('open');
+                    }
+                }
+                
                 // Update chat component with final message
                 const newMessages = state.getMessages();
                 _chat.messages = newMessages;
@@ -457,6 +469,52 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 });
                 state.setRooms(rooms);
                 _chat.rooms = rooms;
+            }
+        },
+        
+        /**
+         * Handle reasoning_chunk event for streaming thinking/reasoning content
+         * @param {Object} data - Event data with session, message_id, and chunk
+         */
+        handleReasoningChunk: function(data) {
+            if (data.session !== _activeRoomId) return;
+            
+            const state = window.phAgent.state;
+            const uiHelpers = window.phAgent.uiHelpers;
+            const root = uiHelpers.getRoot();
+            
+            // Find the message wrapper element
+            const msgEl = root.querySelector(`[id="${data.message_id}"]`);
+            if (!msgEl) return;
+            
+            // Find or create the reasoning details element
+            let detailsEl = msgEl.querySelector('.ph-reasoning-block');
+            if (!detailsEl) {
+                detailsEl = document.createElement('details');
+                detailsEl.className = 'ph-reasoning-block';
+                detailsEl.setAttribute('open', '');
+                
+                const summary = document.createElement('summary');
+                summary.textContent = '\u{1F913} Thinking process';
+                detailsEl.appendChild(summary);
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'ph-reasoning-content';
+                detailsEl.appendChild(contentDiv);
+                
+                // Insert reasoning block before the message text content
+                const textContainer = msgEl.querySelector('.vac-format-container');
+                if (textContainer && textContainer.parentNode) {
+                    textContainer.parentNode.insertBefore(detailsEl, textContainer);
+                } else {
+                    msgEl.appendChild(detailsEl);
+                }
+            }
+            
+            // Append chunk to reasoning content
+            const contentDiv = detailsEl.querySelector('.ph-reasoning-content');
+            if (contentDiv) {
+                contentDiv.textContent += data.chunk;
             }
         },
         

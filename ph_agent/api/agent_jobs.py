@@ -406,6 +406,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		if use_streaming:
 			# Streaming path
 			full_content = ""
+			full_reasoning = ""
 			input_tokens = 0
 			output_tokens = 0
 			streaming_successful = False
@@ -421,11 +422,34 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						if isinstance(chunk, dict) and chunk.get("approval_needed"):
 							approval_data = chunk
 							streaming_successful = True
+						elif isinstance(chunk, tuple):
+							# (response_text, reasoning_content) — response_text is empty
+							# because content was already streamed via chunks.
+							# Only extract reasoning and token counts.
+							response_text, reasoning_text = chunk
+							full_reasoning = reasoning_text or full_reasoning
+							input_tokens = chunk_input_tokens
+							output_tokens = chunk_output_tokens
+							streaming_successful = True
 						else:
 							# Normal final chunk with token usage
 							input_tokens = chunk_input_tokens
 							output_tokens = chunk_output_tokens
 							streaming_successful = True
+					elif isinstance(chunk, tuple) and chunk[0] == "reasoning_chunk":
+						# Reasoning content chunk
+						reasoning_delta = chunk[1]
+						full_reasoning += reasoning_delta
+						# Publish reasoning chunk via realtime
+						frappe.publish_realtime(
+							event="reasoning_chunk",
+							message={
+								"session": session,
+								"message_id": agent_msg.name,
+								"chunk": reasoning_delta,
+							},
+							user=enqueued_by,
+						)
 					else:
 						# Content chunk
 						full_content += chunk
@@ -449,9 +473,19 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					return
 				
 				if streaming_successful:
-					# Update the placeholder message with full content and token counts
-					# Apply post-processing to fix missing spaces between concatenated sentences
-					agent_msg.content = _fix_agent_response_text(full_content)
+					# Build content with reasoning block if reasoning exists
+					processed_content = _fix_agent_response_text(full_content)
+					if full_reasoning:
+						reasoning_html = (
+							f'<details class="ph-reasoning-block" open>\n'
+							f'    <summary>\U0001f913 Thinking process</summary>\n'
+							f'{full_reasoning}\n'
+							f'</details>\n\n'
+						)
+						agent_msg.content = reasoning_html + processed_content
+						agent_msg.reasoning_content = full_reasoning
+					else:
+						agent_msg.content = processed_content
 					agent_msg.input_tokens = input_tokens
 					agent_msg.output_tokens = output_tokens
 					agent_msg.message_type = "Agent"
@@ -467,9 +501,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					title=f"Streaming failed for session {session}, falling back to non-streaming",
 					message=str(stream_error)
 				)
+				# Reload agent_msg to avoid TimestampMismatchError (it was committed earlier)
+				agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
-				reply, input_tokens, output_tokens, approval_data = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+				reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled)
 				
 				if approval_data:
 					# Handle approval flow
@@ -478,16 +514,28 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					emit_status("")
 					return
 				
-				# Update placeholder message with actual content and token counts
-				# Apply post-processing to fix missing spaces between concatenated sentences
-				agent_msg.content = _fix_agent_response_text(reply)
+				# Build content with reasoning block if reasoning exists
+				processed_content = _fix_agent_response_text(reply)
+				if reasoning_content:
+					reasoning_html = (
+						f'<details class="ph-reasoning-block" open>\n'
+						f'    <summary>\U0001f913 Thinking process</summary>\n'
+						f'{reasoning_content}\n'
+						f'</details>\n\n'
+					)
+					agent_msg.content = reasoning_html + processed_content
+					agent_msg.reasoning_content = reasoning_content
+				else:
+					agent_msg.content = processed_content
 				agent_msg.input_tokens = input_tokens
 				agent_msg.output_tokens = output_tokens
 				agent_msg.save(ignore_permissions=True)
 				frappe.db.commit()
 		else:
 			# Non-streaming path - update the existing placeholder message
-			reply, input_tokens, output_tokens, approval_data = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
+			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
+			reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled)
 			
 			if approval_data:
 				# Handle approval flow
@@ -496,9 +544,19 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				emit_status("")
 				return
 			
-			# Update the placeholder message with actual content and token counts
-			# Apply post-processing to fix missing spaces between concatenated sentences
-			agent_msg.content = _fix_agent_response_text(reply)
+			# Build content with reasoning block if reasoning exists
+			processed_content = _fix_agent_response_text(reply)
+			if reasoning_content:
+				reasoning_html = (
+					f'<details class="ph-reasoning-block" open>\n'
+					f'    <summary>\U0001f913 Thinking process</summary>\n'
+					f'{reasoning_content}\n'
+					f'</details>\n\n'
+				)
+				agent_msg.content = reasoning_html + processed_content
+				agent_msg.reasoning_content = reasoning_content
+			else:
+				agent_msg.content = processed_content
 			agent_msg.input_tokens = input_tokens
 			agent_msg.output_tokens = output_tokens
 			agent_msg.save(ignore_permissions=True)
@@ -663,40 +721,18 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	release_lock()
 	emit_status("")
 	
-	if use_streaming:
-		# For streaming, publish the final post-processed content to replace
-		# the locally-accumulated chunks in the frontend (which may have missing
-		# spaces between sentences).
-		frappe.publish_realtime(
-			event="new_message",
-			message={
-				"session": session,
-				"name": agent_msg.name,
-				"sender_type": "Agent",
-				"content": agent_msg.content,
-				"creation": str(agent_msg.creation),
-			},
-			user=enqueued_by,
-		)
-	else:
-		# For non-streaming, publish the updated message
-		# The placeholder was already published, now we need to update it
-		# We publish a new_message event with the same ID to trigger an update
-		new_msg_payload = {
+	# Publish the final message content (with reasoning block if applicable)
+	frappe.publish_realtime(
+		event="new_message",
+		message={
 			"session": session,
 			"name": agent_msg.name,
 			"sender_type": "Agent",
-			"content": reply,
+			"content": agent_msg.content,
 			"creation": str(agent_msg.creation),
-		}
-		# Don't include old_message_id in final response - only placeholder needs it
-		# The final response updates the placeholder message (same ID)
-		
-		frappe.publish_realtime(
-			event="new_message",
-			message=new_msg_payload,
-			user=enqueued_by,
-		)
+		},
+		user=enqueued_by,
+	)
 
 	# Enqueue follow-up suggestions if enabled for this session
 	session_doc = frappe.get_doc("Chat Session", session)
@@ -860,13 +896,26 @@ def _execute_approved_tool(approval_name):
 	
 	try:
 		notify_user = approval_doc.approver or frappe.session.user
-		reply, input_tokens, output_tokens = run_after_approval(
+		reply, input_tokens, output_tokens, reasoning_content = run_after_approval(
 			session_name=session,
 			conversation_state=conversation_state,
 			approved=True,
 			user=notify_user,
 		)
 		
+		# Build content with reasoning block if reasoning exists
+		processed_content = _fix_agent_response_text(reply)
+		if reasoning_content:
+			reasoning_html = (
+				f'<details class="ph-reasoning-block" open>\n'
+				f'    <summary>\U0001f913 Thinking process</summary>\n'
+				f'{reasoning_content}\n'
+				f'</details>\n\n'
+			)
+			agent_content = reasoning_html + processed_content
+		else:
+			agent_content = processed_content
+
 		# Store the agent's response as a Chat Message
 		agent_msg = frappe.get_doc(
 			{
@@ -874,7 +923,8 @@ def _execute_approved_tool(approval_name):
 				"chat_session": session,
 				"sender_type": "Agent",
 				"message_type": "Agent",
-				"content": reply,
+				"content": agent_content,
+				"reasoning_content": reasoning_content or None,
 				"input_tokens": input_tokens,
 				"output_tokens": output_tokens,
 			}

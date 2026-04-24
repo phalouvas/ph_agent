@@ -9,6 +9,7 @@
   "sender_type",
   "message_type",
   "content",
+  "reasoning_content",
   "is_edited",
   "edited_at",
   "edited_by",
@@ -47,6 +48,13 @@
    "fieldtype": "Markdown Editor",
    "label": "Content",
    "reqd": 1
+  },
+  {
+   "fieldname": "reasoning_content",
+   "fieldtype": "Long Text",
+   "label": "Reasoning Content",
+   "read_only": 1,
+   "hidden": 1
   },
   {
    "default": "0",

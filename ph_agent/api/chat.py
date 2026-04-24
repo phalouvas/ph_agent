@@ -46,8 +46,8 @@ def update_session_provider(session, provider_name):
 
 
 @frappe.whitelist()
-def update_session_settings(session, title=None, provider_name=None):
-	"""Update both title and LLM provider on a Chat Session in a single call."""
+def update_session_settings(session, title=None, provider_name=None, enable_thinking=None):
+	"""Update title, LLM provider, and/or thinking mode on a Chat Session in a single call."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
 	update_dict = {}
@@ -57,6 +57,8 @@ def update_session_settings(session, title=None, provider_name=None):
 		if not frappe.db.exists("LLM Provider", {"name": provider_name, "is_enabled": 1}):
 			frappe.throw(frappe._("LLM Provider {0} not found or is disabled.").format(provider_name))
 		update_dict["llm_provider"] = provider_name
+	if enable_thinking is not None:
+		update_dict["enable_thinking"] = enable_thinking
 
 	if not update_dict:
 		return {"status": "ok"}

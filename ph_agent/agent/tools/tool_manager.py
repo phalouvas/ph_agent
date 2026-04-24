@@ -209,6 +209,10 @@ class ToolManager:
         if not fields:
             return None
         
+        # Add additionalProperties: false to the schema to help DeepSeek
+        # correctly populate required parameters instead of sending empty {}
+        schema["additionalProperties"] = False
+        
         return create_model("ToolInputModel", **fields)
     
     @classmethod

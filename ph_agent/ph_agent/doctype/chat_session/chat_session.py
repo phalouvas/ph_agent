@@ -27,6 +27,9 @@ class ChatSession(Document):
 			self.enable_suggestions = provider.enable_suggestions
 			# Inherit enable_streaming from provider's supports_streaming
 			self.enable_streaming = provider.supports_streaming
+			# Inherit enable_thinking from provider (only if session override is not set)
+			if not self.enable_thinking:
+				self.enable_thinking = provider.enable_thinking
 			# Inherit system_prompt from provider if not explicitly set
 			if not self.system_prompt:
 				self.system_prompt = provider.system_prompt

@@ -159,16 +159,20 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                 }
 
                 /* Custom action button (saved prompts) - replace default trash icon with bookmark */
-                .vac-svg-button.ph-saved-prompts-btn svg {
-                    display: none;
+                .vac-svg-button.ph-saved-prompts-btn svg,
+                .vac-svg-button:has(#vac-icon-deleted) svg {
+                    display: none !important;
                 }
-                .vac-svg-button.ph-saved-prompts-btn::before {
-                    content: "🔖";
-                    font-size: 18px;
-                    line-height: 1;
+                .vac-svg-button.ph-saved-prompts-btn::before,
+                .vac-svg-button:has(#vac-icon-deleted)::before {
+                    content: "🔖" !important;
+                    font-size: 18px !important;
+                    line-height: 1 !important;
+                    display: inline-block !important;
                 }
-                .vac-svg-button.ph-saved-prompts-btn {
-                    cursor: pointer;
+                .vac-svg-button.ph-saved-prompts-btn,
+                .vac-svg-button:has(#vac-icon-deleted) {
+                    cursor: pointer !important;
                 }
 
                 /* Prevent textarea from pushing send button out of view on long input */

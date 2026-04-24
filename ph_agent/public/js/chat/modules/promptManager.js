@@ -196,8 +196,45 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 	 * @returns {string} HTML string
 	 */
 	function buildPromptListHtml(prompts) {
+		// Inline styles for prompt cards inside Frappe Dialog (global CSS may not apply)
+		const style = `<style>
+			.ph-prompts-list { max-height: 400px; overflow-y: auto; padding: 4px 0; }
+			.ph-prompts-section { margin-bottom: 16px; }
+			.ph-prompts-section:last-child { margin-bottom: 0; }
+			.ph-prompts-section-title {
+				font-size: 11px; font-weight: 600; color: #6b7280;
+				text-transform: uppercase; letter-spacing: 0.05em;
+				padding: 8px 4px 6px; border-bottom: 1px solid #e5e7eb;
+				margin-bottom: 8px;
+			}
+			.ph-prompt-card {
+				padding: 10px 12px; margin: 0 0 8px 0; border-radius: 8px;
+				cursor: pointer; border: 1px solid #e5e7eb; background: #ffffff;
+				transition: background 0.15s, border-color 0.15s;
+			}
+			.ph-prompt-card:last-child { margin-bottom: 0; }
+			.ph-prompt-card:hover { background: #f9fafb; border-color: #d1d5db; }
+			.ph-prompt-card-title {
+				font-size: 13px; font-weight: 600; color: #1f2937;
+				margin-bottom: 4px; display: flex; align-items: center; gap: 6px;
+			}
+			.ph-prompt-card-preview {
+				font-size: 11px; color: #9ca3af; line-height: 1.4;
+				overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+			}
+			.ph-prompt-var-badge {
+				font-size: 9px; font-weight: 600; background: #dbeafe;
+				color: #2563eb; padding: 1px 6px; border-radius: 8px;
+				text-transform: uppercase; letter-spacing: 0.03em;
+			}
+			.ph-prompt-usage-badge {
+				font-size: 9px; font-weight: 600; background: #f3f4f6;
+				color: #6b7280; padding: 1px 6px; border-radius: 8px;
+			}
+			.ph-prompts-empty { padding: 20px; }
+		</style>`;
 		if (!prompts || prompts.length === 0) {
-			return `<div class="ph-prompts-empty">
+			return style + `<div class="ph-prompts-empty">
 				<p style="text-align:center;padding:40px 20px;color:#6b7280;">
 					${__("No saved prompts yet.")}
 				</p>
@@ -256,7 +293,7 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 		}
 
 		html += '</div>';
-		return html;
+		return style + html;
 	}
 
 	/**
@@ -464,8 +501,32 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 	 * @returns {string} HTML
 	 */
 	function buildManageListHtml(prompts) {
+		const style = `<style>
+			.ph-prompts-manage-list { max-height: 400px; overflow-y: auto; }
+			.ph-prompt-manage-row {
+				display: flex; align-items: center; justify-content: space-between;
+				padding: 8px 4px; border-bottom: 1px solid #f3f4f6; gap: 12px;
+			}
+			.ph-prompt-manage-row:last-child { border-bottom: none; }
+			.ph-prompt-manage-info { flex: 1; min-width: 0; }
+			.ph-prompt-manage-title {
+				font-size: 13px; font-weight: 600; color: #1f2937;
+				display: flex; align-items: center; gap: 4px;
+			}
+			.ph-prompt-manage-preview {
+				font-size: 11px; color: #9ca3af;
+				overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+				margin-top: 2px;
+			}
+			.ph-prompt-manage-actions { display: flex; gap: 4px; flex-shrink: 0; }
+			.ph-prompt-cat-badge {
+				font-size: 10px; font-weight: 500; background: #f0fdf4;
+				color: #16a34a; padding: 1px 6px; border-radius: 4px; margin-left: 4px;
+			}
+			.ph-prompts-empty { padding: 20px; }
+		</style>`;
 		if (!prompts || prompts.length === 0) {
-			return `<div class="ph-prompts-empty">
+			return style + `<div class="ph-prompts-empty">
 				<p style="text-align:center;padding:40px 20px;color:#6b7280;">
 					${__("No saved prompts yet. Click 'New Prompt' to create one.")}
 				</p>
@@ -496,7 +557,7 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 			</div>`;
 		});
 		html += '</div>';
-		return html;
+		return style + html;
 	}
 
 	/**
@@ -600,16 +661,26 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 			_chat = chat;
 			_container = container;
 
-			// Add tooltip and class to the custom action button after shadow DOM is ready
-			setTimeout(() => {
+			// Add tooltip and class to the custom action button
+			function styleActionButton() {
 				const root = _chat.shadowRoot || _container;
-				// Find the custom action button (has the deleted/trash icon SVG)
 				const actionBtn = root.querySelector("#vac-icon-deleted")?.closest(".vac-svg-button");
-				if (actionBtn) {
+				if (actionBtn && !actionBtn.classList.contains("ph-saved-prompts-btn")) {
 					actionBtn.classList.add("ph-saved-prompts-btn");
 					actionBtn.setAttribute("title", __("Saved Prompts"));
+					// Also set cursor directly as inline style for immediate effect
+					actionBtn.style.cursor = "pointer";
 				}
-			}, 1000);
+			}
+
+			// Try immediately and retry a few times since shadow DOM may not be ready
+			styleActionButton();
+			let attempts = 0;
+			const interval = setInterval(() => {
+				styleActionButton();
+				attempts++;
+				if (attempts >= 10) clearInterval(interval);
+			}, 500);
 		},
 
 		/**

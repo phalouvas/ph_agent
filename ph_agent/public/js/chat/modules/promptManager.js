@@ -349,7 +349,7 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 		variables.forEach(v => {
 			fields.push({
 				fieldname: v,
-				fieldtype: "Data",
+				fieldtype: "Small Text",
 				label: v.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
 				placeholder: "{{" + v + "}}",
 			});

@@ -88,9 +88,21 @@
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "square-user-round",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "User Preference",
+   "link_to": "User Preference",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-04-23 18:56:42.183287",
+ "modified": "2026-04-24 06:27:37.245687",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

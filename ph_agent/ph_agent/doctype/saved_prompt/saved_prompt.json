@@ -33,7 +33,7 @@
   },
   {
    "fieldname": "content",
-   "fieldtype": "Text Editor",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Content",
    "reqd": 1

@@ -157,6 +157,16 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                     word-break: break-word;
                     line-height: 1.5;
                 }
+
+                /* Custom action button (saved prompts) - replace default trash icon with bookmark */
+                .vac-svg-button.ph-saved-prompts-btn svg {
+                    display: none;
+                }
+                .vac-svg-button.ph-saved-prompts-btn::before {
+                    content: "🔖";
+                    font-size: 18px;
+                    line-height: 1;
+                }
             `;
             root.appendChild(_suggestionStyle);
         },

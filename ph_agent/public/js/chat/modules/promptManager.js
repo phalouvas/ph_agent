@@ -14,6 +14,21 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 	// ── Utility ────────────────────────────────────────────────────
 
 	/**
+	 * Escape HTML special characters to prevent XSS.
+	 * @param {string} text - Text to escape
+	 * @returns {string} Escaped text
+	 */
+	function escapeHtml(text) {
+		if (text === null || text === undefined) return "";
+		return String(text)
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;")
+			.replace(/'/g, "&#039;");
+	}
+
+	/**
 	 * Extract unique {{variable}} names from a prompt template.
 	 * @param {string} content - Prompt template text
 	 * @returns {string[]} Array of unique variable names
@@ -223,7 +238,7 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 		// Categorized sections
 		Object.keys(categorized).sort().forEach(cat => {
 			html += `<div class="ph-prompts-section">
-				<div class="ph-prompts-section-title">📁 ${__("Category")}: ${frappe.utils.escapeHtml(cat)}</div>`;
+				<div class="ph-prompts-section-title">📁 ${__("Category")}: ${escapeHtml(cat)}</div>`;
 			categorized[cat].forEach(p => {
 				html += buildPromptCard(p);
 			});
@@ -261,13 +276,13 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 			? `<span class="ph-prompt-usage-badge">${prompt.usage_count}</span>`
 			: "";
 
-		return `<div class="ph-prompt-card" data-prompt-id="${frappe.utils.escapeHtml(prompt.name)}">
+		return `<div class="ph-prompt-card" data-prompt-id="${escapeHtml(prompt.name)}">
 			<div class="ph-prompt-card-title">
-				${prompt.is_favorite ? "⭐ " : ""}${frappe.utils.escapeHtml(prompt.title)}
+				${prompt.is_favorite ? "⭐ " : ""}${escapeHtml(prompt.title)}
 				${varBadge}
 				${usageBadge}
 			</div>
-			<div class="ph-prompt-card-preview">${frappe.utils.escapeHtml(preview)}</div>
+			<div class="ph-prompt-card-preview">${escapeHtml(preview)}</div>
 		</div>`;
 	}
 
@@ -465,16 +480,16 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 			html += `<div class="ph-prompt-manage-row">
 				<div class="ph-prompt-manage-info">
 					<div class="ph-prompt-manage-title">
-						${p.is_favorite ? "⭐ " : ""}${frappe.utils.escapeHtml(p.title)}
-						${p.category ? `<span class="ph-prompt-cat-badge">${frappe.utils.escapeHtml(p.category)}</span>` : ""}
+						${p.is_favorite ? "⭐ " : ""}${escapeHtml(p.title)}
+						${p.category ? `<span class="ph-prompt-cat-badge">${escapeHtml(p.category)}</span>` : ""}
 					</div>
-					<div class="ph-prompt-manage-preview">${frappe.utils.escapeHtml(preview)}</div>
+					<div class="ph-prompt-manage-preview">${escapeHtml(preview)}</div>
 				</div>
 				<div class="ph-prompt-manage-actions">
-					<button class="btn btn-default btn-xs ph-prompt-manage-edit" data-prompt-id="${frappe.utils.escapeHtml(p.name)}">
+					<button class="btn btn-default btn-xs ph-prompt-manage-edit" data-prompt-id="${escapeHtml(p.name)}">
 						${__("Edit")}
 					</button>
-					<button class="btn btn-danger btn-xs ph-prompt-manage-delete" data-prompt-id="${frappe.utils.escapeHtml(p.name)}">
+					<button class="btn btn-danger btn-xs ph-prompt-manage-delete" data-prompt-id="${escapeHtml(p.name)}">
 						${__("Delete")}
 					</button>
 				</div>
@@ -501,7 +516,7 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 			},
 			{
 				fieldname: "content",
-				fieldtype: "Text Editor",
+				fieldtype: "Small Text",
 				label: __("Content"),
 				reqd: 1,
 				default: prompt ? prompt.content : "",
@@ -584,6 +599,17 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 		init: function(chat, container) {
 			_chat = chat;
 			_container = container;
+
+			// Add tooltip and class to the custom action button after shadow DOM is ready
+			setTimeout(() => {
+				const root = _chat.shadowRoot || _container;
+				// Find the custom action button (has the deleted/trash icon SVG)
+				const actionBtn = root.querySelector("#vac-icon-deleted")?.closest(".vac-svg-button");
+				if (actionBtn) {
+					actionBtn.classList.add("ph-saved-prompts-btn");
+					actionBtn.setAttribute("title", __("Saved Prompts"));
+				}
+			}, 1000);
 		},
 
 		/**

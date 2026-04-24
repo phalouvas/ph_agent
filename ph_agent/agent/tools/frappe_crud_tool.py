@@ -11,6 +11,7 @@ import logging
 from typing import Annotated, Optional
 from pydantic import Field
 from agent_framework import tool, FunctionInvocationContext
+from frappe.utils.file_manager import add_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -495,3 +496,146 @@ def run_frappe_method_tool(
 	except Exception as e:
 		logger.exception("Error calling method '%s'", method_path)
 		return f"Error calling method '{method_path}': {e}{context_info}"
+
+
+# ─────────────────────────────────────────────────────────
+#  ATTACH FILES TO RECORD TOOL
+# ─────────────────────────────────────────────────────────
+
+
+@tool(
+	name="attach_files_to_record",
+	description=(
+		"OPTIONAL — Attach uploaded files (PDFs, images, documents) to a specific record "
+		"AFTER creating it. Use this when: (1) you created a record from a file "
+		"(e.g., an invoice from a PDF) and should link the source file to the new record, "
+		"or (2) the user explicitly asked to attach files. "
+		"Do NOT use when: you're just answering a question, the file content was only used "
+		"as reference, the record doesn't exist yet, or the user didn't request file attachment."
+	),
+)
+def attach_files_to_record_tool(
+	target_doctype: Annotated[
+		str,
+		Field(description="The DocType to attach files to (e.g. 'Sales Invoice', 'Customer', 'Item')"),
+	],
+	target_name: Annotated[
+		str,
+		Field(description="The record name/ID to attach files to"),
+	],
+	file_names: Annotated[
+		str,
+		Field(description="JSON array of existing File doc names, e.g. '[\"File-abc123\"]'. "
+						  "Only include files relevant to this record."),
+	],
+	ctx: FunctionInvocationContext = None,
+) -> str:
+	"""
+	Attach existing uploaded files to a Frappe/ERPNext record.
+
+	Uses Frappe's native add_attachments() to link existing File documents
+	to a target record. The files must already exist in the File doctype
+	(typically uploaded via the chat interface).
+
+	Args:
+		target_doctype: The DocType to attach files to.
+		target_name: The record name/ID to attach files to.
+		file_names: JSON array of existing File document names.
+		ctx: Function invocation context (injected by framework).
+
+	Returns:
+		Formatted result with list of attached files and their details.
+	"""
+	import frappe
+
+	context_info = _get_context_info(ctx)
+
+	# Check cancellation
+	if _check_cancellation(ctx):
+		return "Operation cancelled."
+
+	# Validate target record exists
+	try:
+		if not frappe.db.exists(target_doctype, target_name):
+			return f"Error: {target_doctype} '{target_name}' does not exist.{context_info}"
+	except frappe.PermissionError:
+		return f"Error: Permission denied — cannot check existence of {target_doctype}.{context_info}"
+	except Exception as e:
+		return f"Error checking record existence: {e}{context_info}"
+
+	# Parse file_names JSON
+	try:
+		files_list = json.loads(file_names)
+	except json.JSONDecodeError as e:
+		return f"Error: Invalid JSON in file_names: {e}{context_info}"
+
+	if not isinstance(files_list, list):
+		return f"Error: file_names must be a JSON array, got {type(files_list).__name__}{context_info}"
+
+	if not files_list:
+		return f"Error: file_names list is empty. Provide at least one file name.{context_info}"
+
+	# Validate each file exists
+	valid_files = []
+	errors = []
+	for fname in files_list:
+		if not isinstance(fname, str) or not fname.strip():
+			errors.append(f"Invalid file name: '{fname}'")
+			continue
+		try:
+			if frappe.db.exists("File", fname.strip()):
+				valid_files.append(fname.strip())
+			else:
+				errors.append(f"File '{fname}' does not exist")
+		except Exception as e:
+			errors.append(f"Error checking file '{fname}': {e}")
+
+	if not valid_files:
+		error_detail = "; ".join(errors) if errors else "No valid files provided."
+		return f"Error: No valid files to attach.{context_info}\nDetails: {error_detail}"
+
+	# Attach files to the record
+	try:
+		add_attachments(
+			doctype=target_doctype,
+			name=target_name,
+			attachments=valid_files,
+		)
+		frappe.db.commit()
+
+		# Build result with details about each attached file
+		attached_details = []
+		for fname in valid_files:
+			try:
+				file_doc = frappe.get_doc("File", fname)
+				attached_details.append({
+					"file_name": file_doc.file_name,
+					"file_url": file_doc.file_url,
+					"new_file_name": fname,
+				})
+			except Exception:
+				attached_details.append({"file_name": fname})
+
+		result = {
+			"target_doctype": target_doctype,
+			"target_name": target_name,
+			"attached_files": attached_details,
+		}
+
+		summary = (
+			f"✅ Successfully attached {len(valid_files)} file(s) to "
+			f"**{target_doctype}: {target_name}**"
+		)
+
+		if errors:
+			summary += f"\n\n⚠️ {len(errors)} file(s) could not be attached: {'; '.join(errors)}"
+
+		return summary + "\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```"
+
+	except frappe.PermissionError:
+		frappe.db.rollback()
+		return f"Error: You don't have permission to attach files to {target_doctype} '{target_name}'.{context_info}"
+	except Exception as e:
+		frappe.db.rollback()
+		logger.exception("Error attaching files to %s '%s'", target_doctype, target_name)
+		return f"Error attaching files to {target_doctype} '{target_name}': {e}{context_info}"

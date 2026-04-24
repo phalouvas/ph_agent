@@ -19,6 +19,46 @@ from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
 
 
+# ---------------------------------------------------------------------------
+# Text post-processing helpers
+# ---------------------------------------------------------------------------
+
+# Regex: a sentence-ending punctuation (. ! ?) followed by an uppercase letter
+# or a common lowercase starter (let, now, the, this, that, it, i, we, they)
+# with NO space in between.  Insert a space.
+_SENTENCE_GAP_RE = None  # lazy-compiled below
+
+
+def _fix_missing_sentence_spaces(text: str) -> str:
+	"""Insert a missing space after sentence-ending punctuation when the next
+	word starts with an uppercase letter or a known sentence starter.
+
+	The LLM sometimes concatenates sentences without a space, e.g.:
+		"first.No existing"  →  "first. No existing"
+		"system.Now let"    →  "system. Now let"
+	"""
+	import re
+
+	global _SENTENCE_GAP_RE
+	if _SENTENCE_GAP_RE is None:
+		# End of sentence characters (. ! ?) followed immediately by
+		# an uppercase letter or one of the common lowercase starters.
+		_SENTENCE_GAP_RE = re.compile(
+			r'([.!?])([A-Z"\'\(]|l(?:et|ook)|n(?:ow|o)|t(?:he|his|hat)|i[tf]|w(?:e|hen|hile|ith)|y(?:ou|es)|s(?:o|ee|ince)|h(?:e|ere|ow|owever)|a(?:fter|nd|s)|b(?:ut|y)|f(?:or|rom)|o(?:n|r)|in|at|that)'
+		)
+
+	return _SENTENCE_GAP_RE.sub(r'\1 \2', text)
+
+
+def _fix_agent_response_text(text: str) -> str:
+	"""Clean up agent response text by applying known post-processing fixes."""
+	if not text:
+		return text
+	return _fix_missing_sentence_spaces(text)
+
+
+# ---------------------------------------------------------------------------
+
 
 def _build_skills_provider() -> SkillsProvider:
 	"""Build a SkillsProvider with both file-based and DocType-based skills.
@@ -375,7 +415,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		# Also store session state in approval data for continuation
 		approval_data["conversation_state"]["session_state"] = _filter_session_state(session_state)
 	
-	return response.text or "", input_tokens, output_tokens, approval_data
+	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, approval_data
 
 
 def get_agent_response_stream(
@@ -582,7 +622,7 @@ def run_after_approval(
 		# Save updated session state to Chat Session
 		_save_session_state(session_name, updated_state)
 		
-		return response.text or "", input_tokens, output_tokens
+		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error in _run_agent for {session_name}",

@@ -3,6 +3,7 @@ import json
 
 import frappe
 from ph_agent.agent.framework_agent import (
+	_fix_agent_response_text,
 	generate_conversation_summary,
 	generate_followup_suggestions,
 	generate_session_title,
@@ -442,7 +443,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				
 				if streaming_successful:
 					# Update the placeholder message with full content and token counts
-					agent_msg.content = full_content
+					# Apply post-processing to fix missing spaces between concatenated sentences
+					agent_msg.content = _fix_agent_response_text(full_content)
 					agent_msg.input_tokens = input_tokens
 					agent_msg.output_tokens = output_tokens
 					agent_msg.message_type = "Agent"
@@ -470,7 +472,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					return
 				
 				# Update placeholder message with actual content and token counts
-				agent_msg.content = reply
+				# Apply post-processing to fix missing spaces between concatenated sentences
+				agent_msg.content = _fix_agent_response_text(reply)
 				agent_msg.input_tokens = input_tokens
 				agent_msg.output_tokens = output_tokens
 				agent_msg.save(ignore_permissions=True)
@@ -487,7 +490,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				return
 			
 			# Update the placeholder message with actual content and token counts
-			agent_msg.content = reply
+			# Apply post-processing to fix missing spaces between concatenated sentences
+			agent_msg.content = _fix_agent_response_text(reply)
 			agent_msg.input_tokens = input_tokens
 			agent_msg.output_tokens = output_tokens
 			agent_msg.save(ignore_permissions=True)
@@ -653,14 +657,17 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	emit_status("")
 	
 	if use_streaming:
-		# For streaming, publish final chunk event
+		# For streaming, publish the final post-processed content to replace
+		# the locally-accumulated chunks in the frontend (which may have missing
+		# spaces between sentences).
 		frappe.publish_realtime(
-			event="message_chunk",
+			event="new_message",
 			message={
 				"session": session,
-				"message_id": agent_msg.name,
-				"chunk": "",
-				"is_final": True
+				"name": agent_msg.name,
+				"sender_type": "Agent",
+				"content": agent_msg.content,
+				"creation": str(agent_msg.creation),
 			},
 			user=enqueued_by,
 		)

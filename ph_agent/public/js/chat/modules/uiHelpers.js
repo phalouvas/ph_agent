@@ -167,6 +167,18 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                     font-size: 18px;
                     line-height: 1;
                 }
+                .vac-svg-button.ph-saved-prompts-btn {
+                    cursor: pointer;
+                }
+
+                /* Prevent textarea from pushing send button out of view on long input */
+                .vac-box-footer {
+                    max-height: 200px;
+                }
+                .vac-textarea {
+                    max-height: 150px !important;
+                    overflow-y: auto !important;
+                }
             `;
             root.appendChild(_suggestionStyle);
         },

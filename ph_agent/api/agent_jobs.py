@@ -477,7 +477,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					processed_content = _fix_agent_response_text(full_content)
 					if full_reasoning:
 						reasoning_html = (
-							f'<details class="ph-reasoning-block" open>\n'
+							f'<details class="ph-reasoning-block">\n'
 							f'    <summary>\U0001f913 Thinking process</summary>\n'
 							f'{full_reasoning}\n'
 							f'</details>\n\n'
@@ -518,7 +518,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				processed_content = _fix_agent_response_text(reply)
 				if reasoning_content:
 					reasoning_html = (
-						f'<details class="ph-reasoning-block" open>\n'
+						f'<details class="ph-reasoning-block">\n'
 						f'    <summary>\U0001f913 Thinking process</summary>\n'
 						f'{reasoning_content}\n'
 						f'</details>\n\n'
@@ -548,7 +548,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			processed_content = _fix_agent_response_text(reply)
 			if reasoning_content:
 				reasoning_html = (
-					f'<details class="ph-reasoning-block" open>\n'
+					f'<details class="ph-reasoning-block">\n'
 					f'    <summary>\U0001f913 Thinking process</summary>\n'
 					f'{reasoning_content}\n'
 					f'</details>\n\n'
@@ -907,7 +907,7 @@ def _execute_approved_tool(approval_name):
 		processed_content = _fix_agent_response_text(reply)
 		if reasoning_content:
 			reasoning_html = (
-				f'<details class="ph-reasoning-block" open>\n'
+				f'<details class="ph-reasoning-block">\n'
 				f'    <summary>\U0001f913 Thinking process</summary>\n'
 				f'{reasoning_content}\n'
 				f'</details>\n\n'

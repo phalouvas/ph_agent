@@ -343,7 +343,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Keep processing state active (stop button should remain visible)
                 state.setIsProcessing(true);
             } else {
-                // For final/regular messages (with actual content)ssages (with actual content), clear typing indicator and status
+                // For final/regular messages (with actual content), clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
                 );
@@ -354,6 +354,17 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 
                 // Clear processing state (stop button should now be hidden)
                 state.setIsProcessing(false);
+                
+                // Remove any frontend-created reasoning elements (the HTML content
+                // now includes the reasoning block, so the DOM element is a duplicate)
+                const root = uiHelpers.getRoot();
+                const msgEl = root.querySelector(`[id="${data.name}"]`);
+                if (msgEl) {
+                    const frontendReasoning = msgEl.querySelector('.ph-reasoning-block');
+                    if (frontendReasoning) {
+                        frontendReasoning.remove();
+                    }
+                }
                 
                 if (data.old_message_id) {
                     // Remove suggestions for the old (regenerated) message
@@ -409,13 +420,14 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Clear processing state (stop button should now be hidden)
                 state.setIsProcessing(false);
                 
-                // Auto-collapse reasoning block after streaming completes
+                // Remove frontend-created reasoning element — the final new_message
+                // event will contain the HTML with the reasoning block embedded
                 const root = uiHelpers.getRoot();
                 const msgEl = root.querySelector(`[id="${data.message_id}"]`);
                 if (msgEl) {
                     const detailsEl = msgEl.querySelector('.ph-reasoning-block');
                     if (detailsEl) {
-                        detailsEl.removeAttribute('open');
+                        detailsEl.remove();
                     }
                 }
                 

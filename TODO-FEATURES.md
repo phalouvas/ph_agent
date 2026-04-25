@@ -1,10 +1,10 @@
 # PH Agent — Upcoming Features
 
-This document lists planned features for future development of PH Agent.
+This document lists planned features for future development of PH Agent, ordered by priority.
 
 ---
 
-## Web Search Tool
+## 1. Web Search Tool
 
 Enable the agent to search the web for current information.
 
@@ -21,7 +21,44 @@ Enable the agent to search the web for current information.
 
 ---
 
-## Multi-Modal Input (Vision)
+## 2. Agent-Proposed Skill Registry Creation
+
+Let the agent create Skill Registry records on user request. The user asks the agent to teach itself about a domain, and the agent drafts a skill with `SKILL.md` content, resources, and optionally scripts. The created skill is **disabled by default** — an admin must review and enable it before it becomes active.
+
+**Use cases:**
+- "Create a skill that teaches you about our invoice approval process"
+- "Learn our company's leave policy and create a skill for it"
+- "Document the steps for onboarding a new customer as a skill"
+
+**Implementation notes:**
+- Add a new tool (e.g., `create_skill_tool`) that accepts: name, description, skill content (Markdown), optional resources, optional scripts
+- The tool creates a Skill Registry record with `is_enabled = 0` (disabled)
+- The agent responds with a confirmation message including the skill name and a note that it's disabled pending admin review
+- Consider adding a `proposed_by_agent` flag for filtering in the desk UI
+- The agent should not be able to enable skills — only create them disabled
+
+---
+
+## 3. Agent-Proposed Tool Registry Creation
+
+Let the agent create Tool Registry records on user request. The user describes a tool they want, and the agent generates the Python code and parameters JSON Schema. The created tool is **disabled by default** — an admin must review and enable it before it becomes available to the agent.
+
+**Use cases:**
+- "Create a tool that shows all overdue invoices for a customer"
+- "Make a tool that calculates the total sales for a given month"
+- "Create a tool that sends a reminder email to customers with pending payments"
+
+**Implementation notes:**
+- Add a new tool (e.g., `create_tool_tool`) that accepts: name, description, Python code (the `run_tool()` function), parameters JSON Schema
+- The tool creates a Tool Registry record with `script_type = "Custom Script"` and `is_enabled = 0` (disabled)
+- The agent generates both the Python function and the correct JSON Schema for parameters
+- The agent responds with a confirmation message including the tool name and a note that it's disabled pending admin review
+- Consider adding a `proposed_by_agent` flag for filtering in the desk UI
+- The agent should not be able to enable tools — only create them disabled
+
+---
+
+## 4. Multi-Modal Input (Vision)
 
 Support image attachments so the agent can analyze screenshots, photos, diagrams, and charts.
 
@@ -39,7 +76,7 @@ Support image attachments so the agent can analyze screenshots, photos, diagrams
 
 ---
 
-## Conversation Branching
+## 5. Conversation Branching
 
 Let users branch off from any point in a conversation to explore alternative paths.
 
@@ -57,7 +94,7 @@ Let users branch off from any point in a conversation to explore alternative pat
 
 ---
 
-## Voice Input
+## 6. Voice Input
 
 Enable hands-free interaction using speech-to-text.
 

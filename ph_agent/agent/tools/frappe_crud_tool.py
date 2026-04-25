@@ -65,9 +65,14 @@ RESTRICT_TO_ALLOWED = True
 def _validate_write_doctype(doctype: str) -> Optional[str]:
 	"""Validate that a DocType can be written to. Returns error message or None."""
 	if doctype in BLOCKED_DOCTYPES:
+		hint = ""
+		if doctype == "Skill Registry":
+			hint = " Use the 'create_skill' tool instead."
+		elif doctype in ("Skill Resource", "Skill Script"):
+			hint = " These are child tables of Skill Registry. Use the 'create_skill' tool instead."
 		return (
 			f"Access denied: '{doctype}' is a restricted DocType and "
-			f"cannot be created, updated, or deleted through the AI."
+			f"cannot be created, updated, or deleted through the AI.{hint}"
 		)
 	if doctype in READ_ONLY_DOCTYPES:
 		return (

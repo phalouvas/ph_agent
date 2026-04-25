@@ -22,6 +22,8 @@ BLOCKED_DOCTYPES = {
 	"Custom Field", "Workflow", "Workflow State",
 	"Workflow Action Master", "Server Script",
 	"File", "Prepared Report",
+	# Skill Registry — must use the dedicated create_skill tool
+	"Skill Registry", "Skill Resource", "Skill Script",
 }
 
 # DocTypes that can only be read (never written) by the AI

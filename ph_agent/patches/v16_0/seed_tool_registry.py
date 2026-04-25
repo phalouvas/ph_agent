@@ -99,6 +99,15 @@ TOOL_REGISTRY_SEED = [
         "python_function": "ph_agent.agent.tools.web_search_tool.web_search_tool",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "create_skill",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Create a new Skill Registry record. Skills teach the AI about specific domains, processes, or knowledge areas. Skills are always created disabled (is_enabled=0) — enable them from the Skill Registry list to make them active. Provide skill_name (lowercase, hyphens, 64 chars max), description (1024 chars max), markdown content, and optional resources/scripts as JSON arrays.",
+        "python_function": "ph_agent.agent.tools.create_skill_tool.create_skill_tool",
+        "requires_approval": 0,
+    },
 ]
 
 

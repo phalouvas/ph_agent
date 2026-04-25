@@ -81,6 +81,40 @@ Here are the **highest-value features** ranked by impact vs. effort:
 
 ---
 
+### ✅ 2a. Schema Discovery Tool (schema blindness fix)
+
+**Status**: ✅ **Fully implemented** — LLM can now discover DocTypes and their fields before querying.
+
+**What**: A `discover_frappe_schema` tool that bridges the "schema blindness" gap — the LLM already had `query_frappe_data` but didn't know *which* DocTypes or fields exist.
+
+**Two operations**:
+
+| Operation | What it does | Key API |
+|---|---|---|
+| `list_doctypes` | Search for DocTypes matching a name pattern | `frappe.get_all("DocType", filters={"name": ["like", …]})` |
+| `get_schema` | Get all field metadata for a specific DocType | `frappe.get_meta(doctype)` → iterate `meta.fields` |
+
+**Per-field metadata returned**: `fieldname`, `label`, `fieldtype`, `reqd`, `read_only`, `hidden`, `description`. Plus type-specific extras: Link→target doctype, Select→options list, Table→child doctype, default values.
+
+**Example LLM workflow**:
+```
+User: "how many open support tickets?"
+  → discover_frappe_schema(list_doctypes, pattern="ticket") → finds "Issue"
+  → discover_frappe_schema(get_schema, doctype="Issue") → sees "status" field
+  → query_frappe_data(doctype="Issue", filters='{"status":"Open"}', operation="count")
+  → "You have 7 open support tickets."
+```
+
+**Files created**:
+- `ph_agent/agent/tools/schema_discovery_tool.py` — the `@tool` implementation (~174 lines)
+
+**Files modified**:
+- `ph_agent/patches/v16_0/seed_tool_registry.py` — registered `discover_frappe_schema` in Tool Registry
+
+**Why high value**: Without schema discovery, the LLM blind-guesses DocTypes/fields. With it, the existing query/CRUD tools become reliably usable. Solves 80% of data-access scenarios for 1 day of work.
+
+---
+
 ### ✅ 1b. Relevance-Based Memory Retrieval (fix dilution problem)
 
 **Status**: ✅ **Fully implemented** — keyword-level relevance scoring + hard cap + cross-session context continuity.
@@ -240,6 +274,7 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 |---|---|---|---|
 | **1. LLM Memory Provider** | ✅ **Done** | 🔥🔥🔥🔥🔥 | LLM provider (already have) |
 | **1b. Relevance Retrieval** | ✅ **Done** | 🔥🔥🔥🔥🔥 | LLM provider, User Memory DocType |
+| **2a. Schema Discovery** | ✅ **Done** | 🔥🔥🔥🔥🔥 | Frappe ORM |
 | **2. RAG Search Tool** | Medium-High | 🔥🔥🔥🔥🔥 | Vector DB or Semantic Kernel |
 | **3. Auto-Compaction** | ✅ **Done** | 🔥🔥🔥🔥 | — |
 | **4. Session Persistence** | ✅ **Done** | 🔥🔥🔥 | Already have `session_state` field |
@@ -248,4 +283,4 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 
 ---
 
-**Now that #1 (LLM Memory Provider), #1b (Relevance Retrieval), #3 (Auto-Compaction), and #4 (Session Persistence)** are all fully implemented, the recommended next priority is **#2 (RAG)** to let the agent query the user's own data, followed by **#5 (Mem0)** for a managed memory service.
+**Now that #1 (LLM Memory Provider), #1b (Relevance Retrieval), #2a (Schema Discovery), #3 (Auto-Compaction), and #4 (Session Persistence)** are all fully implemented, the remaining features are **#2 (Full RAG)** for semantic search across record content and files, **#5 (Mem0)** for a managed memory service, and **#6 (Audit Trail)** for debug visibility.

@@ -1,31 +1,43 @@
 # PH Agent — Web Search & Online Tools
 
-This document lists additional web search and online data tools for future implementation, ordered by priority. All tools listed here are **free and require no API key**.
+All tools listed here are **free and require no API key**. They are registered in the Tool Registry via `ph_agent/patches/v16_0/seed_tool_registry.py` and follow the same patterns as `web_search_tool.py` (`@tool` decorator, lazy imports, cancellation support, JSON output).
 
 ---
 
-## 1. Wikipedia Tool
+## ✅ 1. Wikipedia Tool — Implemented
 
-Fetch clean, structured article content from Wikipedia.
+**File:** `ph_agent/agent/tools/wikipedia_tool.py`  
+**Tool name:** `wikipedia`  
+**Dependencies:** `requests` (built-in)
+
+Fetches clean, structured article content from Wikipedia.
 
 **Use cases:**
 - "Tell me about just-in-time manufacturing"
 - "What is the capital of Bhutan?"
 - "Explain the Toyota Production System"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `wikipedia_tool.py`)
-- Use the Wikipedia REST API at `en.wikipedia.org/api/rest_v1/` — no key required
-- Return article summaries, infobox data, and related categories
-- Handle disambiguation pages by returning the list of options
-- Consider a `lang` parameter for multi-language support (default: `en`)
-- No external dependencies — uses `requests` (already available in Frappe)
+**Parameters:**
+- `query` (str, required) — The topic or article title to look up
+- `lang` (str, default `"en"`) — Wikipedia language code (e.g., `en`, `de`, `fr`, `es`, `ja`)
+
+**Implementation details:**
+- Uses the MediaWiki API at `w/api.php` (`action=query&list=search`) for page search
+- Uses the REST API at `/api/rest_v1/page/summary/` for article summaries
+- Sets `User-Agent: ph_agent/1.0` header (required by Wikipedia)
+- Handles disambiguation pages by returning the list of options
+- Returns related search results as additional context
+- Truncates extracts longer than 2000 characters
 
 ---
 
-## 2. Yahoo Finance Tool
+## ✅ 2. Yahoo Finance Tool — Implemented
 
-Fetch stock quotes, historical prices, financial statements, and company information.
+**File:** `ph_agent/agent/tools/yahoo_finance_tool.py`  
+**Tool name:** `yahoo_finance`  
+**Dependencies:** `yfinance` (requires `pip install yfinance`)
+
+Fetches stock quotes, historical prices, financial statements, and company information.
 
 **Use cases:**
 - "What's the current price of AAPL?"
@@ -33,109 +45,158 @@ Fetch stock quotes, historical prices, financial statements, and company informa
 - "What's the P/E ratio of Microsoft?"
 - "Give me the dividend history of Coca-Cola"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `yahoo_finance_tool.py`)
-- Use the `yfinance` Python library — `pip install yfinance`, no API key
-- Support multiple operations: `quote`, `history`, `info`, `financials`, `dividends`, `recommendations`
-- Accept a `symbol` parameter (e.g., `AAPL`, `TSLA`, `MSFT`)
-- Accept an `operation` parameter to select the data type
-- Handle invalid symbols gracefully with a clear error message
-- Add rate limiting to avoid IP throttling (max 1 call per 2 seconds)
-- Note: `yfinance` is an unofficial scraper — Yahoo could break it at any time
+**Parameters:**
+- `symbol` (str, required) — Stock ticker symbol (e.g., `AAPL`, `TSLA`, `MSFT`)
+- `operation` (str, default `"quote"`) — `quote`, `history`, `info`, `financials`, `dividends`, or `recommendations`
+- `period` (str, default `"1mo"`) — Time period for history: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, `max`
+
+**Implementation details:**
+- Lazy-imports `yfinance` with a clear error message if not installed
+- Rate limited to max 1 call per 2 seconds to avoid IP throttling
+- Handles invalid symbols gracefully with a clear error message
+- `quote` returns current price, change, volume, market cap, P/E ratio
+- `history` returns OHLCV records for the specified period
+- `info` returns company overview (sector, employees, description, ratios)
+- `financials` returns last 4 years of income statement data
+- `dividends` returns the 20 most recent dividend payments
+- `recommendations` returns recent analyst ratings
 
 ---
 
-## 3. ECB Exchange Rates Tool
+## ✅ 3. ECB Exchange Rates Tool — Implemented
 
-Fetch daily currency exchange rates from the European Central Bank.
+**File:** `ph_agent/agent/tools/exchange_rate_tool.py`  
+**Tool name:** `exchange_rate`  
+**Dependencies:** `requests` (built-in), `xml.etree.ElementTree` (stdlib)
+
+Fetches daily currency exchange rates from the European Central Bank.
 
 **Use cases:**
 - "What's the EUR/USD exchange rate today?"
 - "Convert 1000 USD to GBP"
 - "Show me the latest exchange rates"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `exchange_rate_tool.py`)
-- Use the ECB's free XML feed at `ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` — no key required
-- Parse the XML to get rates for 30+ currencies against EUR
-- Support a `base` parameter (default: `EUR`) and `target` parameter for conversion
-- Cache the rates for 6 hours (they only update once per working day)
-- No external dependencies — uses `xml.etree.ElementTree` (stdlib) and `requests`
+**Parameters:**
+- `base` (str, default `"EUR"`) — Base currency code (e.g., `EUR`, `USD`, `GBP`)
+- `target` (str, optional) — Target currency for conversion. If omitted, returns all rates for base
+- `amount` (float, optional) — Amount to convert (only used with `target`)
+
+**Implementation details:**
+- Fetches ECB's daily XML feed at `ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`
+- Parses XML with `xml.etree.ElementTree` (stdlib)
+- Supports 30+ currencies with display names
+- Computes cross-rates when base ≠ EUR
+- Caches rates for 6 hours via `frappe.cache()` (ECB updates once per working day)
+- Returns single conversion or full rate table
 
 ---
 
-## 4. SEC Edgar Search Tool
+## ✅ 4. SEC Edgar Search Tool — Implemented
 
-Look up company CIK numbers and SEC filing metadata.
+**File:** `ph_agent/agent/tools/sec_edgar_tool.py`  
+**Tool name:** `sec_edgar`  
+**Dependencies:** `requests` (built-in)
+
+Looks up company CIK numbers and SEC filing metadata.
 
 **Use cases:**
 - "What is Apple's CIK number?"
 - "Show me the latest 10-K filing for Microsoft"
 - "When did Tesla file their last 10-Q?"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `sec_edgar_tool.py`)
-- Use the SEC's public REST API at `efts.sec.gov` — no key required
-- Support operations: `search_cik` (find CIK by company name), `latest_filings` (get recent filings by CIK)
-- Return filing type, date, description, and EDGAR URL
-- Set a proper `User-Agent` header (SEC requires identification)
-- Handle rate limiting (SEC allows 10 requests per second)
-- No external dependencies — uses `requests`
+**Parameters:**
+- `query` (str, required) — Company name (e.g., `Apple`, `Microsoft`) or CIK number (e.g., `320193`)
+- `operation` (str, default `"search_cik"`) — `search_cik` or `latest_filings`
+- `count` (int, default `5`, range 1–20) — Number of filings to return (only for `latest_filings`)
+
+**Implementation details:**
+- Uses SEC's public REST API at `efts.sec.gov`
+- Sets proper `User-Agent` header (SEC requires identification)
+- Rate limited to max 10 requests per second (100ms interval)
+- `search_cik` returns CIK, ticker, SIC, location for matching companies
+- `latest_filings` returns form type, filing date, description, and EDGAR URL
+- Pads CIK numbers to 10 digits (SEC standard)
 
 ---
 
-## 5. Stack Exchange Tool
+## ✅ 5. Stack Exchange Tool — Implemented
 
-Search questions and answers across Stack Overflow and the Stack Exchange network.
+**File:** `ph_agent/agent/tools/stack_exchange_tool.py`  
+**Tool name:** `stack_exchange`  
+**Dependencies:** `requests` (built-in)
+
+Searches questions and answers across Stack Overflow and the Stack Exchange network.
 
 **Use cases:**
 - "Find Stack Overflow answers about Python async/await"
 - "How do I optimize a slow SQL query in ERPNext?"
 - "Search for Frappe custom script examples"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `stack_exchange_tool.py`)
-- Use the Stack Exchange REST API at `api.stackexchange.com` — no key required (10k calls/day throttle)
-- Support a `site` parameter (default: `stackoverflow`; options: `serverfault`, `superuser`, etc.)
-- Return question title, score, answer count, accepted answer excerpt, and URL
-- Filter by `tags` parameter for targeted searches
-- No external dependencies — uses `requests`
+**Parameters:**
+- `query` (str, required) — Search query
+- `site` (str, default `"stackoverflow"`) — Stack Exchange site (e.g., `stackoverflow`, `serverfault`, `superuser`, `askubuntu`)
+- `tags` (str, optional) — Semicolon-separated tags to filter by (e.g., `python;sql`)
+- `max_results` (int, default `5`, range 1–10) — Maximum results to return
+
+**Implementation details:**
+- Uses Stack Exchange API v2.3 at `api.stackexchange.com` (10k calls/day throttle, no key)
+- Returns question title, score, answer count, accepted answer excerpt, view count, tags, and URL
+- Fetches accepted answer body excerpt via a follow-up API call (HTML stripped)
+- Supports tag filtering via the `tagged` parameter
 
 ---
 
-## 6. Reddit Tool
+## ✅ 6. Reddit Tool — Implemented
 
-Search subreddits, get posts, comments, and trending topics.
+**File:** `ph_agent/agent/tools/reddit_tool.py`  
+**Tool name:** `reddit`  
+**Dependencies:** `requests` (built-in)
+
+Searches subreddits, gets posts, comments, and trending topics.
 
 **Use cases:**
 - "What are people saying about ERPNext on Reddit?"
 - "Show me the top posts from r/finance this week"
 - "Search for discussions about AI in accounting"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `reddit_tool.py`)
-- Append `.json` to any Reddit URL — no key required for read-only access
-- Support operations: `search` (search posts by query), `hot` (hot posts from a subreddit), `top` (top posts by time period)
-- Return post title, score, comment count, author, URL, and top comment excerpt
-- Set a proper `User-Agent` header (Reddit requires identification)
-- Handle rate limiting (60 requests per minute)
-- No external dependencies — uses `requests`
+**Parameters:**
+- `query` (str, optional) — Search query (required for `search` operation)
+- `subreddit` (str, default `"all"`) — Subreddit name (e.g., `python`, `finance`)
+- `operation` (str, default `"search"`) — `search`, `hot`, or `top`
+- `time_period` (str, default `"week"`) — Time period for `top`: `hour`, `day`, `week`, `month`, `year`, `all`
+- `max_results` (int, default `5`, range 1–10) — Maximum results to return
+
+**Implementation details:**
+- Uses Reddit's public JSON API (append `.json` to any Reddit URL)
+- Sets proper `User-Agent` header (Reddit requires identification)
+- Rate limited to max 60 requests per minute (1s interval)
+- Skips stickied posts
+- Fetches top comment excerpt via a follow-up API call
+- Returns title, score, upvote ratio, author, comment count, URL, selftext, and top comment
 
 ---
 
-## 7. Hacker News Tool
+## ✅ 7. Hacker News Tool — Implemented
 
-Search stories, comments, and trending topics on Hacker News.
+**File:** `ph_agent/agent/tools/hacker_news_tool.py`  
+**Tool name:** `hacker_news`  
+**Dependencies:** `requests` (built-in)
+
+Searches stories, comments, and trending topics on Hacker News.
 
 **Use cases:**
 - "What's trending on Hacker News today?"
 - "Show me the top stories about AI this week"
 - "Search for discussions about Python 3.14"
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `hacker_news_tool.py`)
-- Use the Firebase API at `hacker-news.firebaseio.com` — no key required
-- Support operations: `top_stories`, `new_stories`, `best_stories`, `search`
-- Return story title, score, author, comment count, and URL
-- Use Algolia search API (`hn.algolia.com`) for text search — also free and no key
-- No external dependencies — uses `requests`
+**Parameters:**
+- `operation` (str, default `"top_stories"`) — `top_stories`, `new_stories`, `best_stories`, or `search`
+- `query` (str, optional) — Search keyword (required for `search` operation)
+- `max_results` (int, default `5`, range 1–10) — Maximum results to return
+
+**Implementation details:**
+- Uses Firebase API at `hacker-news.firebaseio.com` for top/new/best stories
+- Uses Algolia search API at `hn.algolia.com` for text search (both free, no key)
+- Firebase path: fetches story IDs, then fetches individual item details
+- Algolia path: returns full results directly with points, comments, and timestamps
+- Returns title, URL, HN discussion link, score, author, comment count, and tags

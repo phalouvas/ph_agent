@@ -4,20 +4,20 @@ This document lists planned features for future development of PH Agent, ordered
 
 ---
 
-## 1. Web Search Tool
+## ~~1. Web Search Tool~~ ✅ Implemented
 
-Enable the agent to search the web for current information.
+~~Enable the agent to search the web for current information.~~
 
 **Use cases:**
-- "What's the current EUR/USD exchange rate?"
-- "What are the latest ERPNext release notes?"
-- "Find the current market price for raw material X"
+- ~~"What's the current EUR/USD exchange rate?"~~
+- ~~"What are the latest ERPNext release notes?"~~
+- ~~"Find the current market price for raw material X"~~
 
-**Implementation notes:**
-- Add a new tool in `ph_agent/agent/tools/` (e.g., `web_search_tool.py`)
-- Could use a free API (DuckDuckGo, SerpAPI free tier) or a paid one (Google Custom Search, SerpAPI)
-- Register in Tool Registry via a patch
-- Consider rate limiting and caching to avoid excessive API costs
+**Implementation:**
+- Tool: `ph_agent/agent/tools/web_search_tool.py` — `@tool(name="web_search")` using the `ddgs` library
+- Parameters: `query` (required), `max_results` (default 5, capped 1–10), `date_range` (day/week/month/year), `domain_filter` (comma-separated domains)
+- Registered in Tool Registry via `ph_agent/patches/v16_0/seed_tool_registry.py`
+- Lazy-imports `ddgs` for graceful degradation if not installed
 
 ---
 

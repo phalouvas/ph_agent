@@ -90,6 +90,15 @@ TOOL_REGISTRY_SEED = [
         "python_function": "ph_agent.agent.tools.schema_discovery_tool.discover_frappe_schema_tool",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "web_search",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for matching results. Supports date filtering (day/week/month/year) and domain-specific searches. Use this to find current information that may not be available in the ERPNext database.",
+        "python_function": "ph_agent.agent.tools.web_search_tool.web_search_tool",
+        "requires_approval": 0,
+    },
 ]
 
 

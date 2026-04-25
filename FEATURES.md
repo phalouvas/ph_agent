@@ -192,41 +192,30 @@ User: "how many open support tickets?"
 
 ---
 
-### 🔥 5. Mem0 Integration (third-party memory service)
+### ❌ 5. Mem0 Integration (decided against)
 
-**What**: Use the `Mem0ContextProvider` from `agent-framework-mem0` for persistent, cross-session memory with automatic extraction and retrieval.
+**What**: Would use the `Mem0ContextProvider` from `agent-framework-mem0` for managed memory.
 
-**How**: 
-```bash
-pip install agent-framework-mem0
-```
-Then add to context providers:
-```python
-from agent_framework.mem0 import Mem0ContextProvider
+**Why decided against**:
+- **Duplicates existing LLMMemoryProvider** — extraction, storage, retrieval already implemented
+- **External dependency** — requires API key and managed service
+- **Semantic retrieval gap will be filled by RAG** — embedding infrastructure built for #2 (RAG) will be reused for memory retrieval, replacing keyword scoring with semantic scoring in `_load_memories()`
+- **Mem0 is best when you have NO memory system** — but you've already built a solid one
 
-agent = Agent(
-    ...,
-    context_providers=[
-        ...,
-        Mem0ContextProvider("user-memory", api_key=..., agent_id="ph-agent"),
-    ],
-)
-```
-
-**Why high value**: Mem0 is a managed memory service that handles embedding, storage, and relevance retrieval automatically. Zero regex maintenance.
+**Verdict**: Semantic memory retrieval will come as Phase B of #1b when RAG embedding infra is built.
 
 ---
 
-### 🟢 6. Audit Trail History Provider (lower effort)
+### ❌ 6. Audit Trail History Provider (decided against)
 
-**What**: Add a second `HistoryProvider` (after your `FrappeMemoryProvider`) with `store_context_messages=True` to log everything — including context injected by other providers.
+**What**: Would add a second `HistoryProvider` with `store_context_messages=True` to log all context injected by other providers.
 
-**How**: Just add another provider to the list:
-```python
-audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, store_context_messages=True)
-```
+**Why decided against**: 
+- **Performance cost**: 5-10 extra DB writes per response turn
+- **Data bloat**: 3-5x faster Chat Message table growth from non-conversation records
+- **Better alternative exists**: `frappe.log_error()` provides structured, searchable, targeted logging without any of the downsides. When debugging RAG (#2), targeted log calls at retrieval/injection points are far more useful than a noisy audit trail intermixed with real chat messages.
 
-**Why useful**: Debugging and compliance — you can see exactly what context the LLM received.
+**Verdict**: Use `frappe.log_error()` for targeted debugging. No code changes needed.
 
 ---
 
@@ -278,9 +267,9 @@ audit_provider = FrappeMemoryProvider(source_id="audit", load_messages=False, st
 | **2. RAG Search Tool** | Medium-High | 🔥🔥🔥🔥🔥 | Vector DB or Semantic Kernel |
 | **3. Auto-Compaction** | ✅ **Done** | 🔥🔥🔥🔥 | — |
 | **4. Session Persistence** | ✅ **Done** | 🔥🔥🔥 | Already have `session_state` field |
-| **5. Mem0** | Low (just `pip install`) | 🔥🔥🔥🔥 | API key, external service |
-| **6. Audit Trail** | Very Low | 🔥🔥 | None |
+| **5. Mem0** | ❌ Skipped | — | Duplicates LLMMemoryProvider; semantic gap filled by RAG embedding infra |
+| **6. Audit Trail** | ❌ Skipped | — | Use `frappe.log_error()` instead |
 
 ---
 
-**Now that #1 (LLM Memory Provider), #1b (Relevance Retrieval), #2a (Schema Discovery), #3 (Auto-Compaction), and #4 (Session Persistence)** are all fully implemented, the remaining features are **#2 (Full RAG)** for semantic search across record content and files, **#5 (Mem0)** for a managed memory service, and **#6 (Audit Trail)** for debug visibility.
+**Now that #1, #1b, #2a, #3, and #4** are all complete and **#5 and #6 are deferred**, the only remaining feature is **#2 (Full RAG)** for semantic search across record content and files.

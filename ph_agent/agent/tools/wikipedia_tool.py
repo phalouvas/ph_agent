@@ -57,12 +57,22 @@ def wikipedia_tool(
     except ImportError:
         return "Error: The 'requests' library is required but not available."
 
-    # Step 1: Search for the page
-    search_url = f"https://{lang}.wikipedia.org/api/rest_v1/search/page"
+    # Wikipedia requires a User-Agent header
+    _headers = {"User-Agent": "ph_agent/1.0"}
+
+    # Step 1: Search for the page using the MediaWiki API
+    search_url = f"https://{lang}.wikipedia.org/w/api.php"
     try:
         search_resp = requests.get(
             search_url,
-            params={"q": query, "limit": 3},
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "format": "json",
+                "srlimit": 3,
+            },
+            headers=_headers,
             timeout=15,
         )
         search_resp.raise_for_status()
@@ -75,8 +85,8 @@ def wikipedia_tool(
         )
         return f"Error searching Wikipedia: {exc}"
 
-    pages = search_data.get("pages", [])
-    if not pages:
+    search_results = search_data.get("query", {}).get("search", [])
+    if not search_results:
         return json.dumps({
             "query": query,
             "lang": lang,
@@ -85,11 +95,11 @@ def wikipedia_tool(
         }, indent=2, ensure_ascii=False)
 
     # Step 2: Get the summary for the top result
-    top_title = pages[0].get("title", "")
+    top_title = search_results[0].get("title", "")
     summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(top_title, safe='')}"
 
     try:
-        summary_resp = requests.get(summary_url, timeout=15)
+        summary_resp = requests.get(summary_url, headers=_headers, timeout=15)
         summary_resp.raise_for_status()
         summary_data = summary_resp.json()
     except Exception as exc:
@@ -113,10 +123,10 @@ def wikipedia_tool(
 
         # Also include search results as alternatives
         alternatives = []
-        for page in pages[1:]:
+        for result in search_results[1:]:
             alternatives.append({
-                "title": page.get("title", ""),
-                "description": page.get("description", ""),
+                "title": result.get("title", ""),
+                "description": result.get("description", ""),
             })
 
         return json.dumps({
@@ -145,10 +155,10 @@ def wikipedia_tool(
     }
 
     # Add related search results as context
-    if len(pages) > 1:
+    if len(search_results) > 1:
         result["related_searches"] = [
             {"title": p.get("title", ""), "description": p.get("description", "")}
-            for p in pages[1:]
+            for p in search_results[1:]
         ]
 
     return json.dumps(result, indent=2, ensure_ascii=False)

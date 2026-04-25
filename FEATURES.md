@@ -90,6 +90,14 @@ The agent can use tools to interact with Frappe/ERPNext data and perform computa
 | **delete_frappe_record** | Delete/cancel records | Soft-delete (cancel) or permanent delete with validation |
 | **run_frappe_method** | Call whitelisted APIs | Calls dotted Frappe methods; blocks dangerous methods |
 | **discover_frappe_schema** | Inspect DocTypes | List doctypes by pattern, get full field metadata and schema |
+| **web_search** | Search the web | DuckDuckGo search with result count, date range, and domain filtering |
+| **wikipedia** | Look up Wikipedia articles | Fetches article summaries in multiple languages; handles disambiguation |
+| **yahoo_finance** | Retrieve financial data | Stock quotes, historical prices, financial statements, dividends, analyst ratings |
+| **exchange_rate** | Get currency exchange rates | Live ECB rates for 30+ currencies; cross-rate conversion |
+| **sec_edgar** | Search SEC filings | Company CIK lookup and latest 10-K/10-Q filing metadata |
+| **stack_exchange** | Search Q&A forums | Stack Overflow and Stack Exchange network search with tag filtering |
+| **reddit** | Browse Reddit | Search posts, hot/trending topics, and top comments across subreddits |
+| **hacker_news** | Explore Hacker News | Top, new, and best stories with Algolia-powered search |
 
 ### Tool Registry (DocType)
 

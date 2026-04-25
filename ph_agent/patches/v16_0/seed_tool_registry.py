@@ -81,6 +81,15 @@ TOOL_REGISTRY_SEED = [
         "python_function": "ph_agent.agent.tools.frappe_crud_tool.run_frappe_method_tool",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "discover_frappe_schema",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Discover Frappe DocType schemas. Use 'list_doctypes' to search/filter available DocTypes by name pattern, or 'get_schema' to retrieve full field metadata (field names, types, labels, required status, link targets) for a specific DocType. Essential for understanding which DocTypes and fields exist before querying data.",
+        "python_function": "ph_agent.agent.tools.schema_discovery_tool.discover_frappe_schema_tool",
+        "requires_approval": 0,
+    },
 ]
 
 

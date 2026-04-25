@@ -108,6 +108,15 @@ TOOL_REGISTRY_SEED = [
         "python_function": "ph_agent.agent.tools.create_skill_tool.create_skill_tool",
         "requires_approval": 0,
     },
+    {
+        "doctype": "Tool Registry",
+        "tool_name": "create_tool",
+        "is_enabled": 1,
+        "script_type": "Existing Function",
+        "description": "Create a new Tool Registry record. Tools extend the AI's capabilities by providing new functions it can call. Provide tool_name (lowercase, hyphens, 140 chars max), description (2000 chars max), script_type ('Existing Function' or 'Custom Script'), and conditional fields. Tools are always created disabled (is_enabled=0) — enable them from the Tool Registry list to make them active.",
+        "python_function": "ph_agent.agent.tools.create_tool_tool.create_tool_tool",
+        "requires_approval": 0,
+    },
 ]
 
 

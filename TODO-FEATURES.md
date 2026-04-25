@@ -41,25 +41,23 @@ This document lists planned features for future development of PH Agent, ordered
 
 ---
 
-## 3. Agent-Proposed Tool Registry Creation
+## ~~3. Agent-Proposed Tool Registry Creation~~ ✅ Implemented
 
-Let the agent create Tool Registry records on user request. The user describes a tool they want, and the agent generates the Python code and parameters JSON Schema. The created tool is **disabled by default** — an admin must review and enable it before it becomes active.
+~~Let the agent create Tool Registry records on user request. The user describes a tool they want, and the agent generates the Python code and parameters JSON Schema. The created tool is **disabled by default** — an admin must review and enable it before it becomes active.~~
 
 **Use cases:**
-- "Create a tool that shows all overdue invoices for a customer"
-- "Make a tool that calculates the total sales for a given month"
-- "Create a tool that sends a reminder email to customers with pending payments"
+- ~~"Create a tool that shows all overdue invoices for a customer"~~
+- ~~"Make a tool that calculates the total sales for a given month"~~
+- ~~"Create a tool that sends a reminder email to customers with pending payments"~~
 
-**Implementation notes:**
-- Add a new tool (e.g., `create_tool_tool`) following the same pattern as `create_skill_tool`:
-  - `@tool(name="create_tool")` decorator with `ctx: FunctionInvocationContext = None`
-  - Parameters: `tool_name` (required, lowercase/hyphens), `description` (required), `script_type` (required, "Existing Function" or "Custom Script"), `python_function` (conditional), `custom_script` (conditional), `parameters_json` (conditional)
-  - Validates inputs against Tool Registry field rules
-  - Creates Tool Registry record with `is_enabled = 0` (always disabled)
-  - Uses `doc.insert()` (no `ignore_permissions`) — respects Frappe permissions
-  - The agent generates both the Python function code and the correct JSON Schema for parameters
-  - The agent responds with a confirmation message including the tool name and a note that it's disabled pending admin review
-- Add "Tool Registry" to `BLOCKED_DOCTYPES` in `frappe_crud_tool.py` to prevent CRUD bypass
+**Implementation:**
+- Tool: `ph_agent/agent/tools/create_tool_tool.py` — `@tool(name="create_tool")`
+- Parameters: `tool_name` (required, lowercase/hyphens, 140 chars max), `description` (required, 2000 chars max), `script_type` (required, "Existing Function" or "Custom Script"), `python_function` (conditional), `custom_script` (conditional), `parameters_json` (conditional), `requires_approval` (optional, 0 or 1)
+- Validates all inputs against the same rules as the Tool Registry controller (regex, length limits, duplicate check, script type validation)
+- Creates Tool Registry record with `is_enabled = 0` (always disabled)
+- Uses `doc.insert()` (no `ignore_permissions`) — respects Frappe permissions (System Manager role required)
+- Registered in Tool Registry via `ph_agent/patches/v16_0/seed_tool_registry.py`
+- Tool Registry added to `BLOCKED_DOCTYPES` in `frappe_crud_tool.py` to prevent CRUD bypass
 
 ---
 

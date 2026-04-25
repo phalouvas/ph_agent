@@ -24,6 +24,8 @@ BLOCKED_DOCTYPES = {
 	"File", "Prepared Report",
 	# Skill Registry — must use the dedicated create_skill tool
 	"Skill Registry", "Skill Resource", "Skill Script",
+	# Tool Registry — must use the dedicated create_tool tool
+	"Tool Registry",
 }
 
 # DocTypes that can only be read (never written) by the AI

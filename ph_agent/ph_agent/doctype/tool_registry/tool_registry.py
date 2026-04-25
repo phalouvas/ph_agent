@@ -1,8 +1,15 @@
 import importlib
 import json
+import re
 
 import frappe
 from frappe.model.document import Document
+
+
+# Validation constants for tool names
+TOOL_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$")
+MAX_TOOL_NAME_LENGTH = 140
+MAX_DESCRIPTION_LENGTH = 2000
 
 
 # Safe namespace template for compiling custom/server scripts.

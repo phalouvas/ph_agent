@@ -9,8 +9,8 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
-    "agent-framework",
-    "agent-framework-openai",
+    "agent-framework>=1.2.0",
+    "agent-framework-openai>=1.2.0",
     "markitdown[pdf,docx,pptx,xlsx]",
     "yfinance",
 ]

@@ -46,6 +46,14 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          */
         setActiveRoomId: function(roomId) {
             _activeRoomId = roomId;
+            // Manually subscribe to the doc room so realtime events reach this browser.
+            // In Docker/Traefik, WebSocket auth fails during HTTP→HTTPS redirect, so the
+            // socket lands in user:Guest instead of user:{email}. Using doctype/docname
+            // routing bypasses this entirely. This emit joins the doc:Chat Session/{roomId}
+            // room that the server publishes to.
+            if (frappe.realtime && frappe.realtime.socket && frappe.realtime.socket.connected) {
+                frappe.realtime.socket.emit('doc_subscribe', 'Chat Session', roomId);
+            }
         },
         
         /**

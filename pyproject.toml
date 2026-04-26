@@ -11,7 +11,7 @@ dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
     "agent-framework",
     "agent-framework-openai",
-    "markitdown[pdf,docx,pptx,xlsx,html]",
+    "markitdown[pdf,docx,pptx,xlsx]",
     "yfinance",
 ]
 

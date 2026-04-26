@@ -12,6 +12,7 @@ dependencies = [
     "agent-framework",
     "agent-framework-openai",
     "markitdown[pdf,docx,pptx,xlsx,html]",
+    "yfinance",
 ]
 
 [build-system]

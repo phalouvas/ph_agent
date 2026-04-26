@@ -10,7 +10,7 @@ from typing import Any
 import frappe
 from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMemoryHistoryProvider, Message
 from agent_framework_openai import OpenAIChatCompletionClient
-from agent_framework._skills import SkillsProvider
+from agent_framework import SkillsProvider
 from openai import AsyncOpenAI
 from ph_agent.agent.context.llm_memory_provider import LLMMemoryProvider
 from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider

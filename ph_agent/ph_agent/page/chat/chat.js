@@ -89,6 +89,32 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		}
 	}, "add");
 
+	// ── Temporary Mode Toggle ───────────────────────────────────────
+	const tempBtn = $(`
+		<button class="btn btn-default btn-sm btn-temp-mode" style="margin-left: 8px; font-size: 12px; padding: 2px 8px; height: 28px;" title="${__("Toggle Temporary (Incognito) Mode")}">
+			👻 <span>${__("Temporary")}</span>
+		</button>
+	`);
+	tempBtn.on("click", function () {
+		const state = window.phAgent?.state;
+		if (!state) return;
+		const newMode = !state.getIsTemporaryMode();
+		state.setIsTemporaryMode(newMode);
+		$(this).toggleClass("btn-info", newMode).toggleClass("btn-default", !newMode);
+		const label = newMode ? __("Temporary ON") : __("Temporary");
+		$(this).find("span").text(label);
+		frappe.show_alert({
+			message: newMode ? __("Temporary mode ON — sessions will be auto-deleted on navigation") : __("Temporary mode OFF"),
+			indicator: newMode ? "orange" : "green"
+		});
+	});
+	// Initialize button state from persisted preference
+	if (window.phAgent?.state?.getIsTemporaryMode?.()) {
+		tempBtn.removeClass("btn-default").addClass("btn-info");
+		tempBtn.find("span").text(__("Temporary ON"));
+	}
+	$(page.page_actions).find(".btn-primary").after(tempBtn);
+
 	// Add summary button as a custom button in the page actions area
 	// First, let's add it manually to the page actions container
 	

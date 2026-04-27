@@ -491,6 +491,12 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
+					
+					# Clear the status indicator immediately after streaming
+					# completes, before token accounting.  The user sees the
+					# response appear chunk by chunk — no need to keep the
+					# "Calling AI…" text during the DB writes that follow.
+					emit_status("")
 				else:
 					# Streaming didn't complete successfully, fall back
 					raise Exception("Streaming did not complete successfully")
@@ -531,6 +537,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				agent_msg.output_tokens = output_tokens
 				agent_msg.save(ignore_permissions=True)
 				frappe.db.commit()
+				emit_status("")
 		else:
 			# Non-streaming path - update the existing placeholder message
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
@@ -561,6 +568,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			agent_msg.output_tokens = output_tokens
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
+			emit_status("")
 			
 	except asyncio.CancelledError:
 		# Clean up placeholder message
@@ -642,6 +650,12 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	)
 	frappe.db.commit()
 
+	# Release lock and clear the status indicator immediately — before any
+	# DB reads or realtime publishes — so the "Calling AI…" text disappears
+	# as fast as possible and the user can send a new message.
+	release_lock()
+	emit_status("")
+
 	# Get updated token counts for realtime update
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
@@ -664,13 +678,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		},
 		room="website",
 	)
-	
-	# Release lock, clear the status indicator and deliver the reply immediately.
-	# Non-essential post-processing (token warning, auto-compaction, auto-title)
-	# follows below so the user can see the response and send a new message
-	# without waiting for those operations.
-	release_lock()
-	emit_status("")
 	
 	# Publish the final message content (with reasoning block if applicable)
 	frappe.publish_realtime(

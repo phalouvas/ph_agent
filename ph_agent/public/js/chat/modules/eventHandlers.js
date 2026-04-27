@@ -692,7 +692,10 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 method: "ph_agent.api.chat.regenerate_message",
                 args: { message_id: message._id },
                 callback: (r) => {
-                    state.setIsProcessing(false);
+                    // Do NOT call setIsProcessing(false) here — the backend
+                    // emits agent_status("Calling AI…") and the background
+                    // job will clear it when done.  Clearing it here would
+                    // hide the stop button before the job even starts.
                     
                     if (r.message && r.message.status === "queued") {
                         frappe.show_alert({ 

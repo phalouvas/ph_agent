@@ -5,6 +5,81 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
+	// ── Persona Selector ────────────────────────────────────────────
+	let personaSelector = null;
+	let personaList = [];
+
+	function loadPersonas() {
+		return frappe.call({
+			method: "frappe.client.get_list",
+			args: {
+				doctype: "Persona",
+				filters: { user: frappe.session.user },
+				fields: ["name", "persona_name", "icon", "color", "is_default"],
+				order_by: "modified desc",
+			},
+		}).then((r) => {
+			personaList = r.message || [];
+			return personaList;
+		});
+	}
+
+	function renderPersonaSelector() {
+		if (!personaList.length) return;
+
+		const currentPersona = window.phAgent?.state?.getActivePersona?.();
+		const current = personaList.find(p => p.name === currentPersona) || personaList.find(p => p.is_default) || personaList[0];
+
+		if (current && current.name !== currentPersona) {
+			window.phAgent.state.setActivePersona(current.name);
+		}
+
+		if (!personaSelector) {
+			personaSelector = $(`
+				<select class="form-control persona-selector" style="display:inline-block;width:auto;min-width:140px;margin-left:8px;font-size:12px;height:28px;padding:2px 8px;">
+				</select>
+			`);
+			personaSelector.on("change", function () {
+				const selected = $(this).val();
+				window.phAgent.state.setActivePersona(selected);
+				// Reload rooms for the new persona
+				if (window.phAgent?.roomService) {
+					window.phAgent.roomService.loadRooms().then((rooms) => {
+						const state = window.phAgent.state;
+						const stateRooms = state.getRooms();
+						if (stateRooms.length > 0) {
+							const chat = document.querySelector("vue-advanced-chat");
+							if (chat) {
+								chat.setAttribute("room-id", "");
+								state.setActiveRoomId(null);
+								const fetchMessagesEvent = new CustomEvent("fetch-messages", {
+									detail: [stateRooms[0]]
+								});
+								chat.dispatchEvent(fetchMessagesEvent);
+							}
+						}
+					});
+				}
+			});
+			// Insert after the primary action button
+			$(page.page_actions).find(".btn-primary").after(personaSelector);
+		}
+
+		// Populate options
+		const optionsHtml = personaList.map(p => {
+			const selected = p.name === current?.name ? "selected" : "";
+			const icon = p.icon && p.icon !== "user" ? p.icon : "";
+			const label = icon ? `${icon} ${p.persona_name}` : p.persona_name;
+			return `<option value="${p.name}" ${selected}>${label}</option>`;
+		}).join("");
+		personaSelector.html(optionsHtml);
+	}
+
+	// Load personas first, then set up the rest
+	loadPersonas().then(() => {
+		renderPersonaSelector();
+	});
+
 	page.set_primary_action(__("New Chat"), () => {
 		if (window.phAgent && window.phAgent.roomService) {
 			window.phAgent.roomService.createNewSession();
@@ -191,9 +266,10 @@ function initPhChat(container, page, $status) {
 	// Initialize state manager
 	const state = window.phAgent.state;
 	
-	// Initialize room service with current user and agent IDs
+	// Initialize room service with current user, agent ID, and default persona
+	const defaultPersona = state.getActivePersona();
 	const roomService = window.phAgent.roomService;
-	roomService.init(chat, currentUserId, agentId);
+	roomService.init(chat, currentUserId, agentId, defaultPersona);
 	
 	// Initialize UI helpers
 	const uiHelpers = window.phAgent.uiHelpers;

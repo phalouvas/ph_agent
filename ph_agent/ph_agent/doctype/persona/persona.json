@@ -1,0 +1,173 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "hash",
+ "creation": "2026-04-27 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "persona_name",
+  "user",
+  "is_default",
+  "icon",
+  "color",
+  "section_personality",
+  "system_prompt",
+  "section_provider",
+  "default_llm_provider",
+  "temperature",
+  "enable_thinking",
+  "enable_streaming",
+  "enable_suggestions",
+  "section_preferences",
+  "preferences"
+ ],
+ "fields": [
+  {
+   "fieldname": "persona_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Persona Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "description": "Mark this persona as the default for new chat sessions.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "label": "Default Persona"
+  },
+  {
+   "default": "user",
+   "description": "Icon name or emoji for the persona badge in the chat sidebar.",
+   "fieldname": "icon",
+   "fieldtype": "Data",
+   "label": "Icon",
+   "length": 50
+  },
+  {
+   "default": "#4f72b8",
+   "description": "Color for the persona badge in the chat sidebar (hex format).",
+   "fieldname": "color",
+   "fieldtype": "Data",
+   "label": "Color",
+   "length": 7
+  },
+  {
+   "fieldname": "section_personality",
+   "fieldtype": "Section Break",
+   "label": "Personality & Instructions"
+  },
+  {
+   "description": "System prompt that defines this persona's behavior. Inherited by all sessions created under this persona.",
+   "fieldname": "system_prompt",
+   "fieldtype": "Long Text",
+   "label": "System Prompt"
+  },
+  {
+   "fieldname": "section_provider",
+   "fieldtype": "Section Break",
+   "label": "Provider Defaults"
+  },
+  {
+   "description": "Default LLM provider for sessions under this persona. If empty, the system default provider is used.",
+   "fieldname": "default_llm_provider",
+   "fieldtype": "Link",
+   "label": "Default LLM Provider",
+   "options": "LLM Provider"
+  },
+  {
+   "description": "Default temperature for sessions under this persona (0\u20131.5). Leave empty to use provider default.",
+   "fieldname": "temperature",
+   "fieldtype": "Float",
+   "label": "Temperature",
+   "precision": "1"
+  },
+  {
+   "default": "0",
+   "description": "Enable thinking/reasoning mode for sessions under this persona.",
+   "fieldname": "enable_thinking",
+   "fieldtype": "Check",
+   "label": "Enable Thinking Mode"
+  },
+  {
+   "default": "1",
+   "description": "Enable streaming responses for sessions under this persona.",
+   "fieldname": "enable_streaming",
+   "fieldtype": "Check",
+   "label": "Enable Streaming"
+  },
+  {
+   "default": "1",
+   "description": "Automatically generate follow-up question suggestions after each agent response.",
+   "fieldname": "enable_suggestions",
+   "fieldtype": "Check",
+   "label": "Enable Follow-up Suggestions"
+  },
+  {
+   "fieldname": "section_preferences",
+   "fieldtype": "Section Break",
+   "label": "Learned Preferences"
+  },
+  {
+   "description": "Learned user preferences for this persona, stored as JSON. Populated automatically by the UserPreferenceProvider.",
+   "fieldname": "preferences",
+   "fieldtype": "JSON",
+   "label": "Preferences",
+   "read_only": 1
+  }
+ ],
+ "indexes": [
+  {
+   "fields": ["user", "persona_name"],
+   "unique": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-04-27 00:00:00",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "Persona",
+ "naming_rule": "Random (hash)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Script Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

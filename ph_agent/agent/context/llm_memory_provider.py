@@ -56,6 +56,26 @@ Return an empty array if nothing worth extracting is found.
 Response format: ONLY valid JSON, nothing else."""
 
 
+# Template for persona-aware extraction prompt — {persona} is substituted at runtime
+_PERSONA_AWARE_EXTRACTION_PROMPT = """You are a memory extraction assistant. Extract factual information \
+about the user from this conversation turn, in the context of the "{persona}" persona.
+Focus on:
+- Personal details (name, location, job, preferences)
+- Goals, tasks, or projects mentioned
+- Preferences (communication style, format preferences)
+- Contextual information (tools they use, industry, company)
+
+Return a JSON array of objects with:
+- "fact": the extracted fact (concise, specific, one fact per object)
+- "category": one of "Fact", "Preference", "Goal", "Context", "Personal", "Other"
+- "confidence": a float between 0.0 and 1.0 indicating how certain you are
+
+Skip generic statements. Only extract if there is meaningful information.
+Return an empty array if nothing worth extracting is found.
+
+Response format: ONLY valid JSON, nothing else."""
+
+
 class LLMMemoryProvider(ContextProvider):
 	"""ContextProvider that learns user memories via LLM extraction.
 
@@ -65,6 +85,9 @@ class LLMMemoryProvider(ContextProvider):
 	On each ``after_run()``, calls the LLM (using the same provider as
 	the session) to extract new memories from the latest conversation
 	turn, then persists them with deduplication.
+
+	Memories are scoped to ``(user, persona)`` — each persona has its own
+	isolated memory pool.
 	"""
 
 	MEMORIES_KEY = "llm_memories"
@@ -90,14 +113,14 @@ class LLMMemoryProvider(ContextProvider):
 		Only memories relevant to the current user query are injected, capped
 		at ``_MAX_INJECTED_MEMORIES`` to avoid context dilution.
 		"""
-		user = self._get_user(session)
+		user, persona = self._get_user_and_persona(session)
 		if not user:
 			return
 
 		# Extract the current user query for relevance filtering
 		user_message = self._get_latest_user_message(context) or ""
 
-		memories = self._load_memories(user, query=user_message, top_k=_MAX_INJECTED_MEMORIES)
+		memories = self._load_memories(user, persona=persona, query=user_message, top_k=_MAX_INJECTED_MEMORIES)
 
 		# Cache in session state for same-turn access
 		state[self.MEMORIES_KEY] = memories
@@ -115,7 +138,7 @@ class LLMMemoryProvider(ContextProvider):
 		state: dict[str, Any],
 	) -> None:
 		"""Extract new memories from the latest conversation turn via LLM."""
-		user = self._get_user(session)
+		user, persona = self._get_user_and_persona(session)
 		if not user:
 			logger.debug("LLMMemoryProvider: no user resolved, skipping extraction")
 			return
@@ -153,6 +176,7 @@ class LLMMemoryProvider(ContextProvider):
 			session=session,
 			user_message=user_message,
 			assistant_response=assistant_response,
+			persona=persona,
 		)
 		if not extracted:
 			logger.debug("LLMMemoryProvider: LLM returned no memories")
@@ -162,29 +186,32 @@ class LLMMemoryProvider(ContextProvider):
 
 		# Deduplicate and persist
 		source_message = self._get_source_message_id(session)
-		self._deduplicate_and_merge(extracted, user, session_id, source_message)
+		self._deduplicate_and_merge(extracted, user, persona, session_id, source_message)
 
 		# Commit explicitly — after_run may run in a threading context
 		frappe.db.commit()
 
 		# Update state cache
-		state[self.MEMORIES_KEY] = self._load_memories(user)
+		state[self.MEMORIES_KEY] = self._load_memories(user, persona=persona)
 		state[self.LAST_EXTRACTION_KEY] = time.time()
 
 	# ------------------------------------------------------------------
-	# Session / user resolution
+	# Session / user / persona resolution
 	# ------------------------------------------------------------------
 
 	@staticmethod
-	def _get_user(session: Any) -> str | None:
-		"""Resolve the Frappe user from the session's Chat Session doc."""
+	def _get_user_and_persona(session: Any) -> tuple[str | None, str | None]:
+		"""Resolve the Frappe user and persona from the session's Chat Session doc."""
 		session_id = getattr(session, "session_id", None)
 		if not session_id:
-			return None
+			return None, None
 		try:
-			return frappe.db.get_value("Chat Session", session_id, "user")
+			vals = frappe.db.get_value("Chat Session", session_id, ["user", "persona"])
+			if not vals:
+				return None, None
+			return vals[0], vals[1]
 		except Exception:
-			return None
+			return None, None
 
 	@staticmethod
 	def _get_session_id(session: Any) -> str | None:
@@ -270,8 +297,16 @@ class LLMMemoryProvider(ContextProvider):
 		session: Any,
 		user_message: str,
 		assistant_response: str,
+		persona: str | None = None,
 	) -> list[dict[str, Any]]:
 		"""Call the LLM to extract memories from a conversation turn.
+
+		Args:
+			client: The OpenAI-compatible client.
+			session: The agent session.
+			user_message: The user's message text.
+			assistant_response: The assistant's response text.
+			persona: Optional persona name for context-aware extraction.
 
 		Returns:
 			A list of dicts with keys ``fact``, ``category``, ``confidence``,
@@ -283,11 +318,16 @@ class LLMMemoryProvider(ContextProvider):
 			f"Assistant response: {assistant_response}"
 		)
 
+		# Use persona-aware prompt if persona is known
+		system_prompt = _EXTRACTION_SYSTEM_PROMPT
+		if persona:
+			system_prompt = _PERSONA_AWARE_EXTRACTION_PROMPT.format(persona=persona)
+
 		try:
 			response = await client.chat.completions.create(
 				model=model,
 				messages=[
-					{"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
+					{"role": "system", "content": system_prompt},
 					{"role": "user", "content": prompt},
 				],
 				temperature=0.3,
@@ -359,8 +399,8 @@ class LLMMemoryProvider(ContextProvider):
 	# ------------------------------------------------------------------
 
 	@staticmethod
-	def _load_memories(user: str, query: str = "", top_k: int = 15) -> list[dict[str, Any]]:
-		"""Load memories for a user, filtered by relevance to the current query.
+	def _load_memories(user: str, persona: str | None = None, query: str = "", top_k: int = 15) -> list[dict[str, Any]]:
+		"""Load memories for a user and persona, filtered by relevance to the current query.
 
 		When ``query`` is non-empty, memories are scored by word overlap with
 		the query and only the top-K most relevant are returned. This prevents
@@ -370,6 +410,7 @@ class LLMMemoryProvider(ContextProvider):
 
 		Args:
 			user: The Frappe user to load memories for.
+			persona: The persona to scope memories to.
 			query: The current user message text for relevance scoring.
 			top_k: Maximum number of memories to return.
 
@@ -379,9 +420,12 @@ class LLMMemoryProvider(ContextProvider):
 		if not user:
 			return []
 		try:
+			filters: dict[str, Any] = {"user": user, "confidence": (">=", _INJECTION_CONFIDENCE_THRESHOLD)}
+			if persona:
+				filters["persona"] = persona
 			records = frappe.get_all(
 				"User Memory",
-				filters={"user": user, "confidence": (">=", _INJECTION_CONFIDENCE_THRESHOLD)},
+				filters=filters,
 				fields=["fact", "category", "confidence"],
 				order_by="confidence desc",
 			)
@@ -437,13 +481,14 @@ class LLMMemoryProvider(ContextProvider):
 	def _deduplicate_and_merge(
 		memories: list[dict[str, Any]],
 		user: str,
-		session_id: str | None,
-		source_message: str | None,
+		persona: str | None = None,
+		session_id: str | None = None,
+		source_message: str | None = None,
 	) -> None:
 		"""Insert new memories or update existing ones.
 
 		For each extracted memory:
-		- If a similar fact (case-insensitive) already exists → increment
+		- If a similar fact (case-insensitive) already exists for this (user, persona) → increment
 		  ``encounter_count``, boost ``confidence`` slightly, update
 		  ``last_encountered_at``.
 		- If new → insert with the given confidence, source info, and
@@ -457,10 +502,13 @@ class LLMMemoryProvider(ContextProvider):
 			category = mem.get("category", "Fact")
 			confidence = float(mem.get("confidence", 0.5))
 
-			# Check for existing entry by exact case-insensitive match
+			# Check for existing entry by exact case-insensitive match within this persona
+			filters: dict[str, Any] = {"user": user, "fact": fact}
+			if persona:
+				filters["persona"] = persona
 			existing_name = frappe.db.get_value(
 				"User Memory",
-				{"user": user, "fact": fact},
+				filters,
 				"name",
 			)
 
@@ -483,6 +531,7 @@ class LLMMemoryProvider(ContextProvider):
 					doc = frappe.get_doc({
 						"doctype": "User Memory",
 						"user": user,
+						"persona": persona,
 						"fact": fact,
 						"category": category,
 						"confidence": confidence,
@@ -496,9 +545,12 @@ class LLMMemoryProvider(ContextProvider):
 					# Race condition — entry was created between our check and insert.
 					# Do a lightweight update instead.
 					try:
+						dup_filters: dict[str, Any] = {"user": user, "fact": fact}
+						if persona:
+							dup_filters["persona"] = persona
 						dup_name = frappe.db.get_value(
 							"User Memory",
-							{"user": user, "fact": fact},
+							dup_filters,
 							"name",
 						)
 						if dup_name:

@@ -34,14 +34,16 @@ def _delete_files_attached_to_message(message_id):
 			)
 
 
-def _get_recent_session_context(user: str, limit: int = 3) -> str | None:
-	"""Build a grounding context string from the user's recent sessions.
+def _get_recent_session_context(user: str, persona: str | None = None, limit: int = 3) -> str | None:
+	"""Build a grounding context string from the user's recent sessions in the same persona.
 
 	Reads the ``last_summary_message`` content from the most recent sessions
 	to provide cross-session continuity when starting a new conversation.
 
 	Args:
 		user: The Frappe user to look up sessions for.
+		persona: The persona to scope sessions to. If None, loads sessions
+			without persona filter (legacy fallback).
 		limit: Maximum number of recent sessions to include.
 
 	Returns:
@@ -49,9 +51,12 @@ def _get_recent_session_context(user: str, limit: int = 3) -> str | None:
 		sessions with summaries are found.
 	"""
 	try:
+		filters: dict[str, Any] = {"user": user, "status": ["in", ["Open", "Closed"]]}
+		if persona:
+			filters["persona"] = persona
 		sessions = frappe.get_all(
 			"Chat Session",
-			filters={"user": user, "status": ["in", ["Open", "Closed"]]},
+			filters=filters,
 			fields=["name", "title", "last_summary_message"],
 			order_by="modified desc",
 			limit_page_length=limit,
@@ -138,8 +143,13 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 
 
 @frappe.whitelist()
-def create_session(provider_name=None):
-	"""Create a new Chat Session. Uses default LLM Provider if provider_name not specified."""
+def create_session(provider_name=None, persona=None):
+	"""Create a new Chat Session. Uses default LLM Provider if provider_name not specified.
+
+	Args:
+		provider_name: Optional LLM Provider name. Uses default if not specified.
+		persona: Optional Persona name to associate with this session.
+	"""
 	if not provider_name:
 		default = frappe.get_list(
 			"LLM Provider",
@@ -154,10 +164,30 @@ def create_session(provider_name=None):
 		if not frappe.db.exists("LLM Provider", {"name": provider_name, "is_enabled": 1}):
 			frappe.throw(frappe._("LLM Provider {0} not found or is disabled.").format(provider_name))
 
+	# Resolve persona — use default if not specified
+	if not persona:
+		default_persona = frappe.get_all(
+			"Persona",
+			filters={"user": frappe.session.user, "is_default": 1},
+			pluck="name",
+			limit=1,
+		)
+		if default_persona:
+			persona = default_persona[0]
+		else:
+			frappe.throw(frappe._("No persona specified and no default persona found. Please create a persona first."))
+
+	# Validate persona belongs to current user
+	if persona:
+		persona_user = frappe.db.get_value("Persona", persona, "user")
+		if persona_user != frappe.session.user:
+			frappe.throw(frappe._("Persona {0} does not belong to you.").format(persona))
+
 	session = frappe.get_doc(
 		{
 			"doctype": "Chat Session",
 			"title": "New Chat",
+			"persona": persona,
 			"user": frappe.session.user,
 			"llm_provider": provider_name,
 			"status": "Open",
@@ -166,8 +196,8 @@ def create_session(provider_name=None):
 	session.insert(ignore_permissions=False)
 	frappe.db.commit()
 
-	# Inject previous session context for cross-session continuity
-	previous_context = _get_recent_session_context(frappe.session.user)
+	# Inject previous session context for cross-session continuity (scoped to persona)
+	previous_context = _get_recent_session_context(frappe.session.user, persona=persona)
 	if previous_context:
 		current_prompt = session.system_prompt or ""
 		context_block = (

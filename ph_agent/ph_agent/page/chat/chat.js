@@ -98,52 +98,53 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	tempBtn.on("click", function () {
 		const state = window.phAgent?.state;
 		if (!state) return;
-		const newMode = !state.getIsTemporaryMode();
-		state.setIsTemporaryMode(newMode);
-		$(this).toggleClass("btn-info", newMode).toggleClass("btn-default", !newMode);
-		const label = newMode ? __("Temporary ON") : __("Temporary");
-		$(this).find("span").text(label);
-		
-		// If turning ON and there's an active session, mark it as temporary immediately
 		const activeRoomId = state.getActiveRoomId();
-		if (activeRoomId) {
-			frappe.call({
-				method: "frappe.client.set_value",
-				args: {
-					doctype: "Chat Session",
-					name: activeRoomId,
-					fieldname: "is_temporary",
-					value: newMode ? 1 : 0,
-				},
-				callback: function(r) {
-					if (r.message) {
-						// Update the room object in local state
-						const room = state.getRoomById(activeRoomId);
-						if (room) {
-							room.isTemporary = newMode;
-							// Update room name with/without 👻 badge
-							if (newMode && !room.roomName.startsWith("👻")) {
-								room.roomName = "👻 " + room.roomName + " (Temporary)";
-							} else if (!newMode) {
-								room.roomName = room.roomName.replace(/^👻 /, "").replace(" (Temporary)", "");
-							}
-							state.updateRoom(activeRoomId, { roomName: room.roomName });
-							const chat = document.querySelector("vue-advanced-chat");
-							if (chat) chat.rooms = state.getRooms();
-						}
-						frappe.show_alert({
-							message: newMode ? __("Current session marked as temporary — will be deleted on navigation") : __("Current session is no longer temporary"),
-							indicator: newMode ? "orange" : "green"
-						});
-					}
-				}
-			});
-		} else {
+		if (!activeRoomId) {
 			frappe.show_alert({
-				message: newMode ? __("Temporary mode ON — new sessions will be auto-deleted on navigation") : __("Temporary mode OFF"),
-				indicator: newMode ? "orange" : "green"
+				message: __("No active session to toggle"),
+				indicator: "orange"
 			});
+			return;
 		}
+		
+		const room = state.getRoomById(activeRoomId);
+		const newMode = !(room && room.isTemporary);
+		
+		frappe.call({
+			method: "frappe.client.set_value",
+			args: {
+				doctype: "Chat Session",
+				name: activeRoomId,
+				fieldname: "is_temporary",
+				value: newMode ? 1 : 0,
+			},
+			callback: function(r) {
+				if (r.message) {
+					// Update the room object in local state
+					const updatedRoom = state.getRoomById(activeRoomId);
+					if (updatedRoom) {
+						updatedRoom.isTemporary = newMode;
+						// Update room name with/without 👻 badge
+						if (newMode && !updatedRoom.roomName.startsWith("👻")) {
+							updatedRoom.roomName = "👻 " + updatedRoom.roomName + " (Temporary)";
+						} else if (!newMode) {
+							updatedRoom.roomName = updatedRoom.roomName.replace(/^👻 /, "").replace(" (Temporary)", "");
+						}
+						state.updateRoom(activeRoomId, { roomName: updatedRoom.roomName });
+						const chat = document.querySelector("vue-advanced-chat");
+						if (chat) chat.rooms = state.getRooms();
+					}
+					// Sync the button
+					if (window._phSyncTempModeButton) {
+						window._phSyncTempModeButton(newMode);
+					}
+					frappe.show_alert({
+						message: newMode ? __("Current session marked as temporary — will be deleted on navigation") : __("Current session is no longer temporary"),
+						indicator: newMode ? "orange" : "green"
+					});
+				}
+			}
+		});
 	});
 	// Initialize button state from persisted preference
 	if (window.phAgent?.state?.getIsTemporaryMode?.()) {

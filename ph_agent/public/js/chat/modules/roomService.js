@@ -104,7 +104,10 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
             return new Promise((resolve, reject) => {
                 const state = window.phAgent.state;
                 const activePersona = state.getActivePersona();
-                const isTemporary = state.getIsTemporaryMode();
+                
+                // New sessions are always non-temporary by default.
+                // The toggle button only updates the *current* session's is_temporary flag.
+                const isTemporary = false;
                 
                 // Fire-and-forget delete the previous temporary session if any
                 const prevRoomId = state.getActiveRoomId();

@@ -181,6 +181,13 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 );
                 state.setRooms(rooms);
                 _chat.rooms = rooms;
+                
+                // Clear processing state so the send button re-enables.
+                // This is a defensive fallback: the backend always emits
+                // agent_status("") before new_message, but if new_message
+                // is delayed or buffered, isProcessing would stay true
+                // and the user would be stuck unable to send a new message.
+                state.setIsProcessing(false);
             }
         },
         

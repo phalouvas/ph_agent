@@ -74,8 +74,12 @@ def _patched_parse_response(self, response, options):
 						for c in getattr(m, 'contents', []) or []
 					)
 					if not has_reasoning:
+						# Use protected_data to match how the library serializes
+						# text_reasoning Content for the API (see _prepare_message_for_openai).
 						m.contents.append(
-							Content.from_text_reasoning(text=reasoning_text)
+							Content.from_text_reasoning(
+								protected_data=json.dumps(reasoning_text)
+							)
 						)
 					break
 	return result
@@ -100,15 +104,43 @@ def _patched_parse_update(self, chunk):
 				for c in getattr(update, 'contents', []) or []
 			)
 			if not has_reasoning:
+				# Use protected_data to match how the library serializes
+				# text_reasoning Content for the API (see _prepare_message_for_openai).
 				update.contents.append(
-					Content.from_text_reasoning(text=reasoning_text)
+					Content.from_text_reasoning(
+						protected_data=json.dumps(reasoning_text)
+					)
 				)
 	return update
+
+
+# ---------------------------------------------------------------------------
+# Patch _prepare_message_for_openai to rename reasoning_details → reasoning_content
+# ---------------------------------------------------------------------------
+# DeepSeek's API expects ``reasoning_content`` as the top-level field name
+# (matching the OpenAI SDK's response field), not ``reasoning_details`` which
+# is the internal agent_framework convention.
+#
+# Also add a belt-and-suspenders fallback: if a text_reasoning Content has
+# ``text`` but no ``protected_data``, treat ``text`` as the reasoning.
+
+_orig_prepare_message = _openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai
+
+
+def _patched_prepare_message_for_openai(self, message):
+	"""Patched message preparer: renames reasoning_details → reasoning_content."""
+	result = _orig_prepare_message(self, message)
+	# Rename reasoning_details → reasoning_content for DeepSeek compatibility
+	for msg_dict in result:
+		if "reasoning_details" in msg_dict:
+			msg_dict["reasoning_content"] = msg_dict.pop("reasoning_details")
+	return result
 
 
 # Apply patches
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai = _patched_parse_response
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai = _patched_parse_update
+_openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = _patched_prepare_message_for_openai
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +524,14 @@ def _extract_reasoning_from_response(response) -> str:
 	for msg in getattr(response, 'messages', []) or []:
 		for content in getattr(msg, 'contents', []) or []:
 			if getattr(content, 'type', None) == "text_reasoning":
-				reasoning_parts.append(content.text or "")
+				# Prefer protected_data (JSON-encoded), fall back to text
+				if content.protected_data:
+					try:
+						reasoning_parts.append(json.loads(content.protected_data))
+					except (json.JSONDecodeError, TypeError):
+						reasoning_parts.append(content.protected_data)
+				else:
+					reasoning_parts.append(content.text or "")
 	return "\n".join(reasoning_parts)
 
 
@@ -569,7 +608,14 @@ def get_agent_response_stream(
 						for c in update.contents:
 							c_type = getattr(c, 'type', 'unknown')
 							if c_type == "text_reasoning":
-								reasoning_text = c.text or ""
+								# Prefer protected_data (JSON-encoded), fall back to text
+								if c.protected_data:
+									try:
+										reasoning_text = json.loads(c.protected_data)
+									except (json.JSONDecodeError, TypeError):
+										reasoning_text = c.protected_data
+								else:
+									reasoning_text = c.text or ""
 								if reasoning_text.startswith(seen_reasoning):
 									reasoning_delta = reasoning_text[len(seen_reasoning):]
 									seen_reasoning = reasoning_text

@@ -513,13 +513,17 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 return;
             }
             
+            // Show stop button — the backend emits agent_status("Calling AI…")
+            // and the background job will clear isProcessing when done.
+            const state = window.phAgent.state;
+            state.setIsProcessing(true);
+            
             frappe.call({
                 method: "ph_agent.api.chat.edit_message",
                 args: { message_id: messageId, content: newContent },
                 callback: (r) => {
                     if (r.message && (r.message.status === "ok" || r.message.status === "queued")) {
                         // Update message in state
-                        const state = window.phAgent.state;
                         state.updateMessage(messageId, { 
                             content: newContent,
                             edited: true 
@@ -535,6 +539,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     }
                 },
                 error: (err) => {
+                    state.setIsProcessing(false);
                     frappe.show_alert({ 
                         message: __("Failed to update message"), 
                         indicator: "red" 

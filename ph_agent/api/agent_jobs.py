@@ -492,10 +492,23 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
 					
-					# Clear the status indicator immediately after streaming
-					# completes, before token accounting.  The user sees the
-					# response appear chunk by chunk — no need to keep the
-					# "Calling AI…" text during the DB writes that follow.
+					# Publish a final message_chunk so the frontend clears the
+					# indicator immediately (handleMessageChunk with is_final=true
+					# calls setIsProcessing(false) and setStatus("")).
+					frappe.publish_realtime(
+						event="message_chunk",
+						message={
+							"session": session,
+							"message_id": agent_msg.name,
+							"chunk": "",
+							"is_final": True,
+						},
+						room="website",
+					)
+					
+					# Also clear the status indicator via agent_status as a
+					# fallback for any frontend state that the chunk event
+					# might have missed.
 					emit_status("")
 				else:
 					# Streaming didn't complete successfully, fall back

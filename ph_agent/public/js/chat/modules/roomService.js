@@ -234,7 +234,10 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
          * @returns {Promise} Promise that resolves with room info
          */
         getRoomInfo: function(roomId) {
-            return frappe.db.get_value("Chat Session", roomId, ["title", "llm_provider", "creation", "modified"])
+            return frappe.db.get_value("Chat Session", roomId, [
+                    "title", "llm_provider", "creation", "modified",
+                    "temperature", "enable_streaming", "enable_suggestions", "enable_thinking"
+                ])
                 .then((r) => {
                     if (!r.message) {
                         throw new Error("Room not found");
@@ -246,6 +249,10 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                         provider: session.llm_provider,
                         created: session.creation,
                         modified: session.modified,
+                        temperature: session.temperature,
+                        enable_streaming: session.enable_streaming,
+                        enable_suggestions: session.enable_suggestions,
+                        enable_thinking: session.enable_thinking,
                         roomId: roomId
                     };
                 });

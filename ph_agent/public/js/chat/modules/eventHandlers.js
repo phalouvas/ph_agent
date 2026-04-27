@@ -751,20 +751,16 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             
             roomService.getRoomInfo(room.roomId)
                 .then((roomInfo) => {
-                    // Fetch enabled providers and session thinking mode in parallel
-                    return Promise.all([
-                        frappe.db.get_list("LLM Provider", {
-                            filters: { is_enabled: 1 },
-                            fields: ["name", "is_default"],
-                            order_by: "is_default desc, name asc",
-                        }),
-                        frappe.db.get_value("Chat Session", room.roomId, "enable_thinking")
-                    ]).then(([providers, sessionRes]) => {
+                    // Fetch enabled providers in parallel
+                    return frappe.db.get_list("LLM Provider", {
+                        filters: { is_enabled: 1 },
+                        fields: ["name", "is_default"],
+                        order_by: "is_default desc, name asc",
+                    }).then((providers) => {
                         const providerOptions = providers.map((p) => ({
                             label: p.name + (p.is_default ? " (" + __("default") + ")" : ""),
                             value: p.name,
                         }));
-                        const sessionThinking = sessionRes.message?.enable_thinking || false;
                         
                         const dialog = new frappe.ui.Dialog({
                             title: __("Room Information"),
@@ -785,11 +781,33 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                     read_only: false,
                                 },
                                 {
+                                    fieldname: "temperature",
+                                    fieldtype: "Float",
+                                    label: __("Temperature"),
+                                    default: roomInfo.temperature,
+                                    precision: 1,
+                                    description: __("Controls response creativity (0–1.5). Lower = more focused, Higher = more creative. Disabled when thinking mode is on."),
+                                },
+                                {
                                     fieldname: "enable_thinking",
                                     fieldtype: "Check",
                                     label: __("Override Thinking Mode"),
-                                    default: sessionThinking,
-                                    description: __("When checked, enables thinking/reasoning regardless of provider setting. When unchecked, inherits from LLM Provider."),
+                                    default: roomInfo.enable_thinking,
+                                    description: __("When checked, enables thinking/reasoning regardless of provider setting. When unchecked, inherits from LLM Provider. Temperature is ignored when thinking is on."),
+                                },
+                                {
+                                    fieldname: "enable_streaming",
+                                    fieldtype: "Check",
+                                    label: __("Enable Streaming"),
+                                    default: roomInfo.enable_streaming,
+                                    description: __("Show responses as they are generated."),
+                                },
+                                {
+                                    fieldname: "enable_suggestions",
+                                    fieldtype: "Check",
+                                    label: __("Enable Follow-up Suggestions"),
+                                    default: roomInfo.enable_suggestions,
+                                    description: __("Auto-generate follow-up questions after each response."),
                                 },
                                 {
                                     fieldname: "created",
@@ -818,11 +836,20 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 if (values.provider !== roomInfo.provider) {
                                     args.provider_name = values.provider;
                                 }
-                                if (values.enable_thinking !== sessionThinking) {
+                                if (values.temperature !== roomInfo.temperature) {
+                                    args.temperature = values.temperature;
+                                }
+                                if (values.enable_thinking !== roomInfo.enable_thinking) {
                                     args.enable_thinking = values.enable_thinking ? 1 : 0;
                                 }
+                                if (values.enable_streaming !== roomInfo.enable_streaming) {
+                                    args.enable_streaming = values.enable_streaming ? 1 : 0;
+                                }
+                                if (values.enable_suggestions !== roomInfo.enable_suggestions) {
+                                    args.enable_suggestions = values.enable_suggestions ? 1 : 0;
+                                }
                                 
-                                if (!args.title && !args.provider_name && args.enable_thinking === undefined) {
+                                if (Object.keys(args).length <= 1) {
                                     return;
                                 }
                                 

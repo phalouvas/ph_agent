@@ -120,8 +120,19 @@ def update_session_provider(session, provider_name):
 
 
 @frappe.whitelist()
-def update_session_settings(session, title=None, provider_name=None, enable_thinking=None):
-	"""Update title, LLM provider, and/or thinking mode on a Chat Session in a single call."""
+def update_session_settings(session, title=None, provider_name=None, enable_thinking=None,
+							temperature=None, enable_streaming=None, enable_suggestions=None):
+	"""Update settings on a Chat Session in a single call.
+
+	Args:
+		session: Chat Session name (required).
+		title: New session title.
+		provider_name: New LLM Provider name.
+		enable_thinking: 0 or 1 to override thinking mode.
+		temperature: Float 0–1.5 to override temperature.
+		enable_streaming: 0 or 1 to toggle streaming.
+		enable_suggestions: 0 or 1 to toggle follow-up suggestions.
+	"""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
 	update_dict = {}
@@ -133,6 +144,15 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 		update_dict["llm_provider"] = provider_name
 	if enable_thinking is not None:
 		update_dict["enable_thinking"] = enable_thinking
+	if temperature is not None:
+		temp = float(temperature)
+		if temp < 0 or temp > 1.5:
+			frappe.throw(frappe._("Temperature must be between 0 and 1.5."))
+		update_dict["temperature"] = temp
+	if enable_streaming is not None:
+		update_dict["enable_streaming"] = int(enable_streaming)
+	if enable_suggestions is not None:
+		update_dict["enable_suggestions"] = int(enable_suggestions)
 
 	if not update_dict:
 		return {"status": "ok"}

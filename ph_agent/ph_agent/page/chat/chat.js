@@ -296,6 +296,23 @@ function initPhChat(container, page, $status) {
 	// Set up global function for creating new sessions (for backward compatibility)
 	window._phChatCreateSession = () => roomService.createNewSession();
 	
+	// ── beforeunload: delete active temporary session on page close ──
+	window.addEventListener("beforeunload", function () {
+		const activeRoomId = state.getActiveRoomId();
+		if (!activeRoomId) return;
+		const activeRoom = state.getRoomById(activeRoomId);
+		if (!activeRoom || !activeRoom.isTemporary) return;
+		
+		// Use sendBeacon — guaranteed delivery even when tab closes
+		const url = "/api/method/ph_agent.api.chat.delete_session";
+		const csrfToken = frappe.csrf_token;
+		const data = new URLSearchParams({ session: activeRoomId });
+		if (csrfToken) {
+			data.append("csrf_token", csrfToken);
+		}
+		navigator.sendBeacon(url, data);
+	});
+	
 	// ── Load initial rooms ──────────────────────────────────────────
 	roomService.loadRooms().then((rooms) => {
 		// Set initial active room if rooms exist

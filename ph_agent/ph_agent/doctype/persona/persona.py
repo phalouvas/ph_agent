@@ -23,15 +23,98 @@ class Persona(Document):
 	"""
 
 	def before_insert(self) -> None:
-		"""Auto-set user if not provided."""
+		"""Auto-set user and inherit common settings from the LLM Provider."""
 		if not self.user:
 			self.user = frappe.session.user
+		self._inherit_from_provider()
 
 	def validate(self) -> None:
 		"""Validate persona configuration."""
 		self._validate_temperature()
 		self._enforce_single_default()
 		self._warn_persona_count()
+		# Re-inherit from provider if the linked provider changed on an existing persona
+		if not self.is_new() and self.has_value_changed("default_llm_provider"):
+			self._inherit_from_provider()
+
+	# ------------------------------------------------------------------
+	# Provider inheritance
+	# ------------------------------------------------------------------
+
+	def _resolve_provider(self) -> dict | None:
+		"""Resolve the LLM Provider to inherit from.
+
+		Uses the persona's ``default_llm_provider`` if set, otherwise falls
+		back to the system default provider (``is_default=1, is_enabled=1``).
+
+		Returns:
+			A provider document dict, or None if no provider is found.
+		"""
+		provider_name = self.default_llm_provider
+		if not provider_name:
+			defaults = frappe.get_all(
+				"LLM Provider",
+				filters={"is_default": 1, "is_enabled": 1},
+				fields=["name", "temperature", "enable_thinking", "supports_streaming", "enable_suggestions", "system_prompt"],
+				limit=1,
+			)
+			if defaults:
+				return defaults[0]
+			return None
+
+		try:
+			doc = frappe.get_doc("LLM Provider", provider_name)
+			return {
+				"name": doc.name,
+				"temperature": doc.temperature,
+				"enable_thinking": doc.enable_thinking,
+				"supports_streaming": doc.supports_streaming,
+				"enable_suggestions": doc.enable_suggestions,
+				"system_prompt": doc.system_prompt,
+			}
+		except frappe.DoesNotExistError:
+			return None
+
+	def _inherit_from_provider(self) -> None:
+		"""Inherit common LLM settings from the resolved provider.
+
+		Only fields that are currently empty / falsy are overwritten.
+		Explicitly user-set values are always preserved.
+		"""
+		provider = self._resolve_provider()
+		if not provider:
+			return
+
+		# Link the provider if persona doesn't have one yet
+		if not self.default_llm_provider:
+			self.default_llm_provider = provider["name"]
+
+		# Temperature — only inherit if empty
+		if self.temperature is None or self.temperature == "":
+			if provider.get("temperature") is not None:
+				self.temperature = provider["temperature"]
+
+		# Thinking mode — only inherit if not explicitly enabled
+		if not self.enable_thinking:
+			self.enable_thinking = provider.get("enable_thinking", 0)
+
+		# Streaming — only inherit if not explicitly disabled
+		if not self.enable_streaming:
+			self.enable_streaming = provider.get("supports_streaming", 1)
+
+		# Suggestions — only inherit if not explicitly disabled
+		if not self.enable_suggestions:
+			self.enable_suggestions = provider.get("enable_suggestions", 1)
+
+		# System prompt — only inherit if empty
+		if not self.system_prompt:
+			provider_prompt = provider.get("system_prompt")
+			if provider_prompt:
+				self.system_prompt = provider_prompt
+
+	# ------------------------------------------------------------------
+	# Validation helpers
+	# ------------------------------------------------------------------
 
 	def _validate_temperature(self) -> None:
 		"""Ensure temperature is within valid range (0-1.5)."""

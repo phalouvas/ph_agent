@@ -313,7 +313,7 @@ All real-time events are delivered via Frappe's built-in WebSocket system.
 
 | Feature | Description |
 |---------|-------------|
-| **Dependencies** | `agent-framework`, `agent-framework-openai`, `markitdown[pdf,docx,pptx,xlsx,html]` |
+| **Dependencies** | `agent-framework`, `agent-framework-core`, `agent-framework-openai`, `markitdown[pdf,docx,pptx,xlsx,html]` |
 | **Installation Hook** | After migration, sample skills are seeded and the `private/files/skills/` directory is created |
 | **Cache Invalidation** | Tool and skill caches are automatically invalidated on DocType changes |
 | **CSS & JS Includes** | Chat UI styles and scripts are automatically loaded in the ERPNext desk |

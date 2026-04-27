@@ -24,6 +24,7 @@ A Frappe app that integrates agentic AI chatbots into ERPNext, enabling autonomo
 - Python 3.11+
 - A DeepSeek API key (or any OpenAI-compatible LLM provider)
 - `markitdown[pdf,docx,pptx,xlsx,html]` Python package (installed automatically via bench)
+- `agent-framework-core` Python package (installed automatically as a dependency of `agent-framework`)
 
 ### Installation
 

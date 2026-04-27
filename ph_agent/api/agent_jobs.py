@@ -1124,3 +1124,37 @@ def cancel_approvals_for_message(doc, method):
 			)
 	
 	frappe.db.commit()
+
+
+def cascade_delete_persona(doc, method):
+	"""
+	Cascade delete all dependent records when a Persona is deleted.
+
+	Deletes:
+	- All User Memory records belonging to this persona
+	- All Chat Sessions belonging to this persona (which cascade to messages, files, approvals)
+
+	This runs in on_trash, which is called BEFORE Frappe's link validation,
+	so we delete the dependent records first to allow the persona delete to proceed.
+
+	Called via doc_events hook: Persona > on_trash
+	"""
+	# Delete User Memory records for this persona (raw DB delete to bypass link validation)
+	frappe.db.delete("User Memory", {"persona": doc.name})
+
+	# Delete Chat Sessions for this persona — use frappe.delete_doc so cascade hooks fire
+	sessions = frappe.get_all(
+		"Chat Session",
+		filters={"persona": doc.name},
+		pluck="name",
+	)
+	for session_name in sessions:
+		try:
+			frappe.delete_doc("Chat Session", session_name, ignore_permissions=True, force=True)
+		except Exception as e:
+			frappe.log_error(
+				f"Failed to delete session {session_name} during persona cascade: {str(e)}",
+				"ph_agent_persona_cascade"
+			)
+
+	frappe.db.commit()

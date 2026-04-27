@@ -732,6 +732,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			"creation": str(agent_msg.creation),
 		},
 		doctype="Chat Session", docname=session,
+	)
 	session_doc = frappe.get_doc("Chat Session", session)
 	if session_doc.enable_suggestions:
 		frappe.enqueue(

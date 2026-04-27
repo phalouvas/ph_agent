@@ -465,15 +465,18 @@ def edit_message(message_id, content):
 		room="website",
 	)
 
+	# Show status immediately — before any DB queries — so the user sees
+	# "Calling AI…" as fast as possible after clicking edit.
+	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
+	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
+	_emit_status(session, frappe._("Calling AI…"))
+
 	# Re-enqueue the agent with the updated content
 	file_names = frappe.get_all(
 		"File",
 		filters={"attached_to_doctype": "Chat Message", "attached_to_name": message_id},
 		pluck="name",
 	)
-	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
-	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
-	_emit_status(session, frappe._("Calling AI…"))
 
 	job = frappe.enqueue(
 		"ph_agent.api.agent_jobs._call_agent_background",

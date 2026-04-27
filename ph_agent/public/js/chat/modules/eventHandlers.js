@@ -518,6 +518,13 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const state = window.phAgent.state;
             state.setIsProcessing(true);
             
+            // Reset response-completed flag so the placeholder new_message
+            // handler correctly sets isProcessing(true) if needed.
+            const realtimeListeners = window.phAgent.realtimeListeners;
+            if (realtimeListeners && realtimeListeners.resetResponseState) {
+                realtimeListeners.resetResponseState();
+            }
+            
             frappe.call({
                 method: "ph_agent.api.chat.edit_message",
                 args: { message_id: messageId, content: newContent },

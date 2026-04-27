@@ -15,6 +15,7 @@
   "enable_suggestions",
   "enable_streaming",
   "enable_thinking",
+  "is_temporary",
   "column_break_1",
   "input_tokens",
   "output_tokens",
@@ -103,6 +104,13 @@
    "fieldname": "enable_thinking",
    "fieldtype": "Check",
    "label": "Override Thinking Mode"
+  },
+  {
+   "default": "0",
+   "description": "Temporary session — auto-deleted when you navigate away. Messages, memories, and tool approvals are removed on deletion.",
+   "fieldname": "is_temporary",
+   "fieldtype": "Check",
+   "label": "Temporary Session"
   },
   {
    "fieldname": "column_break_1",

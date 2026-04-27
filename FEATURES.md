@@ -13,6 +13,7 @@ PH Agent is a Frappe app that integrates agentic AI chatbots into ERPNext, enabl
 - [5. Skills System](#5-skills-system)
 - [6. Memory & Context Providers](#6-memory--context-providers)
 - [7. Conversation Management](#7-conversation-management)
+  - [Temporary Sessions](#temporary-sessions)
 - [8. File Handling](#8-file-handling)
 - [9. Token Management & Auto-Summarization](#9-token-management--auto-summarization)
 - [10. Tool Approval Workflow](#10-tool-approval-workflow)
@@ -192,6 +193,20 @@ Full session and message management capabilities.
 | **Message Regeneration** | Regenerate agent responses with a single click — the message stays in place with a spinner |
 | **Conversation Summarization** | Manually trigger summarization of selected or all messages in a session |
 | **Session State Recovery** | Full agent state is persisted and restored, enabling seamless continuation after page reloads |
+| **Temporary Sessions** | Toggle a session as temporary with the 👻 button — it will be auto-deleted when you navigate away, switch rooms, or close the tab. An hourly scheduled job cleans up any orphaned temporary sessions. Messages, memories, and tool approvals are all cascade-deleted. |
+
+### Temporary Sessions
+
+Temporary sessions behave identically to normal sessions during their lifetime — messages are saved, memories are extracted, and all features work as expected. The difference is purely a cleanup concern:
+
+| Aspect | Behavior |
+|--------|----------|
+| **Toggle** | Click the 👻 button in the page actions to mark the current session as temporary or permanent |
+| **Auto-Delete on Navigation** | Switching to another room or creating a new chat automatically deletes the previous temporary session |
+| **Auto-Delete on Tab Close** | Closing the browser tab fires a `sendBeacon` request to delete the active temporary session |
+| **Hourly Cleanup** | A scheduled job deletes any temporary sessions older than 1 hour (safety net for browser crashes) |
+| **Cascade Deletion** | Deleting a temporary session removes all its messages, attached files, user memories, and tool approval requests |
+| **Cross-Session Context** | Temporary session summaries are excluded from cross-session context injection into new sessions |
 
 ---
 

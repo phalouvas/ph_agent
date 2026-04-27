@@ -51,7 +51,7 @@ def _get_recent_session_context(user: str, persona: str | None = None, limit: in
 		sessions with summaries are found.
 	"""
 	try:
-		filters: dict[str, Any] = {"user": user, "status": ["in", ["Open", "Closed"]]}
+		filters: dict[str, Any] = {"user": user, "status": ["in", ["Open", "Closed"]], "is_temporary": 0}
 		if persona:
 			filters["persona"] = persona
 		sessions = frappe.get_all(
@@ -143,12 +143,13 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 
 
 @frappe.whitelist()
-def create_session(provider_name=None, persona=None):
+def create_session(provider_name=None, persona=None, is_temporary=0):
 	"""Create a new Chat Session. Uses default LLM Provider if provider_name not specified.
 
 	Args:
 		provider_name: Optional LLM Provider name. Uses default if not specified.
 		persona: Optional Persona name to associate with this session.
+		is_temporary: If 1, marks the session as temporary (auto-deleted on navigation).
 	"""
 	if not provider_name:
 		default = frappe.get_list(
@@ -183,6 +184,8 @@ def create_session(provider_name=None, persona=None):
 		if persona_user != frappe.session.user:
 			frappe.throw(frappe._("Persona {0} does not belong to you.").format(persona))
 
+	is_temporary = int(is_temporary)
+
 	session = frappe.get_doc(
 		{
 			"doctype": "Chat Session",
@@ -191,6 +194,7 @@ def create_session(provider_name=None, persona=None):
 			"user": frappe.session.user,
 			"llm_provider": provider_name,
 			"status": "Open",
+			"is_temporary": is_temporary,
 		}
 	)
 	session.insert(ignore_permissions=False)
@@ -210,7 +214,7 @@ def create_session(provider_name=None, persona=None):
 		frappe.db.set_value("Chat Session", session.name, "system_prompt", context_block)
 		frappe.db.commit()
 
-	return {"session": session.name, "title": session.title, "llm_provider": session.llm_provider}
+	return {"session": session.name, "title": session.title, "llm_provider": session.llm_provider, "is_temporary": is_temporary}
 
 
 @frappe.whitelist()
@@ -357,19 +361,42 @@ def get_history(session):
 
 @frappe.whitelist()
 def delete_session(session):
-	"""Delete a Chat Session and all its messages."""
+	"""Delete a Chat Session and all its messages.
+
+	For temporary sessions, this is called automatically when the user
+	navigates away. The function:
+	1. Cancels any running background job for this session
+	2. Clears User Memory references (source_message, source_session)
+	3. Clears Tool Approval Request references (chat_message, chat_session)
+	4. Clears the session's last_summary_message link
+	5. Deletes all Chat Messages (cascade deletes attached files)
+	6. Deletes the Chat Session itself
+	"""
 	frappe.has_permission("Chat Session", ptype="delete", doc=session, throw=True)
-	
-	# Get all messages in this session
+
+	# 1. Cancel any running background job for this session
+	job_id = frappe.cache().get_value(f"ph_agent:job:{session}")
+	if job_id:
+		try:
+			from frappe.utils.background_jobs import get_redis_conn
+			from rq.command import send_stop_job_command
+			jid = job_id.decode() if isinstance(job_id, bytes) else job_id
+			send_stop_job_command(connection=get_redis_conn(), job_id=jid)
+		except Exception:
+			pass  # Best-effort
+		frappe.cache().delete_value(f"ph_agent:job:{session}")
+	# Release the per-session processing lock and set cancel flag
+	frappe.cache().delete_value(f"ph_agent:lock:{session}")
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+
+	# 2. Get all messages in this session
 	messages = frappe.get_all(
 		"Chat Message",
 		filters={"chat_session": session},
 		pluck="name",
 	)
 	
-	# Before deleting messages, clear User Memory references to them
-	# to avoid LinkExistsError (User Memory.source_message/source_session
-	# link to Chat Message and Chat Session respectively)
+	# 3. Clear User Memory references to avoid LinkExistsError
 	for message_id in messages:
 		frappe.db.set_value(
 			"User Memory",
@@ -377,30 +404,43 @@ def delete_session(session):
 			"source_message",
 			None,
 		)
-	# Also clear User Memory source_session references to this session
 	frappe.db.set_value(
 		"User Memory",
 		{"source_session": session},
 		"source_session",
 		None,
 	)
-	# Clear the session's last_summary_message reference to prevent link
-	# validation from blocking deletion of the referenced Chat Message
+
+	# 4. Clear Tool Approval Request references to avoid link validation errors
+	frappe.db.set_value(
+		"Tool Approval Request",
+		{"chat_session": session},
+		"chat_session",
+		None,
+	)
+	for message_id in messages:
+		frappe.db.set_value(
+			"Tool Approval Request",
+			{"chat_message": message_id},
+			"chat_message",
+			None,
+		)
+
+	# 5. Clear the session's last_summary_message reference
 	frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 	frappe.db.commit()
 	
-	# Delete each message individually (triggers on_trash hook which deletes attached files)
+	# 6. Delete each message individually (triggers on_trash hook which deletes attached files)
 	for message_id in messages:
 		try:
 			frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)
 		except Exception as e:
-			# Log error but continue with other messages
 			frappe.log_error(
 				f"Failed to delete message {message_id} in session {session}: {str(e)}",
 				"ph_agent_session_deletion"
 			)
 	
-	# Delete the session
+	# 7. Delete the session
 	frappe.delete_doc("Chat Session", session, ignore_permissions=False)
 	frappe.db.commit()
 	return {"status": "ok"}

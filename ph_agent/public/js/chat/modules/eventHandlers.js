@@ -93,6 +93,16 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const roomService = window.phAgent.roomService;
             const utils = window.phAgent.utils;
             
+            // Fire-and-forget delete the previous temporary session if switching rooms
+            const prevRoomId = state.getActiveRoomId();
+            if (prevRoomId && prevRoomId !== room.roomId) {
+                const prevRoom = state.getRoomById(prevRoomId);
+                if (prevRoom && prevRoom.isTemporary) {
+                    roomService.deleteRoom(prevRoomId).catch(() => {});
+                    state.removeRoom(prevRoomId);
+                }
+            }
+            
             // Update state
             state.setActiveRoomId(room.roomId);
             // Also update realtime listeners with the new active room
@@ -100,6 +110,11 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 window.phAgent.realtimeListeners.setActiveRoomId(room.roomId);
             }
             state.clearMessageSuggestions(); // Clear suggestions when switching rooms
+            
+            // Sync the temporary mode toggle button with the current room
+            if (window._phSyncTempModeButton) {
+                window._phSyncTempModeButton(!!room.isTemporary);
+            }
             
             // When switching away from a room that's mid-generation, the
             // agent_status("") event from the old room will be filtered out

@@ -54,7 +54,7 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
             return frappe.db
                 .get_list("Chat Session", {
                     filters: filters,
-                    fields: ["name", "title", "modified", "llm_provider"],
+                    fields: ["name", "title", "modified", "llm_provider", "is_temporary"],
                     order_by: "modified desc",
                     limit: 50,
                 })
@@ -64,9 +64,15 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                         // Update room provider in state
                         state.setRoomProvider(s.name, s.llm_provider);
                         
+                        let roomName = s.title + " — " + s.llm_provider;
+                        if (s.is_temporary) {
+                            roomName = "👻 " + roomName + " (Temporary)";
+                        }
+                        
                         return {
                             roomId: s.name,
-                            roomName: s.title + " — " + s.llm_provider,
+                            roomName: roomName,
+                            isTemporary: !!s.is_temporary,
                             users: [
                                 { _id: _currentUserId, username: frappe.boot.user.full_name || _currentUserId },
                                 { _id: _agentId, username: "AI Agent" },
@@ -96,10 +102,29 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
          */
         createNewSession: function() {
             return new Promise((resolve, reject) => {
-                const activePersona = window.phAgent.state.getActivePersona();
+                const state = window.phAgent.state;
+                const activePersona = state.getActivePersona();
+                
+                // New sessions are always non-temporary by default.
+                // The toggle button only updates the *current* session's is_temporary flag.
+                const isTemporary = false;
+                
+                // Fire-and-forget delete the previous temporary session if any
+                const prevRoomId = state.getActiveRoomId();
+                if (prevRoomId) {
+                    const prevRoom = state.getRoomById(prevRoomId);
+                    if (prevRoom && prevRoom.isTemporary) {
+                        this.deleteRoom(prevRoomId).catch(() => {});
+                        state.removeRoom(prevRoomId);
+                    }
+                }
+                
                 const args = {};
                 if (activePersona) {
                     args.persona = activePersona;
+                }
+                if (isTemporary) {
+                    args.is_temporary = 1;
                 }
                 
                 frappe.call({
@@ -111,15 +136,20 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                             return;
                         }
                         
-                        const state = window.phAgent.state;
                         const session = r.message;
                         
                         // Update state
                         state.setRoomProvider(session.session, session.llm_provider);
                         
+                        let roomName = session.title + " — " + session.llm_provider;
+                        if (session.is_temporary) {
+                            roomName = "👻 " + roomName + " (Temporary)";
+                        }
+                        
                         const newRoom = {
                             roomId: session.session,
-                            roomName: session.title + " — " + session.llm_provider,
+                            roomName: roomName,
+                            isTemporary: !!session.is_temporary,
                             users: [
                                 { _id: _currentUserId, username: frappe.boot.user.full_name || _currentUserId },
                                 { _id: _agentId, username: "AI Agent" },
@@ -136,6 +166,10 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                         
                         // Set as active room and trigger message loading
                         state.setActiveRoomId(session.session);
+                        // Sync the temporary mode button with the new session
+                        if (window._phSyncTempModeButton) {
+                            window._phSyncTempModeButton(!!session.is_temporary);
+                        }
                         // Also update realtime listeners with the new active room
                         if (window.phAgent.realtimeListeners) {
                             window.phAgent.realtimeListeners.setActiveRoomId(session.session);

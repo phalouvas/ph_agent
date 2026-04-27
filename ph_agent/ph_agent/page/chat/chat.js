@@ -89,6 +89,70 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		}
 	}, "add");
 
+	// ── Temporary Mode Toggle ───────────────────────────────────────
+	const tempBtn = $(`
+		<button class="btn btn-default btn-sm btn-temp-mode" style="margin-left: 8px; font-size: 12px; padding: 2px 8px; height: 28px;" title="${__("Toggle Temporary (Incognito) Mode")}">
+			👻 <span>${__("Temporary")}</span>
+		</button>
+	`);
+	tempBtn.on("click", function () {
+		const state = window.phAgent?.state;
+		if (!state) return;
+		const activeRoomId = state.getActiveRoomId();
+		if (!activeRoomId) {
+			frappe.show_alert({
+				message: __("No active session to toggle"),
+				indicator: "orange"
+			});
+			return;
+		}
+		
+		const room = state.getRoomById(activeRoomId);
+		const newMode = !(room && room.isTemporary);
+		
+		frappe.call({
+			method: "frappe.client.set_value",
+			args: {
+				doctype: "Chat Session",
+				name: activeRoomId,
+				fieldname: "is_temporary",
+				value: newMode ? 1 : 0,
+			},
+			callback: function(r) {
+				if (r.message) {
+					// Update the room object in local state
+					const updatedRoom = state.getRoomById(activeRoomId);
+					if (updatedRoom) {
+						updatedRoom.isTemporary = newMode;
+						// Update room name with/without 👻 badge
+						if (newMode && !updatedRoom.roomName.startsWith("👻")) {
+							updatedRoom.roomName = "👻 " + updatedRoom.roomName + " (Temporary)";
+						} else if (!newMode) {
+							updatedRoom.roomName = updatedRoom.roomName.replace(/^👻 /, "").replace(" (Temporary)", "");
+						}
+						state.updateRoom(activeRoomId, { roomName: updatedRoom.roomName });
+						const chat = document.querySelector("vue-advanced-chat");
+						if (chat) chat.rooms = state.getRooms();
+					}
+					// Sync the button
+					if (window._phSyncTempModeButton) {
+						window._phSyncTempModeButton(newMode);
+					}
+					frappe.show_alert({
+						message: newMode ? __("Current session marked as temporary — will be deleted on navigation") : __("Current session is no longer temporary"),
+						indicator: newMode ? "orange" : "green"
+					});
+				}
+			}
+		});
+	});
+	// Initialize button state from persisted preference
+	if (window.phAgent?.state?.getIsTemporaryMode?.()) {
+		tempBtn.removeClass("btn-default").addClass("btn-info");
+		tempBtn.find("span").text(__("Temporary ON"));
+	}
+	$(page.page_actions).find(".btn-primary").after(tempBtn);
+
 	// Add summary button as a custom button in the page actions area
 	// First, let's add it manually to the page actions container
 	
@@ -239,6 +303,20 @@ function initPhChat(container, page, $status) {
 
 	// ── Create Vue Advanced Chat web component ──────────────────────
 	const chat = document.createElement("vue-advanced-chat");
+
+	// ── Temporary mode button sync helper ───────────────────────────
+	// Exposed globally so eventHandlers can call it on room switch.
+	window._phSyncTempModeButton = function(isTemporary) {
+		const $btn = $(".page-actions .btn-temp-mode");
+		if (!$btn.length) return;
+		if (isTemporary) {
+			$btn.removeClass("btn-default").addClass("btn-info");
+			$btn.find("span").text(__("Temporary ON"));
+		} else {
+			$btn.removeClass("btn-info").addClass("btn-default");
+			$btn.find("span").text(__("Temporary"));
+		}
+	};
 	chat.setAttribute("height", "100%");
 	chat.setAttribute("current-user-id", currentUserId);
 	chat.setAttribute("show-audio", "false");
@@ -295,6 +373,23 @@ function initPhChat(container, page, $status) {
 	
 	// Set up global function for creating new sessions (for backward compatibility)
 	window._phChatCreateSession = () => roomService.createNewSession();
+	
+	// ── beforeunload: delete active temporary session on page close ──
+	window.addEventListener("beforeunload", function () {
+		const activeRoomId = state.getActiveRoomId();
+		if (!activeRoomId) return;
+		const activeRoom = state.getRoomById(activeRoomId);
+		if (!activeRoom || !activeRoom.isTemporary) return;
+		
+		// Use sendBeacon — guaranteed delivery even when tab closes
+		const url = "/api/method/ph_agent.api.chat.delete_session";
+		const csrfToken = frappe.csrf_token;
+		const data = new URLSearchParams({ session: activeRoomId });
+		if (csrfToken) {
+			data.append("csrf_token", csrfToken);
+		}
+		navigator.sendBeacon(url, data);
+	});
 	
 	// ── Load initial rooms ──────────────────────────────────────────
 	roomService.loadRooms().then((rooms) => {

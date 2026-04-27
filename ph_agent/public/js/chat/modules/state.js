@@ -15,6 +15,7 @@ window.phAgent.state = window.phAgent.state || (function() {
     let roomProviders = {}; // roomId -> llm_provider
     let isProcessing = false;
     let messageSuggestions = {}; // messageId -> suggestions[]
+    let isTemporaryMode = localStorage.getItem("ph_agent_temp_mode") === "true";
     
     // Public API
     return {
@@ -45,6 +46,10 @@ window.phAgent.state = window.phAgent.state || (function() {
         
         getIsProcessing: function() {
             return isProcessing;
+        },
+        
+        getIsTemporaryMode: function() {
+            return isTemporaryMode;
         },
         
         getMessageSuggestions: function(messageId) {
@@ -82,6 +87,11 @@ window.phAgent.state = window.phAgent.state || (function() {
             if (uiHelpers) {
                 uiHelpers.setProcessing(processing);
             }
+        },
+        
+        setIsTemporaryMode: function(mode) {
+            isTemporaryMode = !!mode;
+            localStorage.setItem("ph_agent_temp_mode", isTemporaryMode ? "true" : "false");
         },
         
         // --- Mutation methods ---

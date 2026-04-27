@@ -160,23 +160,11 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"ph_agent.tasks.all"
-# 	],
-# 	"daily": [
-# 		"ph_agent.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"ph_agent.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"ph_agent.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"ph_agent.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"hourly": [
+		"ph_agent.ph_agent.tasks.cleanup_temporary_sessions"
+	],
+}
 
 # Testing
 # -------

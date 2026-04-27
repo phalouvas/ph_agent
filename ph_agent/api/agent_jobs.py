@@ -665,6 +665,38 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		room="website",
 	)
 	
+	# Release lock, clear the status indicator and deliver the reply immediately.
+	# Non-essential post-processing (token warning, auto-compaction, auto-title)
+	# follows below so the user can see the response and send a new message
+	# without waiting for those operations.
+	release_lock()
+	emit_status("")
+	
+	# Publish the final message content (with reasoning block if applicable)
+	frappe.publish_realtime(
+		event="new_message",
+		message={
+			"session": session,
+			"name": agent_msg.name,
+			"sender_type": "Agent",
+			"content": agent_msg.content,
+			"creation": str(agent_msg.creation),
+		},
+		room="website",
+	)
+	session_doc = frappe.get_doc("Chat Session", session)
+	if session_doc.enable_suggestions:
+		frappe.enqueue(
+			"ph_agent.api.agent_jobs._generate_suggestions_background",
+			session=session,
+			agent_message_id=agent_msg.name,
+			enqueued_by=enqueued_by,
+			queue="short",
+			timeout=120,
+		)
+	
+	# --- Non-essential post-processing (runs after response is delivered) ---
+	
 	# Send warning if over 75% and warning hasn't been sent yet
 	if token_percentage > 75 and not frappe.db.get_value("Chat Session", session, "token_warning_sent"):
 		# Publish warning event
@@ -716,33 +748,6 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					message={"session": session, "title": new_title},
 				room="website",
 			)
-
-	# Release lock, clear the status indicator and deliver the reply
-	release_lock()
-	emit_status("")
-	
-	# Publish the final message content (with reasoning block if applicable)
-	frappe.publish_realtime(
-		event="new_message",
-		message={
-			"session": session,
-			"name": agent_msg.name,
-			"sender_type": "Agent",
-			"content": agent_msg.content,
-			"creation": str(agent_msg.creation),
-		},
-		room="website",
-	)
-	session_doc = frappe.get_doc("Chat Session", session)
-	if session_doc.enable_suggestions:
-		frappe.enqueue(
-			"ph_agent.api.agent_jobs._generate_suggestions_background",
-			session=session,
-			agent_message_id=agent_msg.name,
-			enqueued_by=enqueued_by,
-			queue="short",
-			timeout=120,
-		)
 
 
 def _generate_suggestions_background(session, agent_message_id, enqueued_by):

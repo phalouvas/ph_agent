@@ -74,6 +74,14 @@ window.phAgent.state = window.phAgent.state || (function() {
         
         setIsProcessing: function(processing) {
             isProcessing = processing;
+            // Sync the stop button visibility with the processing flag.
+            // This is the single source of truth — the stop button should
+            // be visible whenever a generation is in progress, regardless
+            // of whether status text is currently displayed.
+            const uiHelpers = window.phAgent.uiHelpers;
+            if (uiHelpers) {
+                uiHelpers.setProcessing(processing);
+            }
         },
         
         // --- Mutation methods ---

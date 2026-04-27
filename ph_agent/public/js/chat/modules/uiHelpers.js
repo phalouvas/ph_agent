@@ -367,7 +367,11 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
         setStatus: function(text) {
             _$status.find(".ph-status-text").text(text || "");
             _$status.find(".ph-status-spinner").css("display", text ? "inline-block" : "none");
-            this.setProcessing(!!text);
+            // Do NOT call setProcessing here — the stop button visibility is
+            // controlled by the isProcessing flag (set via setIsProcessing),
+            // not by whether status text is present.  Otherwise clearing the
+            // status text after response completion would hide the stop button
+            // before the user can click it.
         },
         
         // --- Clipboard Operations ---

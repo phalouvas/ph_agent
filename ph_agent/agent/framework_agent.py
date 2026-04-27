@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import frappe
+
 from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMemoryHistoryProvider, Message
 from agent_framework_openai import OpenAIChatCompletionClient
 from agent_framework import SkillsProvider
@@ -352,11 +353,6 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 			data = json.loads(session_doc.session_state)
 			# Restore full AgentSession with proper object deserialization
 			restored = AgentSession.from_dict(data)
-			logger.debug(
-				"Loaded session state for %s (%d keys in state)",
-				session_name,
-				len(restored.state),
-			)
 			return restored.state
 		return {}
 	except Exception as e:

@@ -29,15 +29,17 @@ def _get_users_with_data() -> set[str]:
 
     session_users = frappe.get_all(
         "Chat Session",
-        fields=["distinct user"],
+        fields=["user"],
         pluck="user",
+        distinct=True,
     )
     users.update(session_users)
 
     memory_users = frappe.get_all(
         "User Memory",
-        fields=["distinct user"],
+        fields=["user"],
         pluck="user",
+        distinct=True,
     )
     users.update(memory_users)
 

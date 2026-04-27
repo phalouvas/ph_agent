@@ -6,7 +6,7 @@ def _emit_status(session, message):
 	frappe.publish_realtime(
 		event="agent_status",
 		message={"session": session, "status": message},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 
 
@@ -300,7 +300,7 @@ def cancel_generation(session):
 	frappe.publish_realtime(
 		event="generation_cancelled",
 		message={"session": session},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 
 	return {"status": "cancelled"}
@@ -432,7 +432,7 @@ def edit_message(message_id, content):
 			"is_edited": True,
 			"deleted_ids": deleted_ids,
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 
 	# Re-enqueue the agent with the updated content
@@ -575,7 +575,7 @@ def summarize_conversation(session, message_ids=None):
 			"context_length": context_length,
 			"percentage": 0,
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	
 	# Publish realtime event for new summary message
@@ -589,7 +589,7 @@ def summarize_conversation(session, message_ids=None):
 			"content": "*📋 Summary*\n\n" + summary,
 			"creation": str(summary_msg.creation),
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	
 	return {"status": "success", "summary_message_id": summary_msg.name}
@@ -629,7 +629,7 @@ def delete_message(message_id):
 	frappe.publish_realtime(
 		event="message_deleted",
 		message={"session": session, "message_id": message_id},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	return {"status": "ok"}
 
@@ -674,7 +674,7 @@ def delete_messages(message_ids):
 		frappe.publish_realtime(
 			event="messages_deleted",
 			message={"session": session, "message_ids": deleted_by_session[session]},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 	return {"status": "ok"}
 

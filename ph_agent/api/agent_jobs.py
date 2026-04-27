@@ -136,7 +136,7 @@ def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
 				"context_length": context_length,
 				"percentage": 0,
 			},
-			doctype="Chat Session", docname=session,
+room="website",
 		)
 
 	return deleted_count
@@ -254,7 +254,7 @@ def _perform_auto_summary(session: str, enqueued_by: str | None = None,
 				"context_length": context_length,
 				"percentage": 0,
 			},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 
 		frappe.publish_realtime(
@@ -267,7 +267,7 @@ def _perform_auto_summary(session: str, enqueued_by: str | None = None,
 				"content": "*📋 Summary*\n\n" + summary,
 				"creation": str(summary_msg.creation),
 			},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 
 	return True
@@ -283,7 +283,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		frappe.publish_realtime(
 			event="agent_status",
 			message={"session": session, "status": msg},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 
 	lock_key = f"ph_agent:lock:{session}"
@@ -303,7 +303,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		frappe.publish_realtime(
 			event="generation_cancelled",
 			message={"session": session},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 		return
 
@@ -324,7 +324,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				frappe.publish_realtime(
 					event="generation_cancelled",
 					message={"session": session},
-					doctype="Chat Session", docname=session,
+					room="website",
 				)
 				return
 			# Get max file size from provider settings
@@ -380,7 +380,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	frappe.publish_realtime(
 		event="new_message",
 		message=placeholder_payload,
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	# Track whether auto-summary ran in pre-call phase
 	_auto_summary_performed = False
@@ -448,7 +448,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 								"message_id": agent_msg.name,
 								"chunk": reasoning_delta,
 							},
-							doctype="Chat Session", docname=session,
+							room="website",
 						)
 					else:
 						# Content chunk
@@ -462,7 +462,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 								"chunk": chunk,
 								"is_final": False
 							},
-							doctype="Chat Session", docname=session,
+							room="website",
 						)
 				
 				if approval_data:
@@ -574,7 +574,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		frappe.publish_realtime(
 			event="generation_cancelled",
 			message={"session": session},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 		return
 	except frappe.exceptions.ValidationError as e:
@@ -598,7 +598,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			frappe.publish_realtime(
 				event="new_message",
 				message=error_payload,
-				doctype="Chat Session", docname=session,
+				room="website",
 			)
 		else:
 			# Fallback if placeholder doesn't exist
@@ -626,7 +626,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			frappe.publish_realtime(
 				event="new_message",
 				message=error_payload,
-				doctype="Chat Session", docname=session,
+				room="website",
 			)
 		return
 
@@ -662,7 +662,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			"context_length": context_length,
 			"percentage": round(token_percentage, 1),
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	
 	# Send warning if over 75% and warning hasn't been sent yet
@@ -677,7 +677,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				"percentage": round(token_percentage, 1),
 				"message": f"Conversation is using {round(token_percentage, 1)}% of context window ({current_tokens:,}/{context_length:,} tokens). Consider summarizing the conversation."
 			},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 		
 		# Mark warning as sent
@@ -714,7 +714,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				frappe.publish_realtime(
 					event="session_renamed",
 					message={"session": session, "title": new_title},
-				doctype="Chat Session", docname=session,
+				room="website",
 			)
 
 	# Release lock, clear the status indicator and deliver the reply
@@ -731,7 +731,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			"content": agent_msg.content,
 			"creation": str(agent_msg.creation),
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	session_doc = frappe.get_doc("Chat Session", session)
 	if session_doc.enable_suggestions:
@@ -774,7 +774,7 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 				"message_id": agent_message_id,
 				"suggestions": suggestions,
 			},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 	except Exception:
 		frappe.log_error(
@@ -829,7 +829,7 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 			"content": "🔐 Waiting for approval...",
 			"creation": str(agent_msg.creation),
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 	
 	# Create Tool Approval Request document
@@ -870,7 +870,7 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 				indent=2,
 			),
 		},
-		doctype="Chat Session", docname=session,
+		room="website",
 	)
 
 def _execute_approved_tool(approval_name):
@@ -947,7 +947,7 @@ def _execute_approved_tool(approval_name):
 					"content": "✅ Tool approved and executed. See below for the response.",
 					"creation": str(placeholder_msg.creation),
 				},
-				doctype="Chat Session", docname=session,
+				room="website",
 			)
 		
 		# Publish the new agent message
@@ -960,7 +960,7 @@ def _execute_approved_tool(approval_name):
 				"content": reply,
 				"creation": str(agent_msg.creation),
 			},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 		
 		# Publish approval_resolved event
@@ -972,7 +972,7 @@ def _execute_approved_tool(approval_name):
 				"status": "Approved",
 				"tool_name": approval_doc.tool_name,
 			},
-			doctype="Chat Session", docname=session,
+			room="website",
 		)
 		
 		# Update token counts on session

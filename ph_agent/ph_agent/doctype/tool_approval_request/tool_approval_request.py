@@ -106,7 +106,7 @@ class ToolApprovalRequest(Document):
 				"content": rejection_content,
 				"creation": str(rejection_msg.creation),
 			},
-			doctype="Chat Session", docname=self.chat_session,
+			room="website",
 		)
 
 		# Also publish approval_resolved event
@@ -119,5 +119,5 @@ class ToolApprovalRequest(Document):
 				"tool_name": self.tool_name,
 				"reason": self.rejection_reason or "",
 			},
-			doctype="Chat Session", docname=self.chat_session,
+			room="website",
 		)

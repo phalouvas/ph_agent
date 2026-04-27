@@ -111,6 +111,11 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             }
             state.clearMessageSuggestions(); // Clear suggestions when switching rooms
             
+            // Sync the temporary mode toggle button with the current room
+            if (window._phSyncTempModeButton) {
+                window._phSyncTempModeButton(!!room.isTemporary);
+            }
+            
             // When switching away from a room that's mid-generation, the
             // agent_status("") event from the old room will be filtered out
             // (data.session !== _activeRoomId).  Clear the status bar and

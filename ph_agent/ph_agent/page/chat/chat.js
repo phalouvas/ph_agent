@@ -302,6 +302,20 @@ function initPhChat(container, page, $status) {
 
 	// ── Create Vue Advanced Chat web component ──────────────────────
 	const chat = document.createElement("vue-advanced-chat");
+
+	// ── Temporary mode button sync helper ───────────────────────────
+	// Exposed globally so eventHandlers can call it on room switch.
+	window._phSyncTempModeButton = function(isTemporary) {
+		const $btn = $(".page-actions .btn-temp-mode");
+		if (!$btn.length) return;
+		if (isTemporary) {
+			$btn.removeClass("btn-default").addClass("btn-info");
+			$btn.find("span").text(__("Temporary ON"));
+		} else {
+			$btn.removeClass("btn-info").addClass("btn-default");
+			$btn.find("span").text(__("Temporary"));
+		}
+	};
 	chat.setAttribute("height", "100%");
 	chat.setAttribute("current-user-id", currentUserId);
 	chat.setAttribute("show-audio", "false");

@@ -163,6 +163,10 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                         
                         // Set as active room and trigger message loading
                         state.setActiveRoomId(session.session);
+                        // Sync the temporary mode button with the new session
+                        if (window._phSyncTempModeButton) {
+                            window._phSyncTempModeButton(!!session.is_temporary);
+                        }
                         // Also update realtime listeners with the new active room
                         if (window.phAgent.realtimeListeners) {
                             window.phAgent.realtimeListeners.setActiveRoomId(session.session);

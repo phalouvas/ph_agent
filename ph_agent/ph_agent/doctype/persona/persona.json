@@ -32,6 +32,7 @@
    "reqd": 1
   },
   {
+   "default": "__user",
    "fieldname": "user",
    "fieldtype": "Link",
    "in_list_view": 1,

@@ -14,6 +14,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
     let _$stopBtn = null;
     let _activeRoomId = null;
     let _agentId = null;
+    let _responseCompleted = false;  // Tracks whether the current response has finished
     
     // Public API
     return {
@@ -80,6 +81,14 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.on("token_warning", this.handleTokenWarning.bind(this));
             frappe.realtime.on("approval_needed", this.handleApprovalNeeded.bind(this));
             frappe.realtime.on("approval_resolved", this.handleApprovalResolved.bind(this));
+        },
+        
+        /**
+         * Reset response-completed flag when starting a new generation.
+         * Called from eventHandlers before sending a new message.
+         */
+        resetResponseState: function() {
+            _responseCompleted = false;
         },
         
         /**
@@ -175,6 +184,10 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             uiHelpers.setStatus(data.status || "");
             
             if (!data.status) {
+                // Mark response as completed — prevents late-arriving placeholder
+                // new_message events from re-setting isProcessing(true).
+                _responseCompleted = true;
+                
                 // Clear typing indicator when status is cleared
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
@@ -211,6 +224,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             // Update status
             uiHelpers.setStatus(__("Generation stopped"));
             state.setIsProcessing(false);
+            _responseCompleted = true;
             
             // Clear status after delay
             setTimeout(() => uiHelpers.setStatus(""), 2000);
@@ -347,8 +361,13 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 state.setRooms(rooms);
                 _chat.rooms = rooms;
                 
-                // Keep processing state active (stop button should remain visible)
-                state.setIsProcessing(true);
+                // Only set processing state if the response hasn't already completed.
+                // Due to async Redis pub/sub, the placeholder new_message event can
+                // arrive AFTER agent_status("") — without this guard it would
+                // re-enable the processing lock and trap the user.
+                if (!_responseCompleted) {
+                    state.setIsProcessing(true);
+                }
             } else {
                 // For final/regular messages (with actual content), clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>

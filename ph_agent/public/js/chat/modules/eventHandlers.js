@@ -189,6 +189,13 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             // Set processing state
             state.setIsProcessing(true);
             
+            // Reset response-completed flag so realtime listeners handle
+            // the new generation's placeholder correctly
+            const realtimeListeners = window.phAgent.realtimeListeners;
+            if (realtimeListeners && realtimeListeners.resetResponseState) {
+                realtimeListeners.resetResponseState();
+            }
+            
             // Clear all existing suggestions
             state.clearMessageSuggestions();
             const root = _chat.shadowRoot || _container;

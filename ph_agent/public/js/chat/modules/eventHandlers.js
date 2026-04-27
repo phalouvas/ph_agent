@@ -101,6 +101,17 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             }
             state.clearMessageSuggestions(); // Clear suggestions when switching rooms
             
+            // When switching away from a room that's mid-generation, the
+            // agent_status("") event from the old room will be filtered out
+            // (data.session !== _activeRoomId).  Clear the status bar and
+            // processing flag here so the "Calling AI…" indicator doesn't
+            // persist forever on the new room.
+            window.phAgent.uiHelpers.setStatus("");
+            state.setIsProcessing(false);
+            if (window.phAgent.realtimeListeners && window.phAgent.realtimeListeners.resetResponseState) {
+                window.phAgent.realtimeListeners.resetResponseState();
+            }
+            
             _chat.setAttribute("messages-loaded", "false");
             
             // Load token information for this session

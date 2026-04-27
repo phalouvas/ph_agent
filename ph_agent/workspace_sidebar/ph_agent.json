@@ -124,9 +124,21 @@
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "person-standing",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Persona",
+   "link_to": "Persona",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-04-25 07:37:17.304615",
+ "modified": "2026-04-27 09:26:07.838860",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

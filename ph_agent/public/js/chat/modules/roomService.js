@@ -22,16 +22,19 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
          * @param {string} currentUserId - Current user ID
          * @param {string} agentId - Agent ID (default: "ph_agent")
          */
-        init: function(chat, currentUserId, agentId = "ph_agent") {
+        init: function(chat, currentUserId, agentId = "ph_agent", defaultPersona = null) {
             _chat = chat;
             _currentUserId = currentUserId;
             _agentId = agentId;
+            if (defaultPersona) {
+                window.phAgent.state.setActivePersona(defaultPersona);
+            }
         },
         
         // --- Room Operations ---
         
         /**
-         * Load rooms (chat sessions) from Frappe database
+         * Load rooms (chat sessions) from Frappe database, filtered by active persona
          * @returns {Promise} Promise that resolves when rooms are loaded
          */
         loadRooms: function() {
@@ -42,9 +45,15 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
             
             _chat.setAttribute("rooms-loaded", "false");
             
+            const filters = { user: _currentUserId, status: ["!=", "Archived"] };
+            const activePersona = window.phAgent.state.getActivePersona();
+            if (activePersona) {
+                filters.persona = activePersona;
+            }
+            
             return frappe.db
                 .get_list("Chat Session", {
-                    filters: { user: _currentUserId, status: ["!=", "Archived"] },
+                    filters: filters,
                     fields: ["name", "title", "modified", "llm_provider"],
                     order_by: "modified desc",
                     limit: 50,
@@ -82,14 +91,20 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         },
         
         /**
-         * Create a new chat session with the default LLM provider
+         * Create a new chat session with the default LLM provider and active persona
          * @returns {Promise} Promise that resolves with new room data
          */
         createNewSession: function() {
             return new Promise((resolve, reject) => {
+                const activePersona = window.phAgent.state.getActivePersona();
+                const args = {};
+                if (activePersona) {
+                    args.persona = activePersona;
+                }
+                
                 frappe.call({
                     method: "ph_agent.api.chat.create_session",
-                    args: {},
+                    args: args,
                     callback: (r) => {
                         if (!r.message) {
                             reject(new Error("Failed to create session"));

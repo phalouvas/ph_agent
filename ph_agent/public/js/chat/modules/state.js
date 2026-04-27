@@ -11,6 +11,7 @@ window.phAgent.state = window.phAgent.state || (function() {
     let rooms = [];
     let messages = [];
     let activeRoomId = null;
+    let activePersona = null;
     let roomProviders = {}; // roomId -> llm_provider
     let isProcessing = false;
     let messageSuggestions = {}; // messageId -> suggestions[]
@@ -28,6 +29,10 @@ window.phAgent.state = window.phAgent.state || (function() {
         
         getActiveRoomId: function() {
             return activeRoomId;
+        },
+        
+        getActivePersona: function() {
+            return activePersona;
         },
         
         getRoomProvider: function(roomId) {
@@ -61,6 +66,10 @@ window.phAgent.state = window.phAgent.state || (function() {
         
         setActiveRoomId: function(roomId) {
             activeRoomId = roomId;
+        },
+        
+        setActivePersona: function(personaName) {
+            activePersona = personaName;
         },
         
         setIsProcessing: function(processing) {

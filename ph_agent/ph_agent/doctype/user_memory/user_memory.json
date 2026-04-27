@@ -6,6 +6,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "persona",
   "user",
   "fact",
   "category",
@@ -17,6 +18,16 @@
   "encounter_count"
  ],
  "fields": [
+  {
+   "fieldname": "persona",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Persona",
+   "options": "Persona",
+   "reqd": 1,
+   "search_index": 1
+  },
   {
    "fieldname": "user",
    "fieldtype": "Link",
@@ -88,7 +99,7 @@
  ],
  "indexes": [
   {
-   "fields": ["user", "fact(100)"],
+   "fields": ["user", "persona", "fact(100)"],
    "unique": 1
   }
  ],

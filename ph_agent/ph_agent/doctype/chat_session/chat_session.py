@@ -16,7 +16,15 @@ class ChatSession(Document):
 			if not default:
 				frappe.throw(frappe._("No default LLM Provider configured. Please set up a provider first."))
 			self.llm_provider = default[0]
-		
+
+		# Resolve persona defaults — persona-level values take precedence over provider defaults
+		persona = None
+		if self.persona:
+			try:
+				persona = frappe.get_doc("Persona", self.persona)
+			except frappe.DoesNotExistError:
+				pass
+
 		# Set temperature and suggestions from provider if not explicitly set
 		if self.llm_provider:
 			provider = frappe.get_doc("LLM Provider", self.llm_provider)
@@ -33,6 +41,24 @@ class ChatSession(Document):
 			# Inherit system_prompt from provider if not explicitly set
 			if not self.system_prompt:
 				self.system_prompt = provider.system_prompt
+
+		# Persona-level overrides — these take precedence over provider defaults
+		if persona:
+			if persona.default_llm_provider:
+				self.llm_provider = persona.default_llm_provider
+			if persona.temperature is not None and persona.temperature != "":
+				self.temperature = persona.temperature
+			if persona.enable_thinking:
+				self.enable_thinking = 1
+			if persona.system_prompt:
+				# Prepend persona system prompt to any existing prompt
+				if self.system_prompt:
+					self.system_prompt = f"{persona.system_prompt}\n\n---\n\n{self.system_prompt}"
+				else:
+					self.system_prompt = persona.system_prompt
+			# Persona streaming/suggestions override provider defaults
+			self.enable_streaming = persona.enable_streaming
+			self.enable_suggestions = persona.enable_suggestions
 	
 	def validate(self):
 		# Validate temperature range

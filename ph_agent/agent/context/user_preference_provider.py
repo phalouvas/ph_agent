@@ -5,9 +5,10 @@ preferred doctypes) via regex pattern matching on user messages, then
 injects them as system instructions in subsequent turns via the
 ContextProvider.before_run() hook.
 
-Preferences are stored in the **User Preference** Frappe DocType keyed by
-the Frappe user (looked up from the Chat Session). This means preferences
-are shared across **all sessions** belonging to the same user.
+Preferences are stored in the **Persona** DocType's ``preferences`` JSON
+field, scoped to ``(user, persona)``. This means preferences are isolated
+per persona — the Business persona learns different preferences than the
+Personal persona.
 """
 
 from __future__ import annotations
@@ -135,16 +136,16 @@ _MAX_INJECTED_PREFERENCES = 20
 class UserPreferenceProvider(ContextProvider):
 	"""ContextProvider that learns and injects user preferences.
 
-	Preferences are persisted in the **User Preference** Frappe DocType,
-	keyed by the Frappe user. This makes them available across all Chat
-	Sessions for the same user.
+	Preferences are persisted in the **Persona** DocType's ``preferences``
+	JSON field, scoped to ``(user, persona)``. This makes them available
+	across all Chat Sessions for the same persona.
 
-	On each ``before_run()``, loads preferences from the DB and injects
-	them as system instructions.
+	On each ``before_run()``, loads preferences from the Persona doc and
+	injects them as system instructions.
 
 	On each ``after_run()``, scans new conversation messages for preference
 	signals (name, date format, style requests, etc.) using regex patterns,
-	and persists merged preferences back to the DocType.
+	and persists merged preferences back to the Persona doc.
 	"""
 
 	PREFERENCES_KEY = "preferences"
@@ -165,12 +166,12 @@ class UserPreferenceProvider(ContextProvider):
 		context: Any,
 		state: dict[str, Any],
 	) -> None:
-		"""Load preferences from the User Preference DocType and inject as instructions."""
-		user = self._get_user(session)
+		"""Load preferences from the Persona doc and inject as instructions."""
+		user, persona = self._get_user_and_persona(session)
 		if not user:
 			return
 
-		prefs = self._load_preferences(user)
+		prefs = self._load_preferences(user, persona=persona)
 
 		# Also cache in session state for same-turn access by after_run
 		state[self.PREFERENCES_KEY] = prefs
@@ -187,8 +188,8 @@ class UserPreferenceProvider(ContextProvider):
 		context: Any,
 		state: dict[str, Any],
 	) -> None:
-		"""Scan new messages for preference signals and persist to the DocType."""
-		user = self._get_user(session)
+		"""Scan new messages for preference signals and persist to the Persona doc."""
+		user, persona = self._get_user_and_persona(session)
 		if not user:
 			return
 
@@ -212,13 +213,13 @@ class UserPreferenceProvider(ContextProvider):
 		if not signals:
 			return
 
-		# Merge with existing from DocType (not from state — it may be stale
+		# Merge with existing from Persona doc (not from state — it may be stale
 		# if another session updated it)
-		existing = self._load_preferences(user)
+		existing = self._load_preferences(user, persona=persona)
 		now = datetime.utcnow().isoformat()
 		merged = self._merge_preferences(existing, signals, now=now)
 
-		self._save_preferences(user, merged)
+		self._save_preferences(user, persona, merged)
 
 		# Commit explicitly — after_run may run in a frappe context (streaming thread)
 		# where automatic commit doesn't happen before frappe.destroy()
@@ -228,28 +229,30 @@ class UserPreferenceProvider(ContextProvider):
 		state[self.PREFERENCES_KEY] = merged
 
 	# ------------------------------------------------------------------
-	# Frappe DB persistence
+	# Frappe DB persistence — scoped to (user, persona)
 	# ------------------------------------------------------------------
 
 	@staticmethod
-	def _get_user(session: Any) -> str | None:
-		"""Resolve the Frappe user from the session's Chat Session doc."""
+	def _get_user_and_persona(session: Any) -> tuple[str | None, str | None]:
+		"""Resolve the Frappe user and persona from the session's Chat Session doc."""
 		session_id = getattr(session, "session_id", None)
 		if not session_id:
-			return None
+			return None, None
 		try:
-			user = frappe.db.get_value("Chat Session", session_id, "user")
-			return user
+			vals = frappe.db.get_value("Chat Session", session_id, ["user", "persona"])
+			if not vals:
+				return None, None
+			return vals[0], vals[1]
 		except Exception:
-			return None
+			return None, None
 
 	@staticmethod
-	def _load_preferences(user: str) -> dict[str, Any]:
-		"""Load preferences dict from the User Preference DocType for this user."""
-		if not user:
+	def _load_preferences(user: str, persona: str | None = None) -> dict[str, Any]:
+		"""Load preferences dict from the Persona doc's preferences JSON field."""
+		if not user or not persona:
 			return {}
 		try:
-			doc = frappe.get_doc("User Preference", user)
+			doc = frappe.get_doc("Persona", persona)
 			if doc.preferences:
 				if isinstance(doc.preferences, str):
 					return json.loads(doc.preferences)
@@ -260,25 +263,14 @@ class UserPreferenceProvider(ContextProvider):
 		return {}
 
 	@staticmethod
-	def _save_preferences(user: str, prefs: dict[str, Any]) -> None:
-		"""Save preferences dict to the User Preference DocType for this user."""
-		if not prefs:
+	def _save_preferences(user: str, persona: str | None, prefs: dict[str, Any]) -> None:
+		"""Save preferences dict to the Persona doc's preferences JSON field."""
+		if not prefs or not persona:
 			return
 		try:
-			doc = frappe.get_doc({
-				"doctype": "User Preference",
-				"user": user,
-				"preferences": json.dumps(prefs),
-			})
+			doc = frappe.get_doc("Persona", persona)
+			doc.preferences = json.dumps(prefs)
 			doc.save(ignore_permissions=True)
-		except frappe.DuplicateEntryError:
-			# Document already exists — update it
-			try:
-				doc = frappe.get_doc("User Preference", user)
-				doc.preferences = json.dumps(prefs)
-				doc.save(ignore_permissions=True)
-			except Exception:
-				pass
 		except Exception:
 			pass
 

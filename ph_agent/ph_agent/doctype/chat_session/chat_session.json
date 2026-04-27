@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "title",
+  "persona",
   "user",
   "llm_provider",
   "status",
@@ -32,6 +33,16 @@
    "in_list_view": 1,
    "label": "Title",
    "reqd": 1
+  },
+  {
+   "fieldname": "persona",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Persona",
+   "options": "Persona",
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "default": "__user",

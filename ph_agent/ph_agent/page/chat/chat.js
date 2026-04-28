@@ -5,8 +5,49 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
+	// ── Inject responsive CSS for mobile header buttons ─────────────
+	// Injected via JS to guarantee it applies regardless of browser cache.
+	if (!document.getElementById("ph-agent-responsive-css")) {
+		const style = document.createElement("style");
+		style.id = "ph-agent-responsive-css";
+		style.textContent = `
+			/* Tier 1: Tablet */
+			@media (max-width: 768px) {
+				.page-actions { flex-wrap: wrap; gap: 4px; }
+				.page-actions .persona-selector { min-width: 120px; }
+			}
+			/* Tier 2: Phone — hide temp button text, compress persona */
+			@media (max-width: 480px) {
+				.page-actions .btn-temp-mode span { display: none !important; }
+				.page-actions .btn-temp-mode { padding: 2px 6px !important; min-width: 0; }
+				.page-actions .btn-summary-conversation span { display: none; }
+				.page-actions .btn-summary-conversation .fa-refresh,
+				.page-actions .btn-summary-conversation .fa-spinner { margin-right: 0 !important; }
+			}
+			/* Tier 3: Very narrow */
+			@media (max-width: 360px) {
+				.page-actions { gap: 2px; }
+				.page-actions .btn-primary { padding: 4px 8px; font-size: 11px; }
+				.page-actions .btn-temp-mode { width: 30px; padding: 2px 4px !important; margin-left: 2px !important; }
+				.page-actions .btn-summary-conversation { padding: 2px 4px !important; margin-left: 2px !important; }
+			}
+			/* Persona compact button (mobile icon-only mode) */
+			.btn-persona-compact {
+				margin-left: 4px !important;
+				padding: 2px 6px !important;
+				height: 28px;
+				font-size: 16px;
+				line-height: 1;
+				min-width: 0;
+			}
+			.persona-dropdown-item:hover { background: var(--gray-100, #f3f4f6); }
+		`;
+		document.head.appendChild(style);
+	}
+
 	// ── Persona Selector ────────────────────────────────────────────
 	let personaSelector = null;
+	let personaCompactBtn = null;
 	let personaList = [];
 
 	function loadPersonas() {
@@ -24,6 +65,31 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		});
 	}
 
+	function _switchPersona(name) {
+		window.phAgent.state.setActivePersona(name);
+		if (window.phAgent?.roomService) {
+			window.phAgent.roomService.loadRooms().then(() => {
+				const state = window.phAgent.state;
+				const stateRooms = state.getRooms();
+				if (stateRooms.length > 0) {
+					const chat = document.querySelector("vue-advanced-chat");
+					if (chat) {
+						chat.setAttribute("room-id", "");
+						state.setActiveRoomId(null);
+						const fetchMessagesEvent = new CustomEvent("fetch-messages", {
+							detail: [stateRooms[0]]
+						});
+						chat.dispatchEvent(fetchMessagesEvent);
+					}
+				}
+			});
+		}
+	}
+
+	function _personaIcon(p) {
+		return (p.icon && p.icon !== "user") ? p.icon : "👤";
+	}
+
 	function renderPersonaSelector() {
 		if (!personaList.length) return;
 
@@ -34,50 +100,80 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 			window.phAgent.state.setActivePersona(current.name);
 		}
 
-		if (!personaSelector) {
-			personaSelector = $(`
-				<select class="form-control persona-selector" style="display:inline-block;width:auto;min-width:140px;margin-left:8px;font-size:12px;height:28px;padding:2px 8px;">
-				</select>
-			`);
-			personaSelector.on("change", function () {
-				const selected = $(this).val();
-				window.phAgent.state.setActivePersona(selected);
-				// Reload rooms for the new persona
-				if (window.phAgent?.roomService) {
-					window.phAgent.roomService.loadRooms().then((rooms) => {
-						const state = window.phAgent.state;
-						const stateRooms = state.getRooms();
-						if (stateRooms.length > 0) {
-							const chat = document.querySelector("vue-advanced-chat");
-							if (chat) {
-								chat.setAttribute("room-id", "");
-								state.setActiveRoomId(null);
-								const fetchMessagesEvent = new CustomEvent("fetch-messages", {
-									detail: [stateRooms[0]]
-								});
-								chat.dispatchEvent(fetchMessagesEvent);
-							}
-						}
-					});
-				}
-			});
-			// Insert after the primary action button
-			$(page.page_actions).find(".btn-primary").after(personaSelector);
-		}
+		const isMobile = window.innerWidth <= 480;
 
-		// Populate options
-		const optionsHtml = personaList.map(p => {
-			const selected = p.name === current?.name ? "selected" : "";
-			const icon = p.icon && p.icon !== "user" ? p.icon : "";
-			const label = icon ? `${icon} ${p.persona_name}` : p.persona_name;
-			return `<option value="${p.name}" ${selected}>${label}</option>`;
-		}).join("");
-		personaSelector.html(optionsHtml);
+		if (isMobile) {
+			// ── Compact icon button on mobile ──────────────────────
+			if (personaSelector) personaSelector.hide();
+
+			if (!personaCompactBtn) {
+				personaCompactBtn = $(`<button class="btn btn-default btn-sm btn-persona-compact"></button>`);
+				personaCompactBtn.on("click", function (e) {
+					e.stopPropagation();
+					$(".ph-persona-dropdown").remove();
+
+					const $menu = $(`<div class="ph-persona-dropdown" style="position:fixed;z-index:9999;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.18);min-width:180px;padding:4px 0;"></div>`);
+					personaList.forEach(p => {
+						const icon = _personaIcon(p);
+						const isActive = p.name === (window.phAgent?.state?.getActivePersona?.() || current?.name);
+						const $item = $(`<div class="persona-dropdown-item" style="padding:10px 14px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px;${isActive ? "font-weight:600;" : ""}"><span>${icon}</span><span>${p.persona_name}</span>${isActive ? '<span style="margin-left:auto;color:#4f72b8;">✓</span>' : ""}</div>`);
+						$item.on("click", function () {
+							$menu.remove();
+							_switchPersona(p.name);
+							personaCompactBtn.attr("title", p.persona_name).text(icon);
+						});
+						$menu.append($item);
+					});
+
+					// Position below the button
+					const rect = personaCompactBtn[0].getBoundingClientRect();
+					const menuLeft = Math.max(4, Math.min(rect.left, window.innerWidth - 188));
+					$menu.css({ top: rect.bottom + 4, left: menuLeft });
+					$("body").append($menu);
+
+					// Close on outside click
+					setTimeout(() => {
+						$(document).one("click.personaDropdown", function () { $menu.remove(); });
+					}, 0);
+				});
+				$(page.page_actions).find(".standard-actions").append(personaCompactBtn);
+			}
+
+			personaCompactBtn.show()
+				.attr("title", current?.persona_name || "")
+				.text(_personaIcon(current));
+
+		} else {
+			// ── Full select on desktop/tablet ──────────────────────
+			if (personaCompactBtn) personaCompactBtn.hide();
+
+			if (!personaSelector) {
+				personaSelector = $(`<select class="form-control persona-selector" style="display:inline-block;width:auto;min-width:140px;margin-left:8px;font-size:12px;height:28px;padding:2px 8px;"></select>`);
+				personaSelector.on("change", function () {
+					_switchPersona($(this).val());
+				});
+				$(page.page_actions).find(".standard-actions").append(personaSelector);
+			}
+
+			personaSelector.show();
+			const optionsHtml = personaList.map(p => {
+				const selected = p.name === current?.name ? "selected" : "";
+				const icon = _personaIcon(p);
+				return `<option value="${p.name}" ${selected}>${icon} ${p.persona_name}</option>`;
+			}).join("");
+			personaSelector.html(optionsHtml);
+		}
 	}
 
 	// Load personas first, then set up the rest
 	loadPersonas().then(() => {
 		renderPersonaSelector();
+		// Re-render on resize (debounced) — handles orientation changes
+		let _personaResizeTimer;
+		$(window).on("resize.personaSelector", function () {
+			clearTimeout(_personaResizeTimer);
+			_personaResizeTimer = setTimeout(renderPersonaSelector, 150);
+		});
 	});
 
 	page.set_primary_action(__("New Chat"), () => {
@@ -151,7 +247,8 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		tempBtn.removeClass("btn-default").addClass("btn-info");
 		tempBtn.find("span").text(__("Temporary ON"));
 	}
-	$(page.page_actions).find(".btn-primary").after(tempBtn);
+	// Use .primary-action to target only the New Chat button (avoids duplicating on the hidden dropdown toggle)
+	$(page.page_actions).find(".primary-action").after(tempBtn);
 
 	// Add summary button as a custom button in the page actions area
 	// First, let's add it manually to the page actions container
@@ -203,8 +300,8 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		}
 	});
 	
-	// Add button to page actions (after the primary action)
-	$(page.page_actions).append(summaryButton);
+	// Add button inside .standard-actions (the flex container) so it appears alongside the other buttons
+	$(page.page_actions).find(".standard-actions").append(summaryButton);
 
 	// Mount container inside page main area
 	const $container = $('<div style="height: calc(100vh - 120px);"></div>');

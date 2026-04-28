@@ -431,7 +431,11 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 
 	# Optionally add per-turn tool router (Phase 4)
 	persona_doc = frappe.get_doc("Persona", session_doc.persona) if session_doc.persona else None
-	enable_routing = bool(persona_doc and persona_doc.get("enable_tool_routing"))
+	enable_routing = bool(
+		persona_doc
+		and not persona_doc.get("disable_tools")
+		and persona_doc.get("enable_tool_routing")
+	)
 	extra_providers = (
 		[ToolRouterContextProvider(session_name=session_name, persona=session_doc.persona)]
 		if enable_routing

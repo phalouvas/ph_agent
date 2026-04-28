@@ -121,6 +121,7 @@ class ToolManager:
     def _filter_by_persona(cls, tools: List, persona: Optional[str]) -> List:
         """Filter tools by the persona's configured tool groups.
 
+        If the persona has ``disable_tools = 1``, returns an empty list.
         If the persona has no tool_groups rows (or persona is None), all tools
         are returned (backward-compatible default).
         """
@@ -128,14 +129,17 @@ class ToolManager:
             return tools
 
         try:
-            persona_groups = frappe.get_all(
-                "Persona Tool Group",
-                filters={"parent": persona},
-                pluck="tool_group",
-            )
+            persona_doc = frappe.get_doc("Persona", persona)
         except Exception as e:
-            logger.warning("Failed to load persona tool groups for '%s': %s", persona, str(e))
+            logger.warning("Failed to load persona '%s': %s", persona, str(e))
             return tools
+
+        # Hard override: no tools at all
+        if persona_doc.get("disable_tools"):
+            logger.debug("[tool_filter] Persona '%s' has disable_tools=1, returning []", persona)
+            return []
+
+        persona_groups = [row.tool_group for row in (persona_doc.get("tool_groups") or [])]
 
         if not persona_groups:
             # Persona exists but has no groups configured → return all tools

@@ -6,11 +6,24 @@ A Frappe app that integrates agentic AI chatbots into ERPNext, enabling autonomo
 
 - **AI Chat UI** — A full-featured chat interface embedded in the ERPNext desk, powered by `vue-advanced-chat`
 - **Multiple LLM Providers** — Configure multiple providers (DeepSeek, OpenAI-compatible APIs) and switch between them per session
-- **Real-time responses** — Agent replies appear instantly via Frappe's built-in WebSocket system
+- **Real-time streaming** — Agent replies appear incrementally via Frappe's built-in WebSocket system
+- **Personas** — Configure named personas with custom system prompts, LLM provider defaults, tool group restrictions, and learned preferences
+- **Tool Registry** — Register built-in or custom Python tools that the agent can call; group them by category (General, ERPNext, Financial, Web, Meta)
+- **Per-persona tool filtering** — Restrict which tool groups a persona can access, dramatically reducing token overhead
+- **Per-turn tool routing** — Optional lightweight LLM router selects only the relevant tools each turn, reducing token usage further
+- **Tool approval workflow** — Tools marked as requiring approval pause execution and show an approval UI before proceeding
 - **File attachments** — Attach files to chat messages; files are stored as Frappe `File` records linked to the message
 - **File extraction** — Attach files (PDF, DOCX, PPTX, XLSX, HTML, etc.) and the agent automatically reads their content using markitdown
 - **Conversation memory** — Full message history is passed to the agent on every turn, enabling follow-up questions and contextual replies
+- **LLM memory** — The agent automatically extracts and stores long-term facts from conversations, injected as context in future sessions
+- **User preferences** — Learned per-persona preferences (tone, format, language) are persisted and injected automatically
+- **Cross-session context** — Recent session summaries are injected into new sessions so the agent retains awareness across conversations
 - **Auto-generated session titles** — After the first exchange, the LLM generates a concise title for the session automatically
+- **Conversation auto-summary** — When the context window nears its limit, the agent automatically summarizes the conversation to free up space
+- **Token counter** — Live token usage indicator in the chat status bar shows current usage, context limit, and percentage consumed
+- **Follow-up suggestions** — After each agent response, the UI shows suggested follow-up questions
+- **Saved Prompts** — Save frequently used prompts and insert them into any chat session with one click
+- **Temporary sessions (incognito)** — Start a session that leaves no trace in the database; messages are delivered in real time only
 - **Session management** — Create, browse, and delete chat sessions from the chat UI
 - **Message editing** — Edit your own messages; subsequent messages are automatically deleted and the agent regenerates its response
 - **Message deletion** — Delete individual messages or batch delete selected messages
@@ -56,22 +69,59 @@ To add additional providers (e.g. a local Ollama instance):
 - Only one provider can be set as **Default** at a time
 - Users can select a provider when starting a new chat session
 
+### Personas
+
+Personas let you configure different agent personalities and capability sets. Each chat session is linked to a persona, which controls:
+
+- **System Prompt** — The agent's instructions and personality for sessions under this persona
+- **LLM Provider & Settings** — Override the default provider, temperature, thinking mode, streaming, and suggestions
+- **Tool Groups** — Restrict which categories of tools are available (General, ERPNext, Financial, Web, Meta). Leave empty to allow all tools
+- **Disable All Tools** — Tick this to give the persona no tools at all (e.g. a pure chat persona)
+- **Enable Per-Turn Tool Routing** — Uses a lightweight LLM call each turn to select only the tools relevant to the current query, reducing token overhead further
+- **Learned Preferences** — Automatically populated by the agent as it learns the user's preferences (tone, format, language)
+
+Go to **PH Agent → Persona** to create and manage personas.
+
+### Tool Registry
+
+The Tool Registry defines which tools the agent can call. Each tool entry specifies:
+
+- **Tool Name** — Unique identifier used by the agent
+- **Script Type** — `Existing Function` (import a dotted Python path) or `Custom Script` (inline Python with a `run_tool()` function)
+- **Tool Group** — Category for persona-level filtering: `General`, `ERPNext`, `Financial`, `Web`, `Meta`
+- **Requires Approval** — If checked, the agent will pause and show an approval UI before executing the tool
+
+Go to **PH Agent → Tool Registry** to enable, disable, or add tools.
+
+Built-in tools by group:
+
+| Group | Tools |
+|-------|-------|
+| **General** | `show_datetime`, `calculate`, `circle_calculator` |
+| **ERPNext** | `query_frappe_data`, `create_frappe_record`, `update_frappe_record`, `delete_frappe_record`, `run_frappe_method`, `discover_frappe_schema` |
+| **Financial** | `yahoo_finance`, `exchange_rate`, `sec_edgar` |
+| **Web** | `web_search`, `wikipedia`, `stack_exchange`, `reddit`, `hacker_news` |
+| **Meta** | `create_skill`, `create_tool` |
+
 ### Usage
 
 1. Open the ERPNext desk
 2. Navigate to **PH Agent → AI Chat** in the sidebar
-3. Click **New Chat** — select a provider and start chatting
-4. Click the room header to change the provider for an existing session
-5. Attach files using the paperclip icon in the message footer — PDF files are automatically read and their content is passed to the agent
+3. Click **New Chat** — select a persona (or provider) and start chatting
+4. Click the room header to change settings for an existing session
+5. Attach files using the paperclip icon in the message footer — supported formats (PDF, DOCX, PPTX, XLSX, HTML, etc.) are automatically read and their content passed to the agent
 6. The agent remembers the full conversation history within a session — ask follow-up questions naturally
 7. After your first message, the session title updates automatically to reflect the topic
-8. **Message actions** (hover over a message to reveal):
-   - **Edit** your own messages (only visible on your messages)
-   - **Delete** any message (requires permission)
-   - **Select** multiple messages for batch deletion
-   - **Regenerate** agent responses (only visible on agent messages)
-9. **Stop generation** — Click the red stop button that appears while the AI is responding to cancel generation
-10. **Regeneration flow** — When regenerating an agent response, the message stays in place with a spinner until the new response arrives
+8. Use **Saved Prompts** (bookmark icon) to insert frequently used prompts quickly
+9. Start an **Incognito Chat** (ghost icon) to chat without saving anything to the database
+10. **Message actions** (hover over a message to reveal):
+    - **Edit** your own messages (only visible on your messages)
+    - **Delete** any message (requires permission)
+    - **Select** multiple messages for batch deletion
+    - **Regenerate** agent responses (only visible on agent messages)
+11. **Stop generation** — Click the red stop button that appears while the AI is responding to cancel generation
+12. **Regeneration flow** — When regenerating an agent response, the message stays in place with a spinner until the new response arrives
+13. **Token counter** — The status bar shows current token usage / context limit (e.g. `2,995 / 1,000,000 (0.3%)`). Color turns amber above 70 % and red above 85 %
 
 ### Agent Skills
 

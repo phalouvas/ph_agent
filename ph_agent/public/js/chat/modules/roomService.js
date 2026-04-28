@@ -236,7 +236,8 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
         getRoomInfo: function(roomId) {
             return frappe.db.get_value("Chat Session", roomId, [
                     "title", "llm_provider", "creation", "modified",
-                    "temperature", "enable_streaming", "enable_suggestions", "enable_thinking"
+                    "temperature", "enable_streaming", "enable_suggestions", "enable_thinking",
+                    "system_prompt"
                 ])
                 .then((r) => {
                     if (!r.message) {
@@ -253,6 +254,7 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                         enable_streaming: session.enable_streaming,
                         enable_suggestions: session.enable_suggestions,
                         enable_thinking: session.enable_thinking,
+                        system_prompt: session.system_prompt || "",
                         roomId: roomId
                     };
                 });

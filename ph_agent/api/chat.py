@@ -121,7 +121,8 @@ def update_session_provider(session, provider_name):
 
 @frappe.whitelist()
 def update_session_settings(session, title=None, provider_name=None, enable_thinking=None,
-							temperature=None, enable_streaming=None, enable_suggestions=None):
+							temperature=None, enable_streaming=None, enable_suggestions=None,
+							system_prompt=None):
 	"""Update settings on a Chat Session in a single call.
 
 	Args:
@@ -132,6 +133,7 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 		temperature: Float 0–1.5 to override temperature.
 		enable_streaming: 0 or 1 to toggle streaming.
 		enable_suggestions: 0 or 1 to toggle follow-up suggestions.
+		system_prompt: System prompt override for this session.
 	"""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
@@ -153,6 +155,8 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 		update_dict["enable_streaming"] = int(enable_streaming)
 	if enable_suggestions is not None:
 		update_dict["enable_suggestions"] = int(enable_suggestions)
+	if system_prompt is not None:
+		update_dict["system_prompt"] = system_prompt
 
 	if not update_dict:
 		return {"status": "ok"}

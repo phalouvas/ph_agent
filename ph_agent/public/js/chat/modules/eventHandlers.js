@@ -811,6 +811,13 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                     description: __("Auto-generate follow-up questions after each response."),
                                 },
                                 {
+                                    fieldname: "system_prompt",
+                                    fieldtype: "Long Text",
+                                    label: __("System Prompt"),
+                                    default: roomInfo.system_prompt,
+                                    description: __("Instructions that define the assistant's behavior for this session."),
+                                },
+                                {
                                     fieldname: "created",
                                     fieldtype: "Data",
                                     label: __("Created"),
@@ -848,6 +855,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 }
                                 if (values.enable_suggestions !== roomInfo.enable_suggestions) {
                                     args.enable_suggestions = values.enable_suggestions ? 1 : 0;
+                                }
+                                if ((values.system_prompt || "") !== (roomInfo.system_prompt || "")) {
+                                    args.system_prompt = values.system_prompt || "";
                                 }
                                 
                                 if (Object.keys(args).length <= 1) {

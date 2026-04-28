@@ -331,3 +331,69 @@ vue-advanced-chat {
 .vac-svg-button:has(#vac-icon-deleted) {
 	cursor: pointer !important;
 }
+
+/* ── Responsive page actions (mobile support) ──────────────────── */
+
+/* Tier 1: Tablet (≤ 768px) */
+@media (max-width: 768px) {
+	.page-actions {
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+	.page-actions .persona-selector {
+		min-width: 120px;
+	}
+}
+
+/* Tier 2: Phone (≤ 480px) */
+@media (max-width: 480px) {
+	.page-actions .persona-selector {
+		min-width: 100px;
+		max-width: 120px;
+		font-size: 11px !important;
+		padding: 2px 4px !important;
+	}
+	/* Hide text label on temp button — keep 👻 icon only */
+	.page-actions .btn-temp-mode span {
+		display: none;
+	}
+	.page-actions .btn-temp-mode {
+		padding: 2px 6px !important;
+		min-width: 0;
+	}
+	/* Hide text on summary button — icon only */
+	.page-actions .btn-summary-conversation .fa-refresh,
+	.page-actions .btn-summary-conversation .fa-spinner {
+		margin-right: 0 !important;
+	}
+	.page-actions .btn-summary-conversation span {
+		display: none;
+	}
+}
+
+/* Tier 3: Very narrow (≤ 360px) */
+@media (max-width: 360px) {
+	.page-actions {
+		gap: 2px;
+	}
+	.page-actions .btn-primary {
+		padding: 4px 8px;
+		font-size: 11px;
+	}
+	.page-actions .persona-selector {
+		min-width: 60px;
+		max-width: 90px;
+		font-size: 10px !important;
+		padding: 2px 2px !important;
+		margin-left: 2px !important;
+	}
+	.page-actions .btn-temp-mode {
+		width: 30px;
+		padding: 2px 4px !important;
+		margin-left: 2px !important;
+	}
+	.page-actions .btn-summary-conversation {
+		padding: 2px 4px !important;
+		margin-left: 2px !important;
+	}
+}

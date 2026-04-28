@@ -49,7 +49,7 @@ def _estimate_system_overhead(session_name: str) -> int:
 
 	# Tool definitions: ~2 chars per token for JSON schemas
 	try:
-		tools = ToolManager.get_tools(session_name=session_name)
+		tools = ToolManager.get_tools(session_name=session_name, persona=session_doc.persona)
 		for tool_obj in tools:
 			if hasattr(tool_obj, "schema") and tool_obj.schema:
 				schema_str = json.dumps(tool_obj.schema, separators=(",", ":"))

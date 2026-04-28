@@ -87,13 +87,15 @@ class ToolManager:
     CACHE_KEY = "ph_agent:tools:registered"
     
     @classmethod
-    def get_tools(cls, session_name: Optional[str] = None, user: Optional[str] = None) -> List:
+    def get_tools(cls, session_name: Optional[str] = None, user: Optional[str] = None, persona: Optional[str] = None) -> List:
         """
         Get all enabled tools from the Tool Registry.
         
         Args:
             session_name: Optional chat session name for context injection
             user: Optional user name for context injection
+            persona: Optional persona name; if the persona has tool_groups configured,
+                     only tools matching those groups are returned.
             
         Returns:
             List of tool objects ready to be passed to Agent constructor
@@ -102,17 +104,50 @@ class ToolManager:
         cached_tools = cls._get_cached_tools()
         if cached_tools is not None:
             logger.debug("Returning %d tools from cache", len(cached_tools))
-            return cls._inject_context_into_tools(cached_tools, session_name, user)
-        
-        # Load from database
-        tools = cls._load_tools_from_db()
-        
-        # Cache the tools
-        cls._cache_tools(tools)
-        
+            tools = cached_tools
+        else:
+            # Load from database
+            tools = cls._load_tools_from_db()
+            # Cache the tools
+            cls._cache_tools(tools)
+
+        # Filter by persona tool groups if configured
+        tools = cls._filter_by_persona(tools, persona)
+
         # Inject context if needed
         return cls._inject_context_into_tools(tools, session_name, user)
     
+    @classmethod
+    def _filter_by_persona(cls, tools: List, persona: Optional[str]) -> List:
+        """Filter tools by the persona's configured tool groups.
+
+        If the persona has no tool_groups rows (or persona is None), all tools
+        are returned (backward-compatible default).
+        """
+        if not persona:
+            return tools
+
+        try:
+            persona_groups = frappe.get_all(
+                "Persona Tool Group",
+                filters={"parent": persona},
+                pluck="tool_group",
+            )
+        except Exception as e:
+            logger.warning("Failed to load persona tool groups for '%s': %s", persona, str(e))
+            return tools
+
+        if not persona_groups:
+            # Persona exists but has no groups configured → return all tools
+            return tools
+
+        filtered = [t for t in tools if getattr(t, "tool_group", "General") in persona_groups]
+        logger.debug(
+            "Persona '%s' groups %s: filtered %d → %d tools",
+            persona, persona_groups, len(tools), len(filtered)
+        )
+        return filtered
+
     @classmethod
     def _load_tools_from_db(cls) -> List:
         """Load enabled tools from the Tool Registry database."""
@@ -124,7 +159,7 @@ class ToolManager:
             filters={"is_enabled": 1},
             fields=[
                 "name", "tool_name", "description", "script_type",
-                "python_function", "custom_script",
+                "tool_group", "python_function", "custom_script",
                 "parameters_json", "requires_approval"
             ]
         )
@@ -160,9 +195,15 @@ class ToolManager:
         script_type = record.get("script_type", "Existing Function")
         
         if script_type == "Custom Script":
-            return cls._register_custom_script_tool(record)
+            tool_obj = cls._register_custom_script_tool(record)
         else:
-            return cls._register_existing_function_tool(record)
+            tool_obj = cls._register_existing_function_tool(record)
+
+        # Attach tool_group so _filter_by_persona can use it without a DB round-trip
+        if tool_obj is not None:
+            setattr(tool_obj, "tool_group", record.get("tool_group") or "General")
+
+        return tool_obj
     
     @classmethod
     def _get_safe_namespace(cls) -> Dict[str, Any]:
@@ -380,7 +421,7 @@ class ToolManager:
                     ctx.kwargs["frappe_session"] = frappe.session
             return original_func(ctx=ctx, **kwargs)
 
-        return FunctionTool(
+        wrapped = FunctionTool(
             name=original_tool.name,
             description=original_tool.description,
             approval_mode=getattr(original_tool, 'approval_mode', None),
@@ -389,6 +430,9 @@ class ToolManager:
             input_model=original_tool.input_model,
             func=injecting_func,
         )
+        # Preserve tool_group so persona filtering survives context injection
+        setattr(wrapped, "tool_group", getattr(original_tool, "tool_group", "General"))
+        return wrapped
     
     @classmethod
     def _get_cached_tools(cls) -> Optional[List]:

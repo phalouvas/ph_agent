@@ -19,6 +19,9 @@
   "enable_thinking",
   "enable_streaming",
   "enable_suggestions",
+  "section_tools",
+  "tool_groups",
+  "enable_tool_routing",
   "section_preferences",
   "preferences"
  ],
@@ -116,6 +119,25 @@
    "fieldname": "enable_suggestions",
    "fieldtype": "Check",
    "label": "Enable Follow-up Suggestions"
+  },
+  {
+   "fieldname": "section_tools",
+   "fieldtype": "Section Break",
+   "label": "Tool Groups"
+  },
+  {
+   "description": "Restrict this persona to specific tool groups. Leave empty to allow all tools.",
+   "fieldname": "tool_groups",
+   "fieldtype": "Table",
+   "label": "Tool Groups",
+   "options": "Persona Tool Group"
+  },
+  {
+   "default": "0",
+   "description": "Use a lightweight LLM call each turn to select only the relevant tools from the configured groups, reducing token overhead further.",
+   "fieldname": "enable_tool_routing",
+   "fieldtype": "Check",
+   "label": "Enable Per-Turn Tool Routing"
   },
   {
    "fieldname": "section_preferences",

@@ -18,6 +18,7 @@ from ph_agent.agent.context.user_preference_provider import UserPreferenceProvid
 from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
 from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
+from ph_agent.agent.tools.tool_router_provider import ToolRouterContextProvider
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +409,7 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		if provider_doc.temperature is not None
 		else 1.0
 	)
-	tools = ToolManager.get_tools(session_name=session_name, user=user or frappe.session.user)
+	tools = ToolManager.get_tools(session_name=session_name, user=user or frappe.session.user, persona=session_doc.persona)
 
 	chat_client = OpenAIChatCompletionClient(
 		model=provider_doc.default_model,
@@ -428,6 +429,15 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	# Build skills provider from both file-based and DocType-based sources
 	skills_provider = _build_skills_provider()
 
+	# Optionally add per-turn tool router (Phase 4)
+	persona_doc = frappe.get_doc("Persona", session_doc.persona) if session_doc.persona else None
+	enable_routing = bool(persona_doc and persona_doc.get("enable_tool_routing"))
+	extra_providers = (
+		[ToolRouterContextProvider(session_name=session_name, persona=session_doc.persona)]
+		if enable_routing
+		else []
+	)
+
 	return Agent(
 		client=chat_client,
 		instructions=session_doc.system_prompt or None,
@@ -437,6 +447,7 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 			InMemoryHistoryProvider(),
 			FrappeMemoryProvider(),
 			skills_provider,
+			*extra_providers,
 			UserPreferenceProvider(),
 			LLMMemoryProvider(),
 		],

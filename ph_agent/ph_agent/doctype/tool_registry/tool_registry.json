@@ -9,6 +9,7 @@
   "tool_name",
   "is_enabled",
   "script_type",
+  "tool_group",
   "description",
   "python_function",
   "custom_script",
@@ -39,6 +40,14 @@
    "label": "Script Type",
    "options": "Existing Function\nCustom Script",
    "reqd": 1
+  },
+  {
+   "default": "General",
+   "fieldname": "tool_group",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Tool Group",
+   "options": "General\nERPNext\nFinancial\nWeb\nMeta"
   },
   {
    "fieldname": "description",

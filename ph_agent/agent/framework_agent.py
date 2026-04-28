@@ -174,11 +174,82 @@ def _fix_missing_sentence_spaces(text: str) -> str:
 	return _SENTENCE_GAP_RE.sub(r'\1 \2', text)
 
 
+# ---------------------------------------------------------------------------
+# Formatting conversion: Standard Markdown → vue-advanced-chat delimiters
+# ---------------------------------------------------------------------------
+# vue-advanced-chat uses *text* for bold and _text_ for italic, while the
+# LLM emits standard Markdown **text** for bold and *text* for italic.
+# Without conversion, "**bold**" is parsed as: open-bold (*), literal "bold",
+# close-bold (*), leaving a stray "*" that corrupts adjacent characters.
+#
+# Compiled at module level; lazy-initialised on first call.
+_CODE_SEGMENT_RE = None   # matches fenced blocks and inline code spans
+_BOLD_ITALIC_RE = None    # ***text***
+_BOLD_RE = None           # **text**
+_ITALIC_RE = None         # *text*  (not list bullets, not **bold**)
+
+
+def _convert_formatting_for_vue_chat(text: str) -> str:
+	"""Convert standard Markdown bold/italic delimiters to vue-advanced-chat format.
+
+	vue-advanced-chat renders:
+	  *text*   → bold
+	  _text_   → italic
+
+	Standard Markdown (what the LLM outputs):
+	  **text**   → bold
+	  *text*     → italic
+	  ***text*** → bold + italic
+
+	Conversion order applied to non-code segments:
+	  1. *italic*       → _italic_   (before bold so lone * are handled first)
+	  2. ***bold+ital***→ *_bold+ital_*
+	  3. **bold**       → *bold*
+
+	Code spans (``code``) and fenced blocks (```...```) are left untouched.
+	List bullets (``* item``) are excluded by requiring the opening ``*``
+	not be followed by whitespace.
+	"""
+	import re
+
+	global _CODE_SEGMENT_RE, _BOLD_ITALIC_RE, _BOLD_RE, _ITALIC_RE
+	if _CODE_SEGMENT_RE is None:
+		# Fenced code blocks (``` ... ```) or inline code (`code`).
+		# Use [\s\S] for fenced blocks so newlines are included.
+		_CODE_SEGMENT_RE = re.compile(r'(```[\s\S]*?```|`[^`\n]+`)')
+		# ***bold-italic***: three asterisks on each side
+		_BOLD_ITALIC_RE = re.compile(r'\*\*\*(.+?)\*\*\*')
+		# **bold**: two asterisks on each side
+		_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+		# *italic*: single asterisk, not adjacent to another *, not followed
+		# by whitespace (excludes list bullets like "* item").
+		_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)')
+
+	parts = _CODE_SEGMENT_RE.split(text)
+	result = []
+	for i, part in enumerate(parts):
+		if i % 2 == 1:
+			# Odd index → matched by the regex → code segment, leave as-is.
+			result.append(part)
+		else:
+			# 1. Italic first: convert *italic* → _italic_
+			#    The italic regex skips ** and *** patterns so they remain
+			#    intact for the next steps.
+			part = _ITALIC_RE.sub(r'_\1_', part)
+			# 2. Bold-italic: ***text*** → *_text_*
+			part = _BOLD_ITALIC_RE.sub(r'*_\1_*', part)
+			# 3. Bold: **text** → *text*
+			part = _BOLD_RE.sub(r'*\1*', part)
+			result.append(part)
+	return ''.join(result)
+
+
 def _fix_agent_response_text(text: str) -> str:
 	"""Clean up agent response text by applying known post-processing fixes."""
 	if not text:
 		return text
-	return _fix_missing_sentence_spaces(text)
+	text = _fix_missing_sentence_spaces(text)
+	return _convert_formatting_for_vue_chat(text)
 
 
 # ---------------------------------------------------------------------------

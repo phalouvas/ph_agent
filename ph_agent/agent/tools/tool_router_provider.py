@@ -32,10 +32,16 @@ _ROUTER_MAX_TOKENS = 300
 _ROUTER_SYSTEM_PROMPT = (
     "You are a tool router. Given a user message and a list of available tools "
     "(each with a name and one-line description), return ONLY the names of the "
-    "tools that could plausibly help answer the message. "
+    "tools that could plausibly help answer the message.\n\n"
+    "Rules:\n"
+    "- When a specialized tool exists for the task (e.g. exchange_rate for "
+    "currency conversion, yahoo_finance for stock data, wikipedia for "
+    "encyclopedic knowledge), prefer it over a general-purpose tool like "
+    "web_search.\n"
+    "- Only include tools that are clearly relevant. When in doubt, leave it out.\n"
+    "- If no tools are needed, return {\"tool_names\": []}.\n\n"
     "Respond with a JSON object in this exact format: "
     '{\"tool_names\": [\"name1\", \"name2\"]}. '
-    "If no tools are needed, return {\"tool_names\": []}. "
     "Do NOT include any explanation or extra text."
 )
 

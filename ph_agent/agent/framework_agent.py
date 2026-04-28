@@ -18,7 +18,11 @@ from ph_agent.agent.context.user_preference_provider import UserPreferenceProvid
 from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
 from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
-from ph_agent.agent.tools.tool_router_provider import ToolRouterContextProvider
+from ph_agent.agent.tools.tool_router_provider import (
+    _ROUTER_SYSTEM_PROMPT,
+    _ROUTING_THRESHOLD,
+    _ROUTER_MAX_TOKENS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +258,106 @@ def _fix_agent_response_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Per-turn tool routing helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_text_from_messages(messages) -> str:
+	"""Extract the first user text from a Message or list of Messages."""
+	msg_list = messages if isinstance(messages, list) else [messages]
+	for msg in msg_list:
+		for c in (getattr(msg, 'contents', None) or []):
+			text = getattr(c, 'text', None)
+			if text:
+				return str(text)
+	return ""
+
+
+async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
+	"""Filter ``agent.default_options['tools']`` using a cheap router LLM call.
+
+	All tools are treated equally — the router decides per-tool which ones
+	are relevant to the current query. No group-based exemptions.
+
+	Only activates when:
+	  1. Persona has ``enable_tool_routing=1`` and not ``disable_tools``.
+	  2. Tool count > ``_ROUTING_THRESHOLD`` (5).
+
+	On failure or skip, leaves tools unchanged (safety-first).
+	"""
+	if not session_name or not user_query:
+		return
+
+	# Resolve persona and routing flag
+	session_doc = frappe.get_doc("Chat Session", session_name)
+	if not session_doc.persona:
+		return
+
+	persona_doc = frappe.get_doc("Persona", session_doc.persona)
+	if not persona_doc.get("enable_tool_routing") or persona_doc.get("disable_tools"):
+		return
+
+	tools = agent.default_options.get("tools", [])
+	if len(tools) <= _ROUTING_THRESHOLD:
+		return
+
+	# Build compact tool menu for ALL tools
+	lines = []
+	for t in tools:
+		name = getattr(t, "name", "unknown")
+		desc = (getattr(t, "description", "") or "").split("\n")[0][:120]
+		lines.append(f"- {name}: {desc}")
+	tool_menu = "\n".join(lines)
+
+	# Call router LLM
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	api_key = provider_doc.get_password("api_key")
+	if not api_key:
+		return
+
+	openai_client = AsyncOpenAI(
+		api_key=api_key,
+		base_url=provider_doc.api_url or "https://api.openai.com/v1",
+	)
+
+	try:
+		user_content = (
+			f"User message: {user_query}\n\n"
+			f"Available tools:\n{tool_menu}\n\n"
+			"Which tools are needed? Respond only with the JSON object."
+		)
+		response = await openai_client.chat.completions.create(
+			model=provider_doc.default_model,
+			messages=[
+				{"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
+				{"role": "user", "content": user_content},
+			],
+			max_tokens=_ROUTER_MAX_TOKENS,
+			temperature=0.0,
+		)
+
+		raw = (response.choices[0].message.content or "").strip()
+		if raw.startswith("```"):
+			raw = raw.split("```")[1]
+			if raw.startswith("json"):
+				raw = raw[4:]
+			raw = raw.strip()
+
+		data = json.loads(raw)
+		selected_names = data.get("tool_names", [])
+		if not isinstance(selected_names, list):
+			selected_names = []
+
+		selected_set = set(str(n) for n in selected_names)
+		filtered = [t for t in tools if t.name in selected_set]
+
+		agent.default_options["tools"] = filtered
+	except Exception:
+		pass  # Safety-first: keep all tools on failure
+
+
+
+# ---------------------------------------------------------------------------
 
 
 def _build_skills_provider() -> SkillsProvider:
@@ -447,19 +551,6 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	# Build skills provider from both file-based and DocType-based sources
 	skills_provider = _build_skills_provider()
 
-	# Optionally add per-turn tool router (Phase 4)
-	persona_doc = frappe.get_doc("Persona", session_doc.persona) if session_doc.persona else None
-	enable_routing = bool(
-		persona_doc
-		and not persona_doc.get("disable_tools")
-		and persona_doc.get("enable_tool_routing")
-	)
-	extra_providers = (
-		[ToolRouterContextProvider(session_name=session_name, persona=session_doc.persona)]
-		if enable_routing
-		else []
-	)
-
 	return Agent(
 		client=chat_client,
 		instructions=_build_instructions(session_doc),
@@ -469,7 +560,6 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 			InMemoryHistoryProvider(),
 			FrappeMemoryProvider(),
 			skills_provider,
-			*extra_providers,
 			UserPreferenceProvider(),
 			LLMMemoryProvider(),
 		],
@@ -600,6 +690,11 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 	if session_state:
 		agent_session.state.update(session_state)
 	messages = message if isinstance(message, list) else [message]
+
+	# Per-turn tool routing — filter before API call
+	user_text = _extract_text_from_messages(messages)
+	asyncio.run(_try_route_tools(agent, session_name, user_text))
+
 	result = asyncio.run(agent.run(messages, session=agent_session))
 	return result, agent_session
 
@@ -616,6 +711,11 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 	if session_state:
 		agent_session.state.update(session_state)
 	messages = message if isinstance(message, list) else [message]
+
+	# Per-turn tool routing — filter before API call
+	user_text = _extract_text_from_messages(messages)
+	await _try_route_tools(agent, session_name, user_text)
+
 	stream = agent.run(messages, session=agent_session, stream=True)
 	if inspect.isawaitable(stream):
 		stream = await stream

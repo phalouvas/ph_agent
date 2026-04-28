@@ -589,26 +589,31 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             const $tokenPercent = _$status.find(".ph-token-percent");
             
             if (data.current_tokens !== undefined && data.context_length !== undefined) {
-                const percentage = data.context_length > 0 ? Math.round((data.current_tokens / data.context_length) * 100) : 0;
-                
+                let percentage = 0;
+                if (data.context_length > 0) {
+                    const pct = (data.current_tokens / data.context_length) * 100;
+                    percentage = pct > 0 && pct < 0.1 ? '<0.1' : Math.round(pct * 10) / 10;
+                }
+                const numericPercentage = parseFloat(percentage) || 0;
+
                 // Format numbers with commas
                 const formattedCurrent = data.current_tokens.toLocaleString();
                 const formattedLimit = data.context_length.toLocaleString();
-                
+
                 $tokenCount.text(formattedCurrent);
                 $tokenLimit.text(formattedLimit);
                 $tokenPercent.text(percentage);
                 
                 // Token counter already visible with display: flex
-                
-                // Progressive threshold colors
-                if (percentage > 95) {
+
+                // Progressive threshold colors (use numeric value for comparisons)
+                if (numericPercentage > 95) {
                     $tokenCounter.css("color", "#7f1d1d"); // Dark red for emergency
                     $tokenCounter.css("animation", "ph-pulse 1.5s ease-in-out infinite");
-                } else if (percentage > 85) {
+                } else if (numericPercentage > 85) {
                     $tokenCounter.css("color", "#ef4444"); // Red for critical
                     $tokenCounter.css("animation", "none");
-                } else if (percentage > 70) {
+                } else if (numericPercentage > 70) {
                     $tokenCounter.css("color", "#f59e0b"); // Amber for warning
                     $tokenCounter.css("animation", "none");
                 } else {

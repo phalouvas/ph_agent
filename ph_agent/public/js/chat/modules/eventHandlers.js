@@ -145,12 +145,13 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     $tokenCount.text(formattedCurrent);
                     $tokenLimit.text(formattedLimit);
                     $tokenPercent.text(tokenInfo.percentage);
-                    
-                    // Add warning class if over 75%
-                    if (tokenInfo.percentage > 75) {
-                        $tokenCounter.css("color", "#f59e0b"); // Amber color for warning
-                    } else if (tokenInfo.percentage > 90) {
+
+                    // Add warning class if over 75% (use numeric value for comparisons)
+                    const numericPct = parseFloat(tokenInfo.percentage) || 0;
+                    if (numericPct > 90) {
                         $tokenCounter.css("color", "#ef4444"); // Red color for critical
+                    } else if (numericPct > 75) {
+                        $tokenCounter.css("color", "#f59e0b"); // Amber color for warning
                     } else {
                         $tokenCounter.css("color", "#6b7280"); // Gray color for normal
                     }

@@ -287,7 +287,12 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                                 input_tokens: session.input_tokens || 0,
                                 output_tokens: session.output_tokens || 0,
                                 context_length: context_length,
-                                percentage: context_length > 0 ? Math.round(((session.estimated_conversation_tokens || 0) / context_length) * 100) : 0
+                                percentage: (() => {
+                                    if (context_length <= 0) return 0;
+                                    const pct = ((session.estimated_conversation_tokens || 0) / context_length) * 100;
+                                    if (pct > 0 && pct < 0.1) return '<0.1';
+                                    return Math.round(pct * 10) / 10;
+                                })()
                             };
                         });
                 });

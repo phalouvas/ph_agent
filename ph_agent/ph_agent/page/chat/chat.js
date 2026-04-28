@@ -5,46 +5,6 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
-	// ── Inject responsive CSS for mobile header buttons ─────────────
-	// Injected via JS to guarantee it applies regardless of browser cache.
-	if (!document.getElementById("ph-agent-responsive-css")) {
-		const style = document.createElement("style");
-		style.id = "ph-agent-responsive-css";
-		style.textContent = `
-			/* Tier 1: Tablet */
-			@media (max-width: 768px) {
-				.page-actions { flex-wrap: wrap; gap: 4px; }
-				.page-actions .persona-selector { min-width: 120px; }
-			}
-			/* Tier 2: Phone — hide temp button text, compress persona */
-			@media (max-width: 480px) {
-				.page-actions .btn-temp-mode span { display: none !important; }
-				.page-actions .btn-temp-mode { padding: 2px 6px !important; min-width: 0; }
-				.page-actions .btn-summary-conversation span { display: none; }
-				.page-actions .btn-summary-conversation .fa-refresh,
-				.page-actions .btn-summary-conversation .fa-spinner { margin-right: 0 !important; }
-			}
-			/* Tier 3: Very narrow */
-			@media (max-width: 360px) {
-				.page-actions { gap: 2px; }
-				.page-actions .btn-primary { padding: 4px 8px; font-size: 11px; }
-				.page-actions .btn-temp-mode { width: 30px; padding: 2px 4px !important; margin-left: 2px !important; }
-				.page-actions .btn-summary-conversation { padding: 2px 4px !important; margin-left: 2px !important; }
-			}
-			/* Persona compact button (mobile icon-only mode) */
-			.btn-persona-compact {
-				margin-left: 4px !important;
-				padding: 2px 6px !important;
-				height: 28px;
-				font-size: 16px;
-				line-height: 1;
-				min-width: 0;
-			}
-			.persona-dropdown-item:hover { background: var(--gray-100, #f3f4f6); }
-		`;
-		document.head.appendChild(style);
-	}
-
 	// ── Persona Selector ────────────────────────────────────────────
 	let personaSelector = null;
 	let personaCompactBtn = null;
@@ -116,7 +76,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 					personaList.forEach(p => {
 						const icon = _personaIcon(p);
 						const isActive = p.name === (window.phAgent?.state?.getActivePersona?.() || current?.name);
-						const $item = $(`<div class="persona-dropdown-item" style="padding:10px 14px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px;${isActive ? "font-weight:600;" : ""}"><span>${icon}</span><span>${p.persona_name}</span>${isActive ? '<span style="margin-left:auto;color:#4f72b8;">✓</span>' : ""}</div>`);
+						const $item = $(`<div class="ph-persona-dropdown-item${isActive ? ' active' : ''}"><span>${icon}</span><span>${p.persona_name}</span>${isActive ? '<span class="check-mark">✓</span>' : ""}</div>`);
 						$item.on("click", function () {
 							$menu.remove();
 							_switchPersona(p.name);
@@ -185,13 +145,9 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		}
 	}, "add");
 
-	// ── Temporary Mode Toggle ───────────────────────────────────────
-	const tempBtn = $(`
-		<button class="btn btn-default btn-sm btn-temp-mode" style="margin-left: 8px; font-size: 12px; padding: 2px 8px; height: 28px;" title="${__("Toggle Temporary (Incognito) Mode")}">
-			👻 <span>${__("Temporary")}</span>
-		</button>
-	`);
-	tempBtn.on("click", function () {
+	// ── Temporary Mode Toggle (via Frappe native add_button) ────────
+	// add_button creates the button + auto-adds a menu item for mobile overflow
+	const tempBtn = page.add_button("👻 " + __("Temporary"), function () {
 		const state = window.phAgent?.state;
 		if (!state) return;
 		const activeRoomId = state.getActiveRoomId();
@@ -241,28 +197,20 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 				}
 			}
 		});
-	});
+	}, { btn_class: "btn-temp-mode" });
+	// Restore inner span so mobile CSS can hide text while keeping icon
+	tempBtn.html(`👻 <span data-text>${__("Temporary")}</span>`);
+	// Move after primary action for correct visual order
+	tempBtn.insertAfter(page.btn_primary);
 	// Initialize button state from persisted preference
 	if (window.phAgent?.state?.getIsTemporaryMode?.()) {
 		tempBtn.removeClass("btn-default").addClass("btn-info");
-		tempBtn.find("span").text(__("Temporary ON"));
+		tempBtn.find("[data-text]").text(__("Temporary ON"));
 	}
-	// Use .primary-action to target only the New Chat button (avoids duplicating on the hidden dropdown toggle)
-	$(page.page_actions).find(".primary-action").after(tempBtn);
 
-	// Add summary button as a custom button in the page actions area
-	// First, let's add it manually to the page actions container
-	
-	// Create summary button (hidden by default; shown when token % > 20)
-	const summaryButton = $(`
-		<button class="btn btn-default btn-sm btn-summary-conversation" style="margin-left: 8px; display: none;">
-			<i class="fa fa-refresh" style="margin-right: 4px;"></i>
-			${__("Summarize")}
-		</button>
-	`);
-	
-	// Add click handler — uses roomService.summarizeSession if available
-	summaryButton.on("click", () => {
+	// ── Summary Button (via Frappe native add_button) ────────────────
+	// Hidden by default; shown when token % > 20
+	const summaryButton = page.add_button("", () => {
 		const session = window.phAgent?.state?.getActiveRoomId?.();
 		if (!session) {
 			frappe.show_alert({
@@ -272,7 +220,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 			return;
 		}
 		if (window.phAgent?.roomService?.summarizeSession) {
-			const $summaryBtn = $(".page-actions .btn-summary-conversation");
+			const $summaryBtn = $(".btn-summary-conversation");
 			$summaryBtn.prop("disabled", true).html(`
 				<span class="fa fa-spinner fa-spin"></span>
 				<span>${__("Summarizing...")}</span>
@@ -293,15 +241,15 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 				})
 				.finally(() => {
 					$summaryBtn.prop("disabled", false).html(`
-						<i class="fa fa-refresh" style="margin-right: 4px;"></i>
-						${__("Summarize")}
+						<i class="fa fa-refresh"></i>
+						<span data-text>${__("Summarize")}</span>
 					`);
 				});
 		}
-	});
-	
-	// Add button inside .standard-actions (the flex container) so it appears alongside the other buttons
-	$(page.page_actions).find(".standard-actions").append(summaryButton);
+	}, { btn_class: "btn-summary-conversation" });
+	summaryButton.html(`<i class="fa fa-refresh"></i><span data-text>${__("Summarize")}</span>`);
+	summaryButton.hide();
+	summaryButton.insertAfter(tempBtn);
 
 	// Mount container inside page main area
 	const $container = $('<div style="height: calc(100vh - 120px);"></div>');
@@ -373,7 +321,7 @@ function initPhChat(container, page, $status) {
 
 	// ── Token-based Summmarize button visibility ────────────────────
 	function updateSummarizeButtonVisibility() {
-		const $btn = $(".page-actions .btn-summary-conversation");
+		const $btn = $(".btn-summary-conversation");
 		if (!$btn.length) return;
 		const roomId = window.phAgent?.state?.getActiveRoomId?.();
 		if (!roomId) { $btn.hide(); return; }
@@ -389,7 +337,7 @@ function initPhChat(container, page, $status) {
 	// Watch for token updates to show/hide Summarize button
 	frappe.realtime.on("token_update", (data) => {
 		if (data.session !== window.phAgent?.state?.getActiveRoomId?.()) return;
-		const $btn = $(".page-actions .btn-summary-conversation");
+		const $btn = $(".btn-summary-conversation");
 		if (!$btn.length) return;
 		if (data.percentage > 20 && data.current_tokens > 0) {
 			$btn.show();
@@ -404,14 +352,14 @@ function initPhChat(container, page, $status) {
 	// ── Temporary mode button sync helper ───────────────────────────
 	// Exposed globally so eventHandlers can call it on room switch.
 	window._phSyncTempModeButton = function(isTemporary) {
-		const $btn = $(".page-actions .btn-temp-mode");
+		const $btn = $(".btn-temp-mode");
 		if (!$btn.length) return;
 		if (isTemporary) {
 			$btn.removeClass("btn-default").addClass("btn-info");
-			$btn.find("span").text(__("Temporary ON"));
+			$btn.html(`👻 <span data-text>${__("Temporary ON")}</span>`);
 		} else {
 			$btn.removeClass("btn-info").addClass("btn-default");
-			$btn.find("span").text(__("Temporary"));
+			$btn.html(`👻 <span data-text>${__("Temporary")}</span>`);
 		}
 	};
 	chat.setAttribute("height", "100%");

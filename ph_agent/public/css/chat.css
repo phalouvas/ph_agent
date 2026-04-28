@@ -332,11 +332,23 @@ vue-advanced-chat {
 	cursor: pointer !important;
 }
 
-/* ── Responsive page actions (mobile support) ──────────────────── */
+/* ── Responsive page actions (mobile support) ────────────────────
+ * Styling for ph_agent custom buttons in the page header.
+ * Temp/Summary buttons are added via Frappe's page.add_button() into
+ * .custom-actions, then moved to .standard-actions (.insertAfter).
+ * The persona selector (<select> or compact button) lives in .standard-actions.
+ * Frappe's desk CSS auto-overflows buttons into .menu-btn-group on narrow
+ * screens — this CSS handles icon-only mode so the most-used buttons
+ * stay visible even when space is tight.
+ */
 
 /* Tier 1: Tablet (≤ 768px) */
 @media (max-width: 768px) {
 	.page-actions {
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+	.page-actions .standard-actions {
 		flex-wrap: wrap;
 		gap: 4px;
 	}
@@ -345,29 +357,38 @@ vue-advanced-chat {
 	}
 }
 
-/* Tier 2: Phone (≤ 480px) */
+/* Tier 2: Phone (≤ 480px) — icon-only for temp + summary, persona compact */
 @media (max-width: 480px) {
+	/* Persona dropdown select → compact icon button (handled by JS) */
 	.page-actions .persona-selector {
 		min-width: 100px;
 		max-width: 120px;
-		font-size: 11px !important;
-		padding: 2px 4px !important;
+		font-size: 11px;
+		padding: 2px 4px;
 	}
-	/* Hide text label on temp button — keep 👻 icon only */
-	.page-actions .btn-temp-mode span {
+
+	/* Temp button: hide text, show 👻 icon only */
+	.btn-temp-mode span[data-text] {
 		display: none;
 	}
-	.page-actions .btn-temp-mode {
-		padding: 2px 6px !important;
+	.btn-temp-mode {
+		padding: 2px 6px;
+		font-size: 16px;
+		line-height: 1;
 		min-width: 0;
 	}
-	/* Hide text on summary button — icon only */
-	.page-actions .btn-summary-conversation .fa-refresh,
-	.page-actions .btn-summary-conversation .fa-spinner {
-		margin-right: 0 !important;
-	}
-	.page-actions .btn-summary-conversation span {
+
+	/* Summary button: hide text, show icon only */
+	.btn-summary-conversation span[data-text] {
 		display: none;
+	}
+	.btn-summary-conversation .fa-refresh,
+	.btn-summary-conversation .fa-spinner {
+		margin-right: 0;
+	}
+	.btn-summary-conversation {
+		padding: 2px 6px;
+		min-width: 0;
 	}
 }
 
@@ -383,17 +404,52 @@ vue-advanced-chat {
 	.page-actions .persona-selector {
 		min-width: 60px;
 		max-width: 90px;
-		font-size: 10px !important;
-		padding: 2px 2px !important;
-		margin-left: 2px !important;
+		font-size: 10px;
+		padding: 2px 2px;
+		margin-left: 2px;
 	}
-	.page-actions .btn-temp-mode {
+	.btn-temp-mode {
 		width: 30px;
-		padding: 2px 4px !important;
-		margin-left: 2px !important;
+		padding: 2px 4px;
 	}
-	.page-actions .btn-summary-conversation {
-		padding: 2px 4px !important;
-		margin-left: 2px !important;
+	.btn-summary-conversation {
+		padding: 2px 4px;
 	}
+}
+
+/* ── Persona compact button (mobile icon-only mode) ──────────── */
+.btn-persona-compact {
+	margin-left: 4px;
+	padding: 2px 6px;
+	height: 28px;
+	font-size: 16px;
+	line-height: 1;
+	min-width: 0;
+}
+
+/* ── Persona dropdown menu (mobile compact tap) ─────────────── */
+.ph-persona-dropdown-item {
+	padding: 10px 14px;
+	cursor: pointer;
+	font-size: 13px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.ph-persona-dropdown-item:hover {
+	background: var(--gray-100, #f3f4f6);
+}
+.ph-persona-dropdown-item.active {
+	font-weight: 600;
+}
+.ph-persona-dropdown-item .check-mark {
+	margin-left: auto;
+	color: #4f72b8;
+}
+
+/* ── Frappe hidden-XL integration: ensure menu items from
+ * page.add_button() are properly hidden on desktop.
+ * Frappe's desk CSS already handles .hidden-xl — this is a safety net. */
+.hidden-xl {
+	display: none !important;
 }

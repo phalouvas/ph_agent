@@ -51,11 +51,9 @@ class ChatSession(Document):
 			if persona.enable_thinking:
 				self.enable_thinking = 1
 			if persona.system_prompt:
-				# Prepend persona system prompt to any existing prompt
-				if self.system_prompt:
-					self.system_prompt = f"{persona.system_prompt}\n\n---\n\n{self.system_prompt}"
-				else:
-					self.system_prompt = persona.system_prompt
+				# Persona prompt replaces provider prompt — persona already inherits from
+				# provider, so using both would duplicate the provider prompt.
+				self.system_prompt = persona.system_prompt
 			# Persona streaming/suggestions override provider defaults
 			self.enable_streaming = persona.enable_streaming
 			self.enable_suggestions = persona.enable_suggestions

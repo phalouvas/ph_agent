@@ -11,6 +11,7 @@
   "llm_provider",
   "status",
   "system_prompt",
+  "cross_session_context",
   "temperature",
   "enable_suggestions",
   "enable_streaming",
@@ -76,6 +77,14 @@
    "fieldname": "system_prompt",
    "fieldtype": "Long Text",
    "label": "System Prompt"
+  },
+  {
+   "description": "Cross-session context injected at session creation for continuity. Stored separately to keep system_prompt clean.",
+   "fieldname": "cross_session_context",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Cross Session Context",
+   "read_only": 1
   },
   {
    "description": "Temperature override for this session (0\u20111.5). Recommended values: Coding/Math: 0.0, Data Cleaning/Analysis: 1.0, General Conversation/Translation: 1.3, Creative Writing/Poetry: 1.5. Leave empty to use provider default.",

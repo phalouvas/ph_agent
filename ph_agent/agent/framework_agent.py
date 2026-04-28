@@ -376,6 +376,24 @@ def _validate_context_limit(session_doc, provider_doc) -> int:
 	return max_tokens
 
 
+def _build_instructions(session_doc) -> str | None:
+	"""Assemble the agent instructions from system_prompt and cross_session_context.
+
+	The system_prompt holds the clean inherited prompt (provider → persona).
+	The cross_session_context holds previous-session summaries injected at session
+	creation. These are combined here at build-time so each field stays semantically
+	clean in the database.
+	"""
+	system_prompt = session_doc.system_prompt or ""
+	cross_context = session_doc.get("cross_session_context") or ""
+
+	if cross_context and system_prompt:
+		return f"{cross_context}\n\n---\n\n{system_prompt}"
+	if cross_context:
+		return cross_context
+	return system_prompt or None
+
+
 def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	session_doc = frappe.get_doc("Chat Session", session_name)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
@@ -444,7 +462,7 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 
 	return Agent(
 		client=chat_client,
-		instructions=session_doc.system_prompt or None,
+		instructions=_build_instructions(session_doc),
 		tools=tools,
 		default_options=default_options,
 		context_providers=[

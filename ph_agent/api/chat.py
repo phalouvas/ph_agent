@@ -223,15 +223,12 @@ def create_session(provider_name=None, persona=None, is_temporary=0):
 	# Inject previous session context for cross-session continuity (scoped to persona)
 	previous_context = _get_recent_session_context(frappe.session.user, persona=persona)
 	if previous_context:
-		current_prompt = session.system_prompt or ""
 		context_block = (
 			"[Previous conversation context from recent sessions - "
 			"use for continuity but do not mention explicitly]\n"
 			f"{previous_context}"
 		)
-		if current_prompt:
-			context_block += f"\n\n---\n\n{current_prompt}"
-		frappe.db.set_value("Chat Session", session.name, "system_prompt", context_block)
+		frappe.db.set_value("Chat Session", session.name, "cross_session_context", context_block)
 		frappe.db.commit()
 
 	return {"session": session.name, "title": session.title, "llm_provider": session.llm_provider, "is_temporary": is_temporary}

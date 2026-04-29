@@ -511,6 +511,10 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				
 			except Exception as stream_error:
 				# If streaming fails, fall back to non-streaming
+				frappe.log_error(
+					title=f"Streaming failed for session {session}, falling back to non-streaming",
+					message=str(stream_error)
+				)
 				# Reload agent_msg to avoid TimestampMismatchError (it was committed earlier)
 				agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 				# Fall back to non-streaming - update the existing placeholder

@@ -173,19 +173,14 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 		if not isinstance(tool_groups, list):
 			tool_groups = []
 
-		# Delete existing child rows
-		frappe.db.delete("Persona Tool Group", {"parent": session, "parenttype": "Chat Session"})
-
-		# Insert new rows
+		# Load the session doc and manipulate child table through the parent
+		# This avoids permission issues on the child doctype (Persona Tool Group
+		# has no standalone permissions — it inherits from the parent).
+		session_doc = frappe.get_doc("Chat Session", session)
+		session_doc.set("tool_groups", [])
 		for group_name in tool_groups:
-			doc = frappe.get_doc({
-				"doctype": "Persona Tool Group",
-				"parent": session,
-				"parenttype": "Chat Session",
-				"parentfield": "tool_groups",
-				"tool_group": group_name,
-			})
-			doc.insert(ignore_permissions=True)
+			session_doc.append("tool_groups", {"tool_group": group_name})
+		session_doc.save(ignore_permissions=True)
 
 	frappe.db.commit()
 	return {"status": "ok"}

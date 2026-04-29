@@ -634,7 +634,12 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		tools=tools,
 		default_options=default_options,
 		context_providers=[
-			InMemoryHistoryProvider(),
+			# FrappeMemoryProvider handles all conversation history via the
+			# Chat Message DocType.  InMemoryHistoryProvider is intentionally
+			# omitted — having both would duplicate messages in the context
+			# and produce malformed conversations (e.g. orphaned tool_calls
+			# without matching tool results), triggering 400 errors from the
+			# LLM provider.
 			FrappeMemoryProvider(),
 			skills_provider,
 			UserPreferenceProvider(),

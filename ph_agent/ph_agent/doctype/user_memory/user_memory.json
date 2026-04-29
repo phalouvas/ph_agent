@@ -137,8 +137,12 @@
    "write": 1
   },
   {
+   "create": 1,
+   "delete": 1,
+   "if_owner": 1,
    "read": 1,
-   "role": "All"
+   "role": "PH Agent User",
+   "write": 1
   }
  ],
  "sort_field": "modified",

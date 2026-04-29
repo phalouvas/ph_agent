@@ -11,15 +11,15 @@ app_license = "gpl-3.0"
 # required_apps = []
 
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "ph_agent",
-# 		"logo": "/assets/ph_agent/logo.png",
-# 		"title": "PH Agent",
-# 		"route": "/ph_agent",
-# 		"has_permission": "ph_agent.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "ph_agent",
+		"logo": "/assets/ph_agent/logo.png",
+		"title": "PH Agent",
+		"route": "/ph_agent",
+		"has_permission": "ph_agent.api.permission.has_app_permission"
+	}
+]
 
 # Includes in <head>
 # ------------------
@@ -254,4 +254,3 @@ scheduler_events = {
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

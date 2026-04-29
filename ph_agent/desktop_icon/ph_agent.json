@@ -16,6 +16,6 @@
  "name": "PH Agent",
  "owner": "Administrator",
  "restrict_removal": 0,
- "roles": [],
+ "roles": [{"role": "PH Agent User"}],
  "standard": 1
 }

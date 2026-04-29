@@ -8,7 +8,7 @@
 	"name": "chat",
 	"page_name": "chat",
 	"restrict_to_domain": null,
-	"roles": [],
+	"roles": [{"role": "PH Agent User"}],
 	"standard": "Yes",
 	"system_page": 0,
 	"title": "AI Chat"

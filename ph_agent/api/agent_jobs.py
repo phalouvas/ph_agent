@@ -1,5 +1,6 @@
 import asyncio
 import json
+import traceback
 
 import frappe
 from ph_agent.agent.framework_agent import (
@@ -207,7 +208,7 @@ def _perform_auto_summary(session: str, enqueued_by: str | None = None,
 	except Exception as e:
 		frappe.log_error(
 			title=f"Auto-summarization failed for session {session}",
-			message=str(e),
+			message=f"{e}\n{traceback.format_exc()}",
 		)
 		# Emergency fallback: if tokens exceed 95 %, prune oldest messages
 		total_tokens, _ = _get_total_estimated_tokens(session)
@@ -511,11 +512,22 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				
 			except Exception as stream_error:
 				# If streaming fails, fall back to non-streaming
+				frappe.log_error(
+					title=f"Streaming failed for session {session}, falling back to non-streaming",
+					message=f"{stream_error}\n{traceback.format_exc()}"
+				)
 				# Reload agent_msg to avoid TimestampMismatchError (it was committed earlier)
 				agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
-				reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+				try:
+					reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+				except Exception as fallback_error:
+					frappe.log_error(
+						title=f"Non-streaming fallback also failed for session {session}",
+						message=f"{fallback_error}\n{traceback.format_exc()}"
+					)
+					raise  # Let the outer except Exception handle it
 				
 				if approval_data:
 					# Handle approval flow
@@ -646,7 +658,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		# unfrozen, regardless of what kind of exception occurs.
 		frappe.log_error(
 			title=f"Agent background job failed for session {session}",
-			message=str(e),
+			message=f"{e}\n{traceback.format_exc()}",
 		)
 
 		# Best-effort update of the placeholder message with error text
@@ -841,6 +853,7 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 	except Exception:
 		frappe.log_error(
 			title=f"Suggestion background job failed for session {session}",
+			message=traceback.format_exc(),
 			reference_doctype="Chat Session",
 			reference_name=session,
 		)
@@ -943,8 +956,6 @@ def _execute_approved_tool(approval_name):
 	Args:
 		approval_name: Name of the Tool Approval Request document
 	"""
-	import traceback
-	
 	approval_doc = frappe.get_doc("Tool Approval Request", approval_name)
 	
 	if approval_doc.status != "Approved":
@@ -1081,7 +1092,7 @@ def _execute_approved_tool(approval_name):
 	except Exception as e:
 		frappe.log_error(
 			title=f"Approved tool execution failed for {approval_name}",
-			message=str(e),
+			message=f"{e}\n{traceback.format_exc()}",
 			reference_doctype="Tool Approval Request",
 			reference_name=approval_name,
 		)

@@ -17,6 +17,9 @@
   "enable_streaming",
   "enable_thinking",
   "is_temporary",
+  "section_tools",
+  "disable_tools",
+  "tool_groups",
   "column_break_1",
   "input_tokens",
   "output_tokens",
@@ -120,6 +123,26 @@
    "fieldname": "is_temporary",
    "fieldtype": "Check",
    "label": "Temporary Session"
+  },
+  {
+   "fieldname": "section_tools",
+   "fieldtype": "Section Break",
+   "label": "Tool Groups"
+  },
+  {
+   "default": "0",
+   "description": "When enabled, no tools will be available in this session. Overrides persona tool settings.",
+   "fieldname": "disable_tools",
+   "fieldtype": "Check",
+   "label": "Disable All Tools"
+  },
+  {
+   "depends_on": "eval:!doc.disable_tools",
+   "description": "Restrict this session to specific tool groups. Leave empty to use persona settings.",
+   "fieldname": "tool_groups",
+   "fieldtype": "Table",
+   "label": "Tool Groups",
+   "options": "Persona Tool Group"
   },
   {
    "fieldname": "column_break_1",

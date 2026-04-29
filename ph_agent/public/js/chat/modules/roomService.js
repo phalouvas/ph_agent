@@ -237,7 +237,7 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
             return frappe.db.get_value("Chat Session", roomId, [
                     "title", "llm_provider", "creation", "modified",
                     "temperature", "enable_streaming", "enable_suggestions", "enable_thinking",
-                    "system_prompt"
+                    "system_prompt", "disable_tools"
                 ])
                 .then((r) => {
                     if (!r.message) {
@@ -245,18 +245,37 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                     }
                     
                     const session = r.message;
-                    return {
-                        title: session.title,
-                        provider: session.llm_provider,
-                        created: session.creation,
-                        modified: session.modified,
-                        temperature: session.temperature,
-                        enable_streaming: session.enable_streaming,
-                        enable_suggestions: session.enable_suggestions,
-                        enable_thinking: session.enable_thinking,
-                        system_prompt: session.system_prompt || "",
-                        roomId: roomId
-                    };
+                    
+                    // Fetch tool groups for this session
+                    return frappe.call({
+                        method: "frappe.client.get_list",
+                        args: {
+                            doctype: "Persona Tool Group",
+                            filters: {
+                                parent: roomId,
+                                parenttype: "Chat Session"
+                            },
+                            fields: ["tool_group"],
+                            limit_page_length: 50
+                        }
+                    }).then((groupsResult) => {
+                        const toolGroups = (groupsResult.message || []).map(g => g.tool_group);
+                        
+                        return {
+                            title: session.title,
+                            provider: session.llm_provider,
+                            created: session.creation,
+                            modified: session.modified,
+                            temperature: session.temperature,
+                            enable_streaming: session.enable_streaming,
+                            enable_suggestions: session.enable_suggestions,
+                            enable_thinking: session.enable_thinking,
+                            system_prompt: session.system_prompt || "",
+                            disable_tools: session.disable_tools || false,
+                            tool_groups: toolGroups,
+                            roomId: roomId
+                        };
+                    });
                 });
         },
         

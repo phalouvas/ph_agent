@@ -111,12 +111,58 @@ class ToolManager:
             # Cache the tools
             cls._cache_tools(tools)
 
-        # Filter by persona tool groups if configured
-        tools = cls._filter_by_persona(tools, persona)
+        # Filter by session-level tool settings first, then persona
+        tools = cls._filter_by_session(tools, session_name, persona)
 
         # Inject context if needed
         return cls._inject_context_into_tools(tools, session_name, user)
     
+    @classmethod
+    def _filter_by_session(cls, tools: List, session_name: Optional[str], persona: Optional[str]) -> List:
+        """Filter tools by session-level tool settings, falling back to persona.
+
+        If the session has ``disable_tools = 1``, returns an empty list.
+        If the session has tool_groups rows, uses those groups for filtering.
+        If the session has ``disable_tools`` explicitly set to 0, returns all tools
+        (session takes full control, overriding persona).
+        Otherwise falls through to persona-level filtering.
+        """
+        if session_name:
+            try:
+                session_doc = frappe.get_doc("Chat Session", session_name)
+            except Exception as e:
+                logger.warning("Failed to load session '%s': %s", session_name, str(e))
+                return cls._filter_by_persona(tools, persona)
+
+            # Hard override: no tools at all
+            if session_doc.get("disable_tools"):
+                logger.debug(
+                    "[tool_filter] Session '%s' has disable_tools=1, returning []", session_name
+                )
+                return []
+
+            # Session-level tool groups take precedence over persona
+            session_groups = [row.tool_group for row in (session_doc.get("tool_groups") or [])]
+            if session_groups:
+                filtered = [t for t in tools if getattr(t, "tool_group", "General") in session_groups]
+                logger.debug(
+                    "Session '%s' groups %s: filtered %d → %d tools",
+                    session_name, session_groups, len(tools), len(filtered)
+                )
+                return filtered
+
+            # If session has disable_tools explicitly set to 0, session takes full control
+            # — return all tools, overriding persona restrictions
+            if session_doc.get("disable_tools") is not None:
+                logger.debug(
+                    "[tool_filter] Session '%s' has disable_tools=0, returning all tools "
+                    "(session overrides persona)", session_name
+                )
+                return tools
+
+        # Fall through to persona-level filtering
+        return cls._filter_by_persona(tools, persona)
+
     @classmethod
     def _filter_by_persona(cls, tools: List, persona: Optional[str]) -> List:
         """Filter tools by the persona's configured tool groups.

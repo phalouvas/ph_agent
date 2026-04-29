@@ -57,6 +57,12 @@ class ChatSession(Document):
 			# Persona streaming/suggestions override provider defaults
 			self.enable_streaming = persona.enable_streaming
 			self.enable_suggestions = persona.enable_suggestions
+			# Inherit tool settings from persona
+			if persona.disable_tools:
+				self.disable_tools = 1
+			if persona.get("tool_groups"):
+				for row in persona.tool_groups:
+					self.append("tool_groups", {"tool_group": row.tool_group})
 	
 	def validate(self):
 		# Validate temperature range

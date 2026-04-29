@@ -356,13 +356,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	
 	# If regenerating, delete the old agent message before creating the new one
 	if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
-		# Clear User Memory references to this message to avoid LinkExistsError
-		frappe.db.set_value(
-			"User Memory",
-			{"source_message": agent_msg_name},
-			"source_message",
-			None,
-		)
+		# Delete User Memory records linked to this message
+		frappe.db.delete("User Memory", {"source_message": agent_msg_name})
 		frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
 		frappe.db.commit()
 	
@@ -1157,13 +1152,8 @@ def cancel_approvals_for_session(doc, method):
 	
 	Called via doc_events hook: Chat Session > on_trash
 	"""
-	# Clear User Memory source_session references to this session
-	frappe.db.set_value(
-		"User Memory",
-		{"source_session": doc.name},
-		"source_session",
-		None,
-	)
+	# Delete User Memory records linked to this session
+	frappe.db.delete("User Memory", {"source_session": doc.name})
 	
 	linked_requests = frappe.get_all(
 		"Tool Approval Request",
@@ -1189,13 +1179,8 @@ def cancel_approvals_for_message(doc, method):
 	
 	Called via doc_events hook: Chat Message > on_trash
 	"""
-	# Clear User Memory references to this message to avoid LinkExistsError
-	frappe.db.set_value(
-		"User Memory",
-		{"source_message": doc.name},
-		"source_message",
-		None,
-	)
+	# Delete User Memory records linked to this message
+	frappe.db.delete("User Memory", {"source_message": doc.name})
 	
 	# If this message is referenced as the session's last_summary_message,
 	# clear that reference to avoid LinkExistsError

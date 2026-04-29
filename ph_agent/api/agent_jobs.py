@@ -650,6 +650,52 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				room="website",
 			)
 		return
+	except Exception as e:
+		# Catch-all: ensure lock is always released and frontend is always
+		# unfrozen, regardless of what kind of exception occurs.
+		frappe.log_error(
+			title=f"Agent background job failed for session {session}",
+			message=str(e),
+		)
+
+		# Best-effort update of the placeholder message with error text
+		msg_name = agent_msg.name if agent_msg else None
+		if msg_name and frappe.db.exists("Chat Message", msg_name):
+			try:
+				frappe.db.set_value(
+					"Chat Message", msg_name, "content",
+					"⚠️ " + str(e)
+				)
+				frappe.db.commit()
+				frappe.publish_realtime(
+					event="new_message",
+					message={
+						"session": session,
+						"name": msg_name,
+						"sender_type": "Agent",
+						"content": "⚠️ " + str(e),
+						"creation": str(frappe.utils.now_datetime()),
+					},
+					room="website",
+				)
+				# Emit a final chunk so streaming frontend state clears
+				frappe.publish_realtime(
+					event="message_chunk",
+					message={
+						"session": session,
+						"message_id": msg_name,
+						"chunk": "",
+						"is_final": True,
+					},
+					room="website",
+				)
+			except Exception:
+				pass  # Last-resort: logging already happened above
+
+		release_lock()
+		frappe.cache().delete_value(cancel_key)
+		emit_status("")
+		return
 
 	# Update token counts on the session
 	frappe.db.set_value(

@@ -8,4 +8,5 @@ ph_agent.patches.v1_0_0.migrate_to_personas
 ph_agent.patches.v1_4_0.update_tool_groups
 ph_agent.patches.v1_4_0.fix_system_prompt_inheritance
 ph_agent.patches.v1_6_0.create_ph_agent_user_role
+ph_agent.patches.v1_6_1.add_llm_provider_read_for_ph_agent_user
 # Patches added in this section will be executed after doctypes are migrated

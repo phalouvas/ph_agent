@@ -486,7 +486,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 // Wait for Vue to update DOM before checking scroll position
                 setTimeout(() => {
                     const uiHelpers = window.phAgent.uiHelpers;
-                    const scrolled = uiHelpers.scrollToBottomIfNear(200);
+                    const scrolled = uiHelpers.scrollToBottomIfNear(50);
                     if (!scrolled) {
                         // User is scrolled up - trigger scroll detection to show down-arrow
                         uiHelpers.triggerScrollDetection();

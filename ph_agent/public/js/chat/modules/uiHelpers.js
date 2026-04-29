@@ -205,6 +205,23 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                     top: auto !important;
                     bottom: 6px !important;
                 }
+
+                /* ── Move message action dropdown from top to bottom ─────── */
+                /* Override vue-advanced-chat's JS inline style="top: Xpx"     */
+                .vac-message-actions-wrapper .vac-menu-options {
+                    top: auto !important;
+                    bottom: 45px !important;
+                }
+                .vac-message-actions-wrapper .vac-menu-left {
+                    top: auto !important;
+                    bottom: 45px !important;
+                }
+                @media (max-width: 768px) {
+                    .vac-message-actions-wrapper .vac-menu-options,
+                    .vac-message-actions-wrapper .vac-menu-left {
+                        bottom: 35px !important;
+                    }
+                }
             `;
             root.appendChild(_suggestionStyle);
         },

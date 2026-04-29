@@ -338,18 +338,28 @@ vue-advanced-chat {
  * .custom-actions, then moved to .standard-actions (.insertAfter).
  * The persona selector (<select> or compact button) lives in .standard-actions.
  * Frappe's desk CSS auto-overflows buttons into .menu-btn-group on narrow
- * screens — this CSS handles icon-only mode so the most-used buttons
- * stay visible even when space is tight.
+ * screens — this CSS prevents that by keeping buttons visible and
+ * using icon-only mode so the most-used buttons stay accessible.
  */
+
+/* Prevent Frappe from hiding buttons into the three-dots overflow menu.
+ * These buttons must always be directly visible. */
+.btn-temp-mode,
+.btn-summary-conversation {
+	display: inline-flex !important;
+	flex-shrink: 0;
+}
 
 /* Tier 1: Tablet (≤ 768px) */
 @media (max-width: 768px) {
 	.page-actions {
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		gap: 4px;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
 	}
 	.page-actions .standard-actions {
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		gap: 4px;
 	}
 	.page-actions .persona-selector {

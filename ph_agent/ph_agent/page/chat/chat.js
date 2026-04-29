@@ -319,32 +319,21 @@ function initPhChat(container, page, $status) {
 	const currentUserId = frappe.session.user;
 	const agentId = "ph_agent";
 
-	// ── Token-based Summmarize button visibility ────────────────────
+	// ── Summarize button visibility ─────────────────────────────────
+	// Always visible when a session is active (not gated by token %)
 	function updateSummarizeButtonVisibility() {
 		const $btn = $(".btn-summary-conversation");
 		if (!$btn.length) return;
 		const roomId = window.phAgent?.state?.getActiveRoomId?.();
-		if (!roomId) { $btn.hide(); return; }
-		window.phAgent.roomService.getTokenInfo(roomId).then((info) => {
-			if (info.percentage > 20 && info.current_tokens > 0) {
-				$btn.show();
-			} else {
-				$btn.hide();
-			}
-		}).catch(() => { $btn.hide(); });
-	}
-
-	// Watch for token updates to show/hide Summarize button
-	frappe.realtime.on("token_update", (data) => {
-		if (data.session !== window.phAgent?.state?.getActiveRoomId?.()) return;
-		const $btn = $(".btn-summary-conversation");
-		if (!$btn.length) return;
-		if (data.percentage > 20 && data.current_tokens > 0) {
+		if (roomId) {
 			$btn.show();
 		} else {
 			$btn.hide();
 		}
-	});
+	}
+
+	// Token updates no longer gate visibility — button stays visible
+	// as long as a session is active.
 
 	// ── Create Vue Advanced Chat web component ──────────────────────
 	const chat = document.createElement("vue-advanced-chat");

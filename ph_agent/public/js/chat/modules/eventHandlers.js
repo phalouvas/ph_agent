@@ -833,7 +833,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                     fieldname: "tool_groups",
                                     fieldtype: "MultiSelect",
                                     label: __("Tool Groups"),
-                                    default: roomInfo.tool_groups,
+                                    default: (roomInfo.tool_groups || []).length > 0 ? roomInfo.tool_groups.join(", ") : " ",
                                     depends_on: "eval:!doc.disable_tools",
                                     options: ["General", "ERPNext", "Financial", "Web", "Meta"].join("\n"),
                                     description: __("Restrict this session to specific tool groups. Leave empty to use persona settings."),
@@ -883,8 +883,8 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 if (!!values.disable_tools !== !!roomInfo.disable_tools) {
                                     args.disable_tools = values.disable_tools ? 1 : 0;
                                 }
-                                if (JSON.stringify(values.tool_groups || []) !== JSON.stringify(roomInfo.tool_groups || [])) {
-                                    args.tool_groups = JSON.stringify(values.tool_groups || []);
+                                if (JSON.stringify((values.tool_groups || "").split(/,\s*/).filter(Boolean)) !== JSON.stringify(roomInfo.tool_groups || [])) {
+                                    args.tool_groups = JSON.stringify((values.tool_groups || "").split(/,\s*/).filter(Boolean));
                                 }
                                 
                                 if (Object.keys(args).length <= 1) {

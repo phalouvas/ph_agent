@@ -890,9 +890,9 @@ def get_agent_response_stream(
 
 					chunk_count += 1
 
-					# Emit in smaller pieces for smoother UI rendering.
-					for idx in range(0, len(delta), 80):
-						result_queue.put(("chunk", delta[idx : idx + 80]))
+					# Emit in moderately-sized pieces for smooth UI rendering.
+					for idx in range(0, len(delta), 500):
+						result_queue.put(("chunk", delta[idx : idx + 500]))
 
 				if stop_event.is_set():
 					result_queue.put(("done", ("", 0, 0)))

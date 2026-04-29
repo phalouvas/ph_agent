@@ -15,6 +15,8 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
     let _activeRoomId = null;
     let _agentId = null;
     let _responseCompleted = false;  // Tracks whether the current response has finished
+    let _chunkBuffer = new Map();    // messageId → accumulated chunk string (rAF-batched)
+    let _rafScheduled = false;       // Prevents duplicate rAF scheduling
     
     // Public API
     return {
@@ -89,6 +91,49 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
          */
         resetResponseState: function() {
             _responseCompleted = false;
+            _chunkBuffer.clear();
+            _rafScheduled = false;
+        },
+        
+        /**
+         * Flush the chunk buffer — applies all accumulated chunks to the message
+         * state in a single batch, then schedules a second rAF for scroll.
+         * Called from rAF callback or synchronously on stream completion.
+         */
+        _flushChunkBuffer: function() {
+            _rafScheduled = false;
+            if (_chunkBuffer.size === 0) return;
+            
+            const state = window.phAgent.state;
+            
+            // Apply all buffered chunks — one state update per message
+            for (const [messageId, accumulatedContent] of _chunkBuffer.entries()) {
+                const message = state.getMessageById(messageId);
+                if (!message) continue;
+                
+                let updatedContent;
+                const currentContent = message.content || "";
+                if (currentContent === "\u23F3 Generating response..." || currentContent === "") {
+                    updatedContent = accumulatedContent;
+                } else {
+                    updatedContent = currentContent + accumulatedContent;
+                }
+                
+                state.updateMessage(messageId, { content: updatedContent });
+            }
+            _chunkBuffer.clear();
+            
+            // Single Vue re-render for all buffered updates
+            _chat.messages = state.getMessages();
+            
+            // Schedule scroll in the NEXT frame — Vue needs one frame to update DOM
+            requestAnimationFrame(function() {
+                const uiHelpers = window.phAgent.uiHelpers;
+                const scrolled = uiHelpers.scrollToBottomIfNear(80);
+                if (!scrolled) {
+                    uiHelpers.triggerScrollDetection();
+                }
+            });
         },
         
         /**
@@ -369,6 +414,12 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                     state.setIsProcessing(true);
                 }
             } else {
+                // Defensive drain: flush any remaining buffered chunks before
+                // replacing streamed content with the saved message. Handles the
+                // edge case where Redis pub/sub delivers new_message before the
+                // final message_chunk(is_final) event.
+                this._flushChunkBuffer();
+                
                 // For final/regular messages (with actual content), clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
@@ -434,6 +485,9 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             if (!message) return;
             
             if (data.is_final) {
+                // Synchronously drain any remaining buffered chunks before finalizing
+                this._flushChunkBuffer();
+                
                 // Final chunk - clear typing indicator and status
                 const rooms = state.getRooms().map((room) =>
                     room.roomId === _activeRoomId ? { ...room, typingUsers: [] } : room
@@ -461,52 +515,18 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 const newMessages = state.getMessages();
                 _chat.messages = newMessages;
             } else {
-                // Content chunk - handle placeholder replacement
+                // Content chunk - accumulate in buffer, flush once per animation frame
                 if (!data.chunk) return;
                 
-                let updatedContent;
-                const currentContent = message.content || "";
-                if (currentContent === "⏳ Generating response..." || currentContent === "") {
-                    // First chunk - replace placeholder with actual content
-                    updatedContent = data.chunk;
-                } else {
-                    // Subsequent chunks - append to existing content
-                    updatedContent = currentContent + data.chunk;
+                // Accumulate chunk in buffer (keyed by messageId)
+                const existing = _chunkBuffer.get(data.message_id) || "";
+                _chunkBuffer.set(data.message_id, existing + data.chunk);
+                
+                // Schedule a single rAF flush if not already scheduled
+                if (!_rafScheduled) {
+                    _rafScheduled = true;
+                    requestAnimationFrame(() => this._flushChunkBuffer());
                 }
-                
-                state.updateMessage(data.message_id, { 
-                    content: updatedContent
-                });
-                
-                // Update chat component - force new array reference for Vue reactivity
-                const newMessages = state.getMessages();
-                _chat.messages = newMessages;
-                
-                // Auto-scroll during streaming if user is near bottom
-                // Wait for Vue to update DOM before checking scroll position
-                setTimeout(() => {
-                    const uiHelpers = window.phAgent.uiHelpers;
-                    const scrolled = uiHelpers.scrollToBottomIfNear(50);
-                    if (!scrolled) {
-                        // User is scrolled up - trigger scroll detection to show down-arrow
-                        uiHelpers.triggerScrollDetection();
-                    }
-                }, 50);
-                
-                // Show typing indicator while streaming
-                const rooms = state.getRooms().map((room) => {
-                    if (room.roomId !== _activeRoomId) return room;
-                    
-                    // Add typing indicator for agent
-                    const typingUsers = room.typingUsers || [];
-                    if (!typingUsers.includes(_agentId)) {
-                        typingUsers.push(_agentId);
-                    }
-                    
-                    return { ...room, typingUsers };
-                });
-                state.setRooms(rooms);
-                _chat.rooms = rooms;
             }
         },
         

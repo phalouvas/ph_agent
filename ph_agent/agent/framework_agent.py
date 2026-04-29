@@ -521,19 +521,19 @@ class FrappeMemoryProvider(HistoryProvider):
 				history.append(assistant_msg)
 
 		# Strip non-text content types from assistant messages in history.
-		# Tool call/result pairs (function_call, function_result) and reasoning
-		# tokens (text_reasoning) are not persisted to the DB — they exist only
-		# in-memory during execution. This filter is a belt-and-suspenders guard
-		# that ensures only visible text is injected into the LLM context for
-		# prior turns, reducing token consumption.
+		# Tool call/result pairs (function_call, function_result) exist only
+		# in-memory during execution and are not persisted to the DB.
+		# Reasoning tokens (text_reasoning) ARE persisted and MUST be preserved
+		# because DeepSeek's thinking mode requires reasoning_content to be
+		# echoed back in subsequent requests.
 		filtered: list[Message] = []
 		for msg in history:
 			if msg.role == "assistant":
-				text_only = [c for c in msg.contents if getattr(c, "type", None) == "text"]
-				if text_only:
-					msg.contents = text_only
+				allowed = [c for c in msg.contents if getattr(c, "type", None) in ("text", "text_reasoning")]
+				if allowed:
+					msg.contents = allowed
 					filtered.append(msg)
-				# Drop assistant messages with no text content (e.g. tool-only turns)
+				# Drop assistant messages with no text or reasoning content (e.g. tool-only turns)
 			else:
 				filtered.append(msg)
 		return filtered

@@ -13,6 +13,11 @@ class UserPreference(Document):
 	Preferences are stored as a JSON dict in the ``preferences`` field.
 	"""
 
+	def before_insert(self) -> None:
+		"""Auto-set user to the logged-in user."""
+		if not self.user:
+			self.user = frappe.session.user
+
 	def before_save(self) -> None:
 		"""Ensure preferences is valid JSON on save."""
 		if self.preferences and isinstance(self.preferences, str):

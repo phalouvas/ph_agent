@@ -787,8 +787,16 @@ def _extract_reasoning_from_response(response) -> str:
 	return "\n".join(reasoning_parts)
 
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None) -> tuple[str, int, int, dict | None, str]:
+def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, dict | None, str]:
 	"""Get agent response (non-streaming).
+
+	Args:
+		session_name: Chat Session name.
+		user_message: The user message text.
+		cancel_check: Optional callable to check for cancellation.
+		skip_session_state: If True, skip loading cached session state
+			(e.g. InMemoryHistoryProvider messages). Used during regeneration
+			to prevent stale messages from leaking into the new context.
 	
 	Returns:
 		tuple of (response_text, input_tokens, output_tokens, approval_data, reasoning_content)
@@ -796,8 +804,8 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
-	# Load session state before running agent
-	stored_state = _load_session_state(session_name)
+	# Load session state before running agent (skip for regeneration)
+	stored_state = None if skip_session_state else _load_session_state(session_name)
 	
 	response, agent_session = _run_agent(session_name, Message("user", [user_message]), session_state=stored_state)
 
@@ -824,6 +832,7 @@ def get_agent_response_stream(
 	user_message: str,
 	cancel_check=None,
 	status_callback=None,
+	skip_session_state: bool = False,
 ) -> Generator[tuple[Any, bool, int, int], None, None]:
 	if status_callback:
 		status_callback(frappe._("Calling AI…"))
@@ -837,8 +846,8 @@ def get_agent_response_stream(
 	def _producer() -> None:
 		async def _consume() -> None:
 			try:
-				# Load session state before running agent
-				stored_state = _load_session_state(session_name)
+				# Load session state before running agent (skip for regeneration)
+				stored_state = None if skip_session_state else _load_session_state(session_name)
 				
 				# Use streaming agent runner — returns (stream, AgentSession)
 				stream, agent_session = await _run_agent_stream(

@@ -195,24 +195,48 @@ _CODE_SEGMENT_RE = None   # matches fenced blocks and inline code spans
 _BOLD_ITALIC_RE = None    # ***text***
 _BOLD_RE = None           # **text**
 _ITALIC_RE = None         # *text*  (not list bullets, not **bold**)
+_HEADING_RE = None        # # heading
+_LINK_RE = None           # [text](url)
+_IMAGE_RE = None          # ![alt](url)
+_BLOCKQUOTE_RE = None     # > quote
+_HR_RE = None             # ---, ***, ___
+_STRIKE_RE = None         # ~~text~~
+_UNDERLINE_RE = None      # °text°
 
 
 def _convert_formatting_for_vue_chat(text: str) -> str:
-	"""Convert standard Markdown bold/italic delimiters to vue-advanced-chat format.
+	"""Convert standard Markdown to vue-advanced-chat formatting.
 
 	vue-advanced-chat renders:
 	  *text*   → bold
 	  _text_   → italic
+	  ~text~   → strikethrough
+	  °text°   → underline
+	  `code`   → inline code
+	  ```code``` → multiline code
 
 	Standard Markdown (what the LLM outputs):
 	  **text**   → bold
 	  *text*     → italic
 	  ***text*** → bold + italic
+	  ~~text~~   → strikethrough
+	  # Heading → bold
+	  [text](url) → text (url)
+	  ![alt](url) → [Image: alt] (url)
+	  > quote   → italic
+	  ---       → separator line
 
 	Conversion order applied to non-code segments:
 	  1. *italic*       → _italic_   (before bold so lone * are handled first)
 	  2. ***bold+ital***→ *_bold+ital_*
 	  3. **bold**       → *bold*
+	  4. ~~strike~~     → ~strike~
+	  5. °underline°    → °underline° (passthrough, already correct)
+	  6. # Heading      → *Heading*
+	  7. [text](url)    → text (url)
+	  8. ![alt](url)    → [Image: alt] (url)
+	  9. > quote        → _quote_
+	  10. ---/***/___   → separator line
 
 	Code spans (``code``) and fenced blocks (```...```) are left untouched.
 	List bullets (``* item``) are excluded by requiring the opening ``*``
@@ -221,6 +245,7 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 	import re
 
 	global _CODE_SEGMENT_RE, _BOLD_ITALIC_RE, _BOLD_RE, _ITALIC_RE
+	global _STRIKE_RE, _UNDERLINE_RE, _HEADING_RE, _LINK_RE, _IMAGE_RE, _BLOCKQUOTE_RE, _HR_RE
 	if _CODE_SEGMENT_RE is None:
 		# Fenced code blocks (``` ... ```) or inline code (`code`).
 		# Use [\s\S] for fenced blocks so newlines are included.
@@ -232,6 +257,20 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 		# *italic*: single asterisk, not adjacent to another *, not followed
 		# by whitespace (excludes list bullets like "* item").
 		_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)')
+		# ~~strikethrough~~
+		_STRIKE_RE = re.compile(r'~~(.+?)~~')
+		# °underline° (vue-chat native format, passthrough)
+		_UNDERLINE_RE = re.compile(r'°(.+?)°')
+		# # Heading (1-6 # characters, must be at start of line)
+		_HEADING_RE = re.compile(r'^#{1,6}\s+(.+?)(?:\s*#+\s*)?$', re.MULTILINE)
+		# [text](url) — not inside a < or > to avoid false matches
+		_LINK_RE = re.compile(r'(?<![<\[!])\[([^\]]+)\]\(([^)]+)\)')
+		# ![alt](url)
+		_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+		# > blockquote (at start of line, optional leading spaces)
+		_BLOCKQUOTE_RE = re.compile(r'^>\s?(.+)$', re.MULTILINE)
+		# Horizontal rules: ---, ***, ___ (3+ chars, optionally with spaces, on own line)
+		_HR_RE = re.compile(r'^[ \t]*([-*_])[ \t]*\1[ \t]*\1[ \t]*\1*[ \t]*$', re.MULTILINE)
 
 	parts = _CODE_SEGMENT_RE.split(text)
 	result = []
@@ -248,6 +287,19 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 			part = _BOLD_ITALIC_RE.sub(r'*_\1_*', part)
 			# 3. Bold: **text** → *text*
 			part = _BOLD_RE.sub(r'*\1*', part)
+			# 4. Strikethrough: ~~text~~ → ~text~
+			part = _STRIKE_RE.sub(r'~\1~', part)
+			# 5. Underline: °text° → °text° (passthrough, already correct)
+			# 6. Headings: # Title → *Title*
+			part = _HEADING_RE.sub(r'*\1*', part)
+			# 7. Links: [text](url) → text (url)
+			part = _LINK_RE.sub(r'\1 (\2)', part)
+			# 8. Images: ![alt](url) → [Image: alt] (url)
+			part = _IMAGE_RE.sub(r'[Image: \1] (\2)', part)
+			# 9. Blockquotes: > text → _text_
+			part = _BLOCKQUOTE_RE.sub(r'_\1_', part)
+			# 10. Horizontal rules: --- → separator line
+			part = _HR_RE.sub(r'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯', part)
 			result.append(part)
 	return ''.join(result)
 

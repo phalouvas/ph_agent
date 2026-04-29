@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import logging
 import queue
 import threading
 from collections.abc import Generator, Sequence
@@ -18,6 +19,8 @@ from ph_agent.agent.context.user_preference_provider import UserPreferenceProvid
 from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
 from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
+
+logger = logging.getLogger(__name__)
 from ph_agent.agent.tools.tool_router_provider import (
     _ROUTER_SYSTEM_PROMPT,
     _ROUTING_THRESHOLD,

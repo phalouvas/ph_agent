@@ -163,7 +163,7 @@
   }
  ],
  "links": [],
- "modified": "2026-04-27 09:35:51.442379",
+ "modified": "2026-04-29 08:13:14.743496",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "Persona",
@@ -196,7 +196,10 @@
   }
  ],
  "row_format": "Dynamic",
+ "search_fields": "persona_name",
+ "show_title_field_in_link": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "title_field": "persona_name"
 }

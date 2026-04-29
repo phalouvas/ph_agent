@@ -84,7 +84,7 @@
   }
  ],
  "links": [],
- "modified": "2026-04-20 00:00:00",
+ "modified": "2026-04-29 08:16:19.582535",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "Tool Registry",
@@ -105,8 +105,10 @@
   }
  ],
  "row_format": "Dynamic",
+ "show_title_field_in_link": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
+ "title_field": "tool_name",
  "track_changes": 1
 }

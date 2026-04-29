@@ -183,6 +183,28 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                     max-height: 150px !important;
                     overflow-y: auto !important;
                 }
+
+                /* ── Move message action buttons from top to bottom ──────── */
+                .vac-message-actions-wrapper .vac-options-container {
+                    top: auto !important;
+                    bottom: 2px !important;
+                    border-top-right-radius: 0 !important;
+                    border-bottom-right-radius: 8px !important;
+                }
+                .vac-message-actions-wrapper .vac-blur-container {
+                    bottom: auto !important;
+                    top: 10px !important;
+                    border-bottom-left-radius: 0 !important;
+                    border-top-left-radius: 8px !important;
+                }
+                .vac-message-actions-wrapper .vac-message-options {
+                    top: auto !important;
+                    bottom: 7px !important;
+                }
+                .vac-message-actions-wrapper .vac-message-emojis {
+                    top: auto !important;
+                    bottom: 6px !important;
+                }
             `;
             root.appendChild(_suggestionStyle);
         },

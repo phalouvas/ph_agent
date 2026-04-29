@@ -87,6 +87,24 @@ window.phAgent.state = window.phAgent.state || (function() {
             if (uiHelpers) {
                 uiHelpers.setProcessing(processing);
             }
+            // Safety net: auto-reset after 5 minutes if stuck
+            if (processing) {
+                if (this._processingTimeout) clearTimeout(this._processingTimeout);
+                this._processingTimeout = setTimeout(function() {
+                    if (isProcessing) {
+                        isProcessing = false;
+                        if (uiHelpers) {
+                            uiHelpers.setProcessing(false);
+                            uiHelpers.setStatus("");
+                        }
+                    }
+                }, 300000); // 5 minutes
+            } else {
+                if (this._processingTimeout) {
+                    clearTimeout(this._processingTimeout);
+                    this._processingTimeout = null;
+                }
+            }
         },
         
         setIsTemporaryMode: function(mode) {

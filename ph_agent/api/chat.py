@@ -122,7 +122,7 @@ def update_session_provider(session, provider_name):
 @frappe.whitelist()
 def update_session_settings(session, title=None, provider_name=None, enable_thinking=None,
 							temperature=None, enable_streaming=None, enable_suggestions=None,
-							system_prompt=None):
+							system_prompt=None, disable_tools=None, tool_groups=None):
 	"""Update settings on a Chat Session in a single call.
 
 	Args:
@@ -134,6 +134,8 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 		enable_streaming: 0 or 1 to toggle streaming.
 		enable_suggestions: 0 or 1 to toggle follow-up suggestions.
 		system_prompt: System prompt override for this session.
+		disable_tools: 0 or 1 to disable all tools for this session.
+		tool_groups: JSON array of tool group names to restrict this session to.
 	"""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
 
@@ -157,11 +159,34 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 		update_dict["enable_suggestions"] = int(enable_suggestions)
 	if system_prompt is not None:
 		update_dict["system_prompt"] = system_prompt
+	if disable_tools is not None:
+		update_dict["disable_tools"] = int(disable_tools)
 
-	if not update_dict:
-		return {"status": "ok"}
+	if update_dict:
+		frappe.db.set_value("Chat Session", session, update_dict)
 
-	frappe.db.set_value("Chat Session", session, update_dict)
+	# Handle tool_groups separately (child table)
+	if tool_groups is not None:
+		# Parse JSON array of group names
+		if isinstance(tool_groups, str):
+			tool_groups = frappe.parse_json(tool_groups)
+		if not isinstance(tool_groups, list):
+			tool_groups = []
+
+		# Delete existing child rows
+		frappe.db.delete("Persona Tool Group", {"parent": session, "parenttype": "Chat Session"})
+
+		# Insert new rows
+		for group_name in tool_groups:
+			doc = frappe.get_doc({
+				"doctype": "Persona Tool Group",
+				"parent": session,
+				"parenttype": "Chat Session",
+				"parentfield": "tool_groups",
+				"tool_group": group_name,
+			})
+			doc.insert(ignore_permissions=True)
+
 	frappe.db.commit()
 	return {"status": "ok"}
 

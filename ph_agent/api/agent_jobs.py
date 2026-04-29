@@ -413,7 +413,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			approval_data = None
 			
 			try:
-				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status):
+				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status, skip_session_state=bool(agent_msg_name)):
 					if is_cancelled():
 						raise asyncio.CancelledError()
 						
@@ -524,7 +524,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
-				reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+				reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 				
 				if approval_data:
 					# Handle approval flow
@@ -555,7 +555,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			# Non-streaming path - update the existing placeholder message
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
 			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
-			reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled)
+			reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 			
 			if approval_data:
 				# Handle approval flow

@@ -519,7 +519,24 @@ class FrappeMemoryProvider(HistoryProvider):
 						)
 					)
 				history.append(assistant_msg)
-		return history
+
+		# Strip non-text content types from assistant messages in history.
+		# Tool call/result pairs (function_call, function_result) and reasoning
+		# tokens (text_reasoning) are not persisted to the DB — they exist only
+		# in-memory during execution. This filter is a belt-and-suspenders guard
+		# that ensures only visible text is injected into the LLM context for
+		# prior turns, reducing token consumption.
+		filtered: list[Message] = []
+		for msg in history:
+			if msg.role == "assistant":
+				text_only = [c for c in msg.contents if getattr(c, "type", None) == "text"]
+				if text_only:
+					msg.contents = text_only
+					filtered.append(msg)
+				# Drop assistant messages with no text content (e.g. tool-only turns)
+			else:
+				filtered.append(msg)
+		return filtered
 
 	async def save_messages(
 		self,

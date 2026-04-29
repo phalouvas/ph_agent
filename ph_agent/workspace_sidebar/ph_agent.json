@@ -20,6 +20,42 @@
   {
    "child": 0,
    "collapsible": 1,
+   "icon": "pen-tool",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Tool Approval Request",
+   "link_to": "Tool Approval Request",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "person-standing",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Persona",
+   "link_to": "Persona",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "book-open-text",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Saved Prompt",
+   "link_to": "Saved Prompt",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
    "icon": "cloud-cog",
    "indent": 0,
    "keep_closed": 0,
@@ -68,18 +104,6 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "pen-tool",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Tool Approval Request",
-   "link_to": "Tool Approval Request",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
    "icon": "flask-conical",
    "indent": 0,
    "keep_closed": 0,
@@ -112,33 +136,9 @@
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "icon": "book-open-text",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Saved Prompt",
-   "link_to": "Saved Prompt",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "icon": "person-standing",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Persona",
-   "link_to": "Persona",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
   }
  ],
- "modified": "2026-04-27 09:26:07.838860",
+ "modified": "2026-04-29 18:49:38.805776",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

@@ -95,11 +95,6 @@ def web_search_tool(
             raw_results = list(ddgs.text(effective_query, **kwargs))
 
     except Exception as exc:
-        import frappe
-        frappe.log_error(
-            f"DuckDuckGo search error for '{query}': {str(exc)}",
-            "Web Search Error",
-        )
         return f"Error performing web search: {exc}"
 
     # Normalize results

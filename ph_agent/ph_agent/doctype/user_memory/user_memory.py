@@ -13,6 +13,11 @@ class UserMemory(Document):
 	fact increments ``encounter_count`` rather than creating duplicates.
 	"""
 
+	def before_insert(self) -> None:
+		"""Auto-set user to the logged-in user."""
+		if not self.user:
+			self.user = frappe.session.user
+
 	def before_save(self) -> None:
 		"""Auto-set last_encountered_at and normalize the fact field."""
 		self.fact = (self.fact or "").strip()

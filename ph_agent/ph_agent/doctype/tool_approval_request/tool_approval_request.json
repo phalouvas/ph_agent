@@ -2,7 +2,7 @@
  "actions": [],
  "allow_rename": 1,
  "autoname": "format:TAR-{tool_name}-{#####}",
- "creation": "2026-04-22 00:00:00",
+ "creation": "2026-04-23 18:51:15.187061",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -101,11 +101,11 @@
   }
  ],
  "links": [],
- "modified": "2026-04-22 00:00:00",
+ "modified": "2026-04-29 08:15:50.135631",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "Tool Approval Request",
- "naming_rule": "By \"Naming Series\" field",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
@@ -122,8 +122,10 @@
   }
  ],
  "row_format": "Dynamic",
+ "show_title_field_in_link": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
+ "title_field": "tool_name",
  "track_changes": 1
 }

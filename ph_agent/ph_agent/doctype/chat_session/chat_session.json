@@ -116,7 +116,7 @@
   },
   {
    "default": "0",
-   "description": "Temporary session — auto-deleted when you navigate away. Messages, memories, and tool approvals are removed on deletion.",
+   "description": "Temporary session \u2014 auto-deleted when you navigate away. Messages, memories, and tool approvals are removed on deletion.",
    "fieldname": "is_temporary",
    "fieldtype": "Check",
    "label": "Temporary Session"
@@ -138,54 +138,54 @@
    "label": "Output Tokens"
   },
   {
+   "description": "Persistent state for agent session (memory, skills, RAG context)",
    "fieldname": "session_state",
    "fieldtype": "Code",
    "label": "Session State",
    "options": "JSON",
-   "read_only": 1,
-   "description": "Persistent state for agent session (memory, skills, RAG context)"
+   "read_only": 1
   },
   {
+   "description": "When session state was last updated",
    "fieldname": "last_state_update",
    "fieldtype": "Datetime",
    "label": "Last State Update",
-   "read_only": 1,
-   "description": "When session state was last updated"
+   "read_only": 1
   },
   {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.estimated_conversation_tokens > 0",
    "fieldname": "section_token_tracking",
    "fieldtype": "Section Break",
-   "label": "Token Tracking",
-   "collapsible": 1,
-   "collapsible_depends_on": "eval:doc.estimated_conversation_tokens > 0"
+   "label": "Token Tracking"
   },
   {
    "default": "0",
+   "description": "Running total of tokens in current conversation context (since last summary)",
    "fieldname": "estimated_conversation_tokens",
    "fieldtype": "Int",
    "label": "Estimated Conversation Tokens",
-   "read_only": 1,
-   "description": "Running total of tokens in current conversation context (since last summary)"
+   "read_only": 1
   },
   {
+   "description": "Reference to the most recent summary message",
    "fieldname": "last_summary_message",
    "fieldtype": "Link",
    "label": "Last Summary Message",
    "options": "Chat Message",
-   "read_only": 1,
-   "description": "Reference to the most recent summary message"
+   "read_only": 1
   },
   {
    "default": "0",
+   "description": "Whether 75% context limit warning has been shown",
    "fieldname": "token_warning_sent",
    "fieldtype": "Check",
    "label": "Token Warning Sent",
-   "read_only": 1,
-   "description": "Whether 75% context limit warning has been shown"
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-04-18 07:57:25.218556",
+ "modified": "2026-04-29 08:14:29.177467",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "Chat Session",
@@ -212,7 +212,10 @@
   }
  ],
  "row_format": "Dynamic",
+ "search_fields": "title",
+ "show_title_field_in_link": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "title_field": "title"
 }

@@ -123,6 +123,8 @@ class ToolManager:
 
         If the session has ``disable_tools = 1``, returns an empty list.
         If the session has tool_groups rows, uses those groups for filtering.
+        If the session has ``disable_tools`` explicitly set to 0, returns all tools
+        (session takes full control, overriding persona).
         Otherwise falls through to persona-level filtering.
         """
         if session_name:
@@ -148,6 +150,15 @@ class ToolManager:
                     session_name, session_groups, len(tools), len(filtered)
                 )
                 return filtered
+
+            # If session has disable_tools explicitly set to 0, session takes full control
+            # — return all tools, overriding persona restrictions
+            if session_doc.get("disable_tools") is not None:
+                logger.debug(
+                    "[tool_filter] Session '%s' has disable_tools=0, returning all tools "
+                    "(session overrides persona)", session_name
+                )
+                return tools
 
         # Fall through to persona-level filtering
         return cls._filter_by_persona(tools, persona)

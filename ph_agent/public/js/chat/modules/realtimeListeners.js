@@ -129,7 +129,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             // Schedule scroll in the NEXT frame — Vue needs one frame to update DOM
             requestAnimationFrame(function() {
                 const uiHelpers = window.phAgent.uiHelpers;
-                const scrolled = uiHelpers.scrollToBottomIfNear(50);
+                const scrolled = uiHelpers.scrollToBottomIfNear(80);
                 if (!scrolled) {
                     uiHelpers.triggerScrollDetection();
                 }

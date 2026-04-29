@@ -538,7 +538,7 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
          * @param {number} threshold - Distance from bottom in pixels (default: 200)
          * @returns {boolean} True if near bottom, false otherwise
          */
-        isNearBottom: function(threshold = 50) {
+        isNearBottom: function(threshold = 80) {
             const scrollContainer = this.getScrollContainer();
             if (!scrollContainer) return false;
             
@@ -556,7 +556,7 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
          * @param {number} threshold - Distance from bottom in pixels (default: 200)
          * @returns {boolean} True if scrolled, false otherwise
          */
-        scrollToBottomIfNear: function(threshold = 50) {
+        scrollToBottomIfNear: function(threshold = 80) {
             const scrollContainer = this.getScrollContainer();
             if (!scrollContainer) return false;
             

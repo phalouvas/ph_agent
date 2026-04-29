@@ -273,6 +273,21 @@ def _extract_text_from_messages(messages) -> str:
 	return ""
 
 
+def _get_available_tool_names(agent: Agent) -> set[str]:
+	"""Extract the set of tool names from an agent's tool list.
+
+	Handles ``FunctionTool``, ``MCPTool``, and any object with a ``name``
+	attribute. Returns an empty set if no tools are configured.
+	"""
+	names: set[str] = set()
+	tools = agent.default_options.get("tools", [])
+	for t in tools:
+		name = getattr(t, "name", None)
+		if name:
+			names.add(str(name))
+	return names
+
+
 async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	"""Filter ``agent.default_options['tools']`` using a cheap router LLM call.
 
@@ -622,7 +637,23 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		)
 
 
-def _extract_approval_data(response) -> dict[str, Any] | None:
+def _extract_approval_data(response, session_name: str | None = None) -> dict[str, Any] | None:
+	"""Extract approval data from an agent response.
+
+	If ``session_name`` is provided, validates that each tool being approved
+	actually exists in the current session's tool set. Tools not in the set
+	are silently skipped (the LLM hallucinated them), preventing spurious
+	approval requests for tools the persona cannot use.
+	"""
+	# Pre-resolve available tool names if session_name is given
+	available_tools: set[str] | None = None
+	if session_name:
+		try:
+			temp_agent = _build_agent(session_name=session_name)
+			available_tools = _get_available_tool_names(temp_agent)
+		except Exception:
+			available_tools = None  # Fall back to no filtering
+
 	approval_requests: list[dict[str, str]] = []
 	tool_calls: list[dict[str, str]] = []
 
@@ -631,6 +662,16 @@ def _extract_approval_data(response) -> dict[str, Any] | None:
 			if content.type != "function_approval_request" or not content.function_call:
 				continue
 			function_call = content.function_call
+			tool_name = function_call.name or ""
+
+			# Skip tools that don't exist in the current session's tool set
+			if available_tools is not None and tool_name and tool_name not in available_tools:
+				logger.warning(
+					"Skipping approval request for tool '%s' — not in session's tool set.",
+					tool_name,
+				)
+				continue
+
 			arguments = function_call.arguments
 			
 			# Handle arguments - they could be dict, string, or string containing JSON
@@ -757,7 +798,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None) 
 		raise asyncio.CancelledError()
 
 	input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
-	approval_data = _extract_approval_data(response)
+	approval_data = _extract_approval_data(response, session_name=session_name)
 	reasoning_content = _extract_reasoning_from_response(response)
 	
 	# Always save session state, regardless of approval flow
@@ -859,7 +900,7 @@ def get_agent_response_stream(
 
 				final_response = await stream.get_final_response()
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
-				approval_data = _extract_approval_data(final_response)
+				approval_data = _extract_approval_data(final_response, session_name=session_name)
 				
 				# Always save session state, regardless of approval flow
 				_save_session_state(session_name, agent_session)
@@ -999,21 +1040,73 @@ def run_after_approval(
 		session_state = session_data if isinstance(session_data, dict) else {}
 	
 	try:
-		# Per the Microsoft Agent Framework documentation, provide:
-		# 1. The assistant message containing the original function_approval_request
-		# 2. The user message containing the function_approval_response
-		# The original user query is supplied automatically by FrappeMemoryProvider.
-		messages = [
-			Message("assistant", [approval_request_content]),
-			Message("user", [approval_response]),
-		]
-		
-		response, agent_session = _run_agent(
-			session_name, 
-			messages,  # Pass both messages
-			user=user,
-			session_state=session_state
-		)
+		# --- Tool existence validation ---
+		# Build a temporary agent to check whether the approved tool is
+		# actually available in the current persona's tool set.  If the
+		# LLM hallucinated a tool that isn't in the persona's groups, we
+		# must NOT send the approval messages to the API — that would
+		# produce a malformed conversation (assistant message with
+		# tool_calls but no corresponding tool result), triggering a 400
+		# "insufficient tool messages" error from the LLM provider.
+		temp_agent = _build_agent(session_name=session_name, user=user)
+		available_tools = _get_available_tool_names(temp_agent)
+		tool_is_available = tool_name in available_tools
+
+		if not tool_is_available:
+			logger.warning(
+				"Approved tool '%s' is not available in persona's tool set "
+				"(session=%s, persona=%s). Injecting synthetic error result.",
+				tool_name, session_name,
+				getattr(frappe.get_doc("Chat Session", session_name), "persona", "N/A"),
+			)
+			frappe.log_error(
+				title=f"Approved tool '{tool_name}' not available for session {session_name}",
+				message=(
+					f"Tool '{tool_name}' was approved but is not in the current persona's tool set.\n"
+					f"Available tools: {sorted(available_tools)}\n"
+					f"Session: {session_name}\n"
+					f"Arguments: {json.dumps(arguments, indent=2)}"
+				),
+			)
+			# Build a synthetic function_result with an error message so the
+			# LLM can gracefully respond to the failure instead of crashing.
+			error_result = Content.from_function_result(
+				call_id=approval.get("call_id") or "",
+				result=json.dumps({
+					"error": True,
+					"message": (
+						f"The tool '{tool_name}' is not available for this session's persona. "
+						f"Please use one of the available tools: {', '.join(sorted(available_tools))}."
+					),
+				}),
+			)
+			messages = [
+				Message("assistant", [approval_request_content]),
+				Message("user", [approval_response]),
+				Message("tool", [error_result]),
+			]
+			response, agent_session = _run_agent(
+				session_name,
+				messages,
+				user=user,
+				session_state=session_state,
+			)
+		else:
+			# Per the Microsoft Agent Framework documentation, provide:
+			# 1. The assistant message containing the original function_approval_request
+			# 2. The user message containing the function_approval_response
+			# The original user query is supplied automatically by FrappeMemoryProvider.
+			messages = [
+				Message("assistant", [approval_request_content]),
+				Message("user", [approval_response]),
+			]
+			response, agent_session = _run_agent(
+				session_name, 
+				messages,  # Pass both messages
+				user=user,
+				session_state=session_state,
+			)
+
 		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
 		reasoning_content = _extract_reasoning_from_response(response)
 		

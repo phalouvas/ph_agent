@@ -1094,6 +1094,54 @@ def _execute_approved_tool(approval_name):
 			reference_doctype="Tool Approval Request",
 			reference_name=approval_name,
 		)
+		# Save a user-visible error message so the user sees a graceful
+		# failure instead of a silent hang.
+		try:
+			error_msg = frappe.get_doc(
+				{
+					"doctype": "Chat Message",
+					"chat_session": session,
+					"sender_type": "Agent",
+					"message_type": "Agent",
+					"content": (
+						"⚠️ **Tool execution failed.**\n\n"
+						f"The approved tool could not be executed. This may happen when the "
+						f"tool is not available for the current persona's configuration.\n\n"
+						f"**Error details:** {str(e)[:500]}"
+					),
+				}
+			).insert(ignore_permissions=True)
+			frappe.db.commit()
+
+			# Publish the error message
+			frappe.publish_realtime(
+				event="new_message",
+				message={
+					"session": session,
+					"name": error_msg.name,
+					"sender_type": "Agent",
+					"content": error_msg.content,
+					"creation": str(error_msg.creation),
+				},
+				room="website",
+			)
+		except Exception:
+			pass  # Best-effort; the log_error above already captured the root cause
+
+		# Publish approval_resolved with error status
+		try:
+			frappe.publish_realtime(
+				event="approval_resolved",
+				message={
+					"session": session,
+					"approval_name": approval_name,
+					"status": "Error",
+					"tool_name": approval_doc.tool_name,
+				},
+				room="website",
+			)
+		except Exception:
+			pass
 
 
 def cancel_approvals_for_session(doc, method):

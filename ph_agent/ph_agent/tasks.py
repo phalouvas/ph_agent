@@ -37,20 +37,10 @@ def cleanup_temporary_sessions():
 				pluck="name",
 			)
 
-			# Clear User Memory references
+			# Delete User Memory records linked to this session or its messages
 			for message_id in messages:
-				frappe.db.set_value(
-					"User Memory",
-					{"source_message": message_id},
-					"source_message",
-					None,
-				)
-			frappe.db.set_value(
-				"User Memory",
-				{"source_session": session_name},
-				"source_session",
-				None,
-			)
+				frappe.db.delete("User Memory", {"source_message": message_id})
+			frappe.db.delete("User Memory", {"source_session": session_name})
 
 			# Clear Tool Approval Request references
 			frappe.db.set_value(

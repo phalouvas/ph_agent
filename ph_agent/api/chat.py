@@ -387,7 +387,7 @@ def delete_session(session):
 	For temporary sessions, this is called automatically when the user
 	navigates away. The function:
 	1. Cancels any running background job for this session
-	2. Clears User Memory references (source_message, source_session)
+	2. Deletes all User Memory records linked to this session or its messages
 	3. Clears Tool Approval Request references (chat_message, chat_session)
 	4. Clears the session's last_summary_message link
 	5. Deletes all Chat Messages (cascade deletes attached files)
@@ -417,20 +417,10 @@ def delete_session(session):
 		pluck="name",
 	)
 	
-	# 3. Clear User Memory references to avoid LinkExistsError
+	# 3. Delete all User Memory records linked to this session or its messages
+	frappe.db.delete("User Memory", {"source_session": session})
 	for message_id in messages:
-		frappe.db.set_value(
-			"User Memory",
-			{"source_message": message_id},
-			"source_message",
-			None,
-		)
-	frappe.db.set_value(
-		"User Memory",
-		{"source_session": session},
-		"source_session",
-		None,
-	)
+		frappe.db.delete("User Memory", {"source_message": message_id})
 
 	# 4. Clear Tool Approval Request references to avoid link validation errors
 	frappe.db.set_value(
@@ -502,13 +492,8 @@ def edit_message(message_id, content):
 	deleted_ids = []
 	for subsequent_msg in subsequent:
 		deleted_ids.append(subsequent_msg.name)
-		# Clear User Memory references to this message to avoid LinkExistsError
-		frappe.db.set_value(
-			"User Memory",
-			{"source_message": subsequent_msg.name},
-			"source_message",
-			None,
-		)
+		# Delete User Memory records linked to this message
+		frappe.db.delete("User Memory", {"source_message": subsequent_msg.name})
 		# Delete the chat message (on_trash hook will delete attached files)
 		frappe.delete_doc("Chat Message", subsequent_msg.name, ignore_permissions=True)
 
@@ -707,13 +692,8 @@ def delete_message(message_id):
 		# Clear the reference before deleting the message
 		frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 	
-	# Clear User Memory references to this message to avoid LinkExistsError
-	frappe.db.set_value(
-		"User Memory",
-		{"source_message": message_id},
-		"source_message",
-		None,
-	)
+	# Delete User Memory records linked to this message
+	frappe.db.delete("User Memory", {"source_message": message_id})
 	frappe.db.commit()
 	
 	# Delete the chat message (on_trash hook will delete attached files)
@@ -751,13 +731,8 @@ def delete_messages(message_ids):
 			# Clear the reference before deleting the message
 			frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 		
-		# Clear User Memory references to this message to avoid LinkExistsError
-		frappe.db.set_value(
-			"User Memory",
-			{"source_message": message_id},
-			"source_message",
-			None,
-		)
+		# Delete User Memory records linked to this message
+		frappe.db.delete("User Memory", {"source_message": message_id})
 		
 		# Delete the chat message (on_trash hook will delete attached files)
 		frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)

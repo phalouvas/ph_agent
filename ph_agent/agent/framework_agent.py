@@ -664,9 +664,10 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 			return restored.state
 		return {}
 	except Exception as e:
+		import traceback
 		frappe.log_error(
 			title="Error loading session state",
-			message=f"Session: {session_name}, Error: {e}"
+			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}"
 		)
 		return {}
 
@@ -698,9 +699,10 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 			},
 		)
 	except Exception as e:
+		import traceback
 		frappe.log_error(
 			title="Error saving session state",
-			message=f"Session: {session_name}, Error: {e}"
+			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}"
 		)
 
 
@@ -1000,6 +1002,16 @@ def get_agent_response_stream(
 				if active_user:
 					frappe.set_user(active_user)
 			asyncio.run(_consume())
+		except Exception as exc:
+			# Catch thread-level crashes (e.g. asyncio.run failure, frappe.init
+			# failure) that the inner _consume() except doesn't cover, so the
+			# main thread gets the error instead of hanging forever.
+			import traceback
+			frappe.log_error(
+				title="Streaming producer thread crashed",
+				message=f"Session: {session_name}, Error: {exc}\n{traceback.format_exc()}",
+			)
+			result_queue.put(("error", exc))
 		finally:
 			if initialized:
 				# Commit any pending DB operations (e.g., UserPreferenceProvider saves)
@@ -1015,6 +1027,19 @@ def get_agent_response_stream(
 		if cancel_check and cancel_check():
 			stop_event.set()
 			raise asyncio.CancelledError()
+
+		# Guard against the producer thread dying silently — if the thread
+		# is no longer alive and the queue is empty, something went wrong
+		# in the producer that wasn't caught (e.g. a segfault in a C
+		# extension, or the thread was killed externally).
+		if not thread.is_alive() and result_queue.empty():
+			import traceback
+			error_msg = (
+				f"Streaming producer thread died unexpectedly for session {session_name}. "
+				"No error was placed in the result queue."
+			)
+			frappe.log_error(title="Streaming producer thread died silently", message=error_msg)
+			raise RuntimeError(error_msg)
 
 		try:
 			event_type, payload = result_queue.get(timeout=0.2)

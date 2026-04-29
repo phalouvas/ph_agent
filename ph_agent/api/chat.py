@@ -401,7 +401,7 @@ def get_history(session):
 	messages = frappe.get_all(
 		"Chat Message",
 		filters={"chat_session": session},
-		fields=["name", "sender_type", "content", "creation", "is_edited"],
+		fields=["name", "sender_type", "content", "creation", "is_edited", "reasoning_content"],
 		order_by="creation asc",
 	)
 	for msg in messages:

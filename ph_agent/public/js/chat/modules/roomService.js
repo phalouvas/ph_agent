@@ -246,20 +246,15 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                     
                     const session = r.message;
                     
-                    // Fetch tool groups for this session
+                    // Fetch tool groups for this session via the API
+                    // (avoids direct permission checks on the Persona Tool Group child doctype)
                     return frappe.call({
-                        method: "frappe.client.get_list",
+                        method: "ph_agent.api.chat.get_session_tool_groups",
                         args: {
-                            doctype: "Persona Tool Group",
-                            filters: {
-                                parent: roomId,
-                                parenttype: "Chat Session"
-                            },
-                            fields: ["tool_group"],
-                            limit_page_length: 50
+                            session: roomId
                         }
                     }).then((groupsResult) => {
-                        const toolGroups = (groupsResult.message || []).map(g => g.tool_group);
+                        const toolGroups = groupsResult.message || [];
                         
                         return {
                             title: session.title,

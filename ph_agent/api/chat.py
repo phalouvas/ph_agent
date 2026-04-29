@@ -187,6 +187,19 @@ def update_session_settings(session, title=None, provider_name=None, enable_thin
 
 
 @frappe.whitelist()
+def get_session_tool_groups(session):
+	"""Fetch tool groups for a Chat Session through the parent document.
+
+	This avoids direct permission checks on the ``Persona Tool Group`` child
+	doctype, which has no standalone permissions defined.
+	"""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+	session_doc = frappe.get_doc("Chat Session", session)
+	groups = [row.tool_group for row in (session_doc.get("tool_groups") or [])]
+	return groups
+
+
+@frappe.whitelist()
 def create_session(provider_name=None, persona=None, is_temporary=0):
 	"""Create a new Chat Session. Uses default LLM Provider if provider_name not specified.
 

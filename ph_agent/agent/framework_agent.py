@@ -435,14 +435,14 @@ class FrappeMemoryProvider(HistoryProvider):
 			prior_messages = frappe.get_all(
 				"Chat Message",
 				filters={"chat_session": session_id, "creation": [">=", last_summary_doc.creation]},
-				fields=["sender_type", "content", "message_type"],
+				fields=["sender_type", "content", "message_type", "reasoning_content"],
 				order_by="creation asc",
 			)
 		else:
 			prior_messages = frappe.get_all(
 				"Chat Message",
 				filters={"chat_session": session_id},
-				fields=["sender_type", "content", "message_type"],
+				fields=["sender_type", "content", "message_type", "reasoning_content"],
 				order_by="creation asc",
 			)
 
@@ -456,7 +456,14 @@ class FrappeMemoryProvider(HistoryProvider):
 			elif msg.sender_type == "User":
 				history.append(Message("user", [content]))
 			else:
-				history.append(Message("assistant", [content]))
+				assistant_msg = Message("assistant", [content])
+				if msg.reasoning_content:
+					assistant_msg.contents.append(
+						Content.from_text_reasoning(
+							protected_data=json.dumps(msg.reasoning_content)
+						)
+					)
+				history.append(assistant_msg)
 		return history
 
 	async def save_messages(

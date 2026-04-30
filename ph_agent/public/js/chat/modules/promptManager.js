@@ -351,10 +351,6 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 			// No variables — insert directly
 			insertIntoTextarea(prompt.content);
 			incrementUsage(prompt.name);
-			frappe.show_alert({
-				message: __("Prompt '{0}' inserted", [prompt.title]),
-				indicator: "green",
-			});
 			return;
 		}
 
@@ -401,10 +397,6 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 				insertIntoTextarea(filled);
 				incrementUsage(prompt.name);
 				dialog.hide();
-				frappe.show_alert({
-					message: __("Prompt '{0}' inserted", [prompt.title]),
-					indicator: "green",
-				});
 			},
 		});
 
@@ -465,10 +457,6 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 						__("Are you sure you want to delete the prompt '{0}'?", [prompt.title]),
 						() => {
 							deletePrompt(promptId).then(() => {
-								frappe.show_alert({
-									message: __("Prompt deleted"),
-									indicator: "green",
-								});
 								_promptsCache = null;
 								// Refresh the manage dialog
 								dialog.hide();
@@ -631,10 +619,6 @@ window.phAgent.promptManager = window.phAgent.promptManager || (function() {
 				savePrompt(data).then(r => {
 					dialog.hide();
 					_promptsCache = null;
-					frappe.show_alert({
-						message: isNew ? __("Prompt created") : __("Prompt saved"),
-						indicator: "green",
-					});
 					if (onSave) onSave();
 				}).catch(err => {
 					console.error("Failed to save prompt:", err);

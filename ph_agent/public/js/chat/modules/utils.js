@@ -254,9 +254,7 @@ window.phAgent.utils = window.phAgent.utils || (function() {
             textArea.select();
             try {
                 const successful = document.execCommand("copy");
-                if (successful) {
-                    frappe.show_alert({ message: __("Copied to clipboard"), indicator: "green" });
-                } else {
+                if (!successful) {
                     frappe.show_alert({ message: __("Failed to copy to clipboard"), indicator: "red" });
                 }
             } catch (err) {
@@ -374,8 +372,7 @@ window.phAgent.utils = window.phAgent.utils || (function() {
          */
         copyTextToClipboard: function(text) {
             if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(text).then(
-                    () => frappe.show_alert({ message: __("Copied to clipboard"), indicator: "green" }),
+                navigator.clipboard.writeText(text).catch(
                     () => this.fallbackCopyTextToClipboard(text)
                 );
             } else {

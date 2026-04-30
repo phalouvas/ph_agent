@@ -345,8 +345,15 @@ vue-advanced-chat {
 /* Buttons are created directly in .standard-actions (not .custom-actions)
  * so they are visible at ALL breakpoints.  Keep them from shrinking. */
 .btn-temp-mode,
-.btn-summary-conversation {
+.btn-summary-conversation,
+.btn-persona-compact {
 	flex-shrink: 0;
+}
+
+/* Hide the three-dots overflow menu entirely — all buttons are directly
+ * visible in .standard-actions at every breakpoint. */
+.menu-btn-group {
+	display: none !important;
 }
 
 /* Tier 1: Tablet (≤ 768px) */
@@ -354,8 +361,6 @@ vue-advanced-chat {
 	.page-actions {
 		flex-wrap: nowrap;
 		gap: 4px;
-		overflow-x: auto;
-		-webkit-overflow-scrolling: touch;
 	}
 	.page-actions .standard-actions {
 		flex-wrap: nowrap;
@@ -366,7 +371,7 @@ vue-advanced-chat {
 	}
 }
 
-/* Tier 2: Phone (≤ 480px) — icon-only for temp + summary, persona compact */
+/* Tier 2: Phone (≤ 480px) — icon-only for all buttons, persona compact */
 @media (max-width: 480px) {
 	/* Persona dropdown select → compact icon button (handled by JS) */
 	.page-actions .persona-selector {
@@ -374,6 +379,18 @@ vue-advanced-chat {
 		max-width: 120px;
 		font-size: 11px;
 		padding: 2px 4px;
+	}
+
+	/* New Chat button: icon-only, hide text */
+	.page-actions .primary-action .hidden-xs {
+		display: none !important;
+	}
+	.page-actions .primary-action {
+		padding: 2px 6px;
+		min-width: 0;
+	}
+	.page-actions .primary-action svg.icon {
+		margin-right: 0 !important;
 	}
 
 	/* Temp button: hide text, show 👻 icon only */
@@ -398,6 +415,16 @@ vue-advanced-chat {
 	.btn-summary-conversation {
 		padding: 2px 6px;
 		min-width: 0;
+	}
+
+	/* Persona compact button: icon-only */
+	.btn-persona-compact {
+		padding: 2px 6px;
+		font-size: 16px;
+		line-height: 1;
+		min-width: 0;
+		max-width: 32px;
+		overflow: hidden;
 	}
 }
 

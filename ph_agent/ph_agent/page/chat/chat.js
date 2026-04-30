@@ -158,8 +158,10 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		// Also add a menu item in the three-dots overflow menu (for very narrow
 		// screens where even icon-only buttons might not fit).
 		const menuLabel = $("<span>").html(label).text(); // strip HTML for menu text
-		const $menuItem = page.add_menu_item(menuLabel, clickHandler, false);
-		$menuItem.addClass("hidden-xl"); // hide on desktop, visible on mobile
+		if (menuLabel.trim()) {
+			const $menuItem = page.add_menu_item(menuLabel, clickHandler, false);
+			$menuItem.addClass("hidden-xl"); // hide on desktop, visible on mobile
+		}
 
 		return $btn;
 	}

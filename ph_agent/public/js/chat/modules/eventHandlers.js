@@ -937,6 +937,28 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             const actionName = action.name || action;
             
             switch (actionName) {
+                case "closeRoom":
+                    frappe.confirm(
+                        __("Are you sure you want to close this chat session? It will be marked as closed."),
+                        () => {
+                            // User confirmed
+                            roomService.closeRoom(roomId)
+                                .then(() => {
+                                    // Close was successful — alert shown in closeRoom
+                                })
+                                .catch(err => {
+                                    frappe.show_alert({ 
+                                        message: __("Failed to close chat session"), 
+                                        indicator: "red" 
+                                    });
+                                });
+                        },
+                        () => {
+                            // User cancelled
+                        }
+                    );
+                    break;
+                    
                 case "deleteRoom":
                     frappe.confirm(
                         __("Are you sure you want to delete this chat session? This action cannot be undone."),

@@ -507,6 +507,48 @@ def delete_session(session):
 
 
 @frappe.whitelist()
+def close_session(session):
+	"""Close a Chat Session without deleting it.
+
+	Sets the session status to "Closed", clears session state, and
+	cancels any running background job. The session remains visible
+	in the room list but is marked as closed.
+
+	Args:
+		session: Chat Session name to close.
+	"""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+
+	# Cancel any running background job for this session
+	job_id = frappe.cache().get_value(f"ph_agent:job:{session}")
+	if job_id:
+		try:
+			from frappe.utils.background_jobs import get_redis_conn
+			from rq.command import send_stop_job_command
+			jid = job_id.decode() if isinstance(job_id, bytes) else job_id
+			send_stop_job_command(connection=get_redis_conn(), job_id=jid)
+		except Exception:
+			pass
+		frappe.cache().delete_value(f"ph_agent:job:{session}")
+	frappe.cache().delete_value(f"ph_agent:lock:{session}")
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+
+	# Set status to Closed — the before_save hook on ChatSession clears session_state
+	frappe.db.set_value("Chat Session", session, "status", "Closed")
+	frappe.db.commit()
+
+	# Notify frontend
+	_emit_status(session, "")
+	frappe.publish_realtime(
+		event="session_closed",
+		message={"session": session},
+		room="website",
+	)
+
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
 def edit_message(message_id, content):
 	"""Edit a user message, delete all subsequent messages, and re-run the agent."""
 	msg = frappe.get_doc("Chat Message", message_id)

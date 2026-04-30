@@ -54,7 +54,7 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
             return frappe.db
                 .get_list("Chat Session", {
                     filters: filters,
-                    fields: ["name", "title", "modified", "llm_provider", "is_temporary"],
+                    fields: ["name", "title", "modified", "llm_provider", "is_temporary", "status"],
                     order_by: "modified desc",
                     limit: 50,
                 })
@@ -67,6 +67,9 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                         let roomName = s.title + " — " + s.llm_provider;
                         if (s.is_temporary) {
                             roomName = "👻 " + roomName + " (Temporary)";
+                        }
+                        if (s.status === "Closed") {
+                            roomName = "🔒 " + roomName;
                         }
                         
                         return {
@@ -222,6 +225,48 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                     },
                     error: (err) => {
                         console.error("Failed to delete room:", err);
+                        reject(err);
+                    }
+                });
+            });
+        },
+        
+        /**
+         * Close a room (chat session) without deleting it
+         * @param {string} roomId - ID of the room to close
+         * @returns {Promise} Promise that resolves when room is closed
+         */
+        closeRoom: function(roomId) {
+            return new Promise((resolve, reject) => {
+                frappe.call({
+                    method: "ph_agent.api.chat.close_session",
+                    args: { session: roomId },
+                    callback: (r) => {
+                        if (r.message && r.message.status === "ok") {
+                            // Update room name to indicate closed status
+                            const state = window.phAgent.state;
+                            const room = state.getRoomById(roomId);
+                            if (room) {
+                                // Add closed indicator to room name if not already present
+                                if (!room.roomName.includes("🔒")) {
+                                    state.updateRoom(roomId, {
+                                        roomName: "🔒 " + room.roomName
+                                    });
+                                    _chat.rooms = state.getRooms();
+                                }
+                            }
+                            
+                            frappe.show_alert({
+                                message: __("Chat session closed"),
+                                indicator: "blue"
+                            });
+                            resolve();
+                        } else {
+                            reject(new Error("Failed to close room"));
+                        }
+                    },
+                    error: (err) => {
+                        console.error("Failed to close room:", err);
                         reject(err);
                     }
                 });

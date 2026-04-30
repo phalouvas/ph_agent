@@ -207,10 +207,6 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 					if (window._phSyncTempModeButton) {
 						window._phSyncTempModeButton(newMode);
 					}
-					frappe.show_alert({
-						message: newMode ? __("Current session marked as temporary — will be deleted on navigation") : __("Current session is no longer temporary"),
-						indicator: newMode ? "orange" : "green"
-					});
 				}
 			}
 		});
@@ -242,12 +238,6 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 				<span>${__("Summarizing...")}</span>
 			`);
 			window.phAgent.roomService.summarizeSession(session)
-				.then(() => {
-					frappe.show_alert({
-						message: __("Conversation summarized successfully"),
-						indicator: "green"
-					});
-				})
 				.catch((err) => {
 					console.error("Failed to summarize conversation:", err);
 					frappe.show_alert({

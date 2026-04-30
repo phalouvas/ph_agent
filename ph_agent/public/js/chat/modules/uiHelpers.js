@@ -434,12 +434,7 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
             
             try {
                 const successful = document.execCommand("copy");
-                if (successful) {
-                    frappe.show_alert({ 
-                        message: __("Copied to clipboard"), 
-                        indicator: "green" 
-                    });
-                } else {
+                if (!successful) {
                     frappe.show_alert({ 
                         message: __("Failed to copy to clipboard"), 
                         indicator: "red" 
@@ -463,12 +458,6 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
             if (navigator.clipboard && window.isSecureContext) {
                 // Modern clipboard API (requires HTTPS or localhost)
                 navigator.clipboard.writeText(text)
-                    .then(() => {
-                        frappe.show_alert({ 
-                            message: __("Copied to clipboard"), 
-                            indicator: "green" 
-                        });
-                    })
                     .catch((err) => {
                         // Fallback to execCommand for permission issues
                         this.fallbackCopyTextToClipboard(text);

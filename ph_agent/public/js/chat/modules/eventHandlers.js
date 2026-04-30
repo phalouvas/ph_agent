@@ -554,11 +554,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         
                         // Update chat component
                         _chat.messages = state.getMessages();
-                        
-                        frappe.show_alert({ 
-                            message: __("Message updated"), 
-                            indicator: "green" 
-                        });
                     }
                 },
                 error: (err) => {
@@ -589,11 +584,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                         
                         // Update chat component
                         _chat.messages = state.getMessages();
-                        
-                        frappe.show_alert({ 
-                            message: __("Message deleted"), 
-                            indicator: "green" 
-                        });
                     }
                 },
                 error: (err) => {
@@ -637,11 +627,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                             
                             // Update chat component
                             _chat.messages = state.getMessages();
-                            
-                            frappe.show_alert({ 
-                                message: __("Messages deleted"), 
-                                indicator: "green" 
-                            });
                         }
                     })
                     .catch(err => {
@@ -726,10 +711,7 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     // hide the stop button before the job even starts.
                     
                     if (r.message && r.message.status === "queued") {
-                        frappe.show_alert({ 
-                            message: __("Regenerating message..."), 
-                            indicator: "green" 
-                        });
+                        // Regeneration queued — processing indicator already visible
                     }
                 },
                 error: (err) => {
@@ -909,11 +891,6 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                             });
                                             
                                             window.phAgent.roomService.getChat().rooms = state.getRooms();
-                                            
-                                            frappe.show_alert({ 
-                                                message: __("Room settings updated"), 
-                                                indicator: "green" 
-                                            });
                                         }
                                     },
                                     error: (err) => {

@@ -206,21 +206,20 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
                     bottom: 6px !important;
                 }
 
-                /* ── Move message action dropdown from top to bottom ─────── */
-                /* Override vue-advanced-chat's JS inline style="top: Xpx"     */
+                /* ── Message action dropdown: open downward ──────────────── */
+                /* vue-advanced-chat positions the dropdown above the message
+                 * via inline style="top: Xpx".  For the first message at the
+                 * top of the chat, the dropdown gets clipped by the page
+                 * header.  Override to open downward instead.                */
                 .vac-message-actions-wrapper .vac-menu-options {
-                    top: auto !important;
-                    bottom: 45px !important;
+                    top: 100% !important;
+                    bottom: auto !important;
+                    margin-top: 4px;
                 }
                 .vac-message-actions-wrapper .vac-menu-left {
-                    top: auto !important;
-                    bottom: 45px !important;
-                }
-                @media (max-width: 768px) {
-                    .vac-message-actions-wrapper .vac-menu-options,
-                    .vac-message-actions-wrapper .vac-menu-left {
-                        bottom: 35px !important;
-                    }
+                    top: 100% !important;
+                    bottom: auto !important;
+                    margin-top: 4px;
                 }
             `;
             root.appendChild(_suggestionStyle);

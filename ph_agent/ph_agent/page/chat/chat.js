@@ -156,20 +156,12 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	// Bypasses page.add_button() which appends to .custom-actions (hidden on
 	// mobile via hidden-xs hidden-md classes).  We create the button ourselves
 	// and append to .standard-actions so it's visible at ALL breakpoints.
-	// Also adds a matching menu item in .menu-btn-group for the three-dots menu.
+	// No menu item is added to .menu-btn-group — the three-dots overflow menu
+	// is hidden via CSS so all buttons are always directly visible.
 	function _createPageButton(label, clickHandler, btnClass) {
 		const $btn = $(`<button class="btn btn-default btn-sm ellipsis ${btnClass}">${label}</button>`);
 		$btn.on("click", clickHandler);
 		$(page.page_actions).find(".standard-actions").append($btn);
-
-		// Also add a menu item in the three-dots overflow menu (for very narrow
-		// screens where even icon-only buttons might not fit).
-		const menuLabel = $("<span>").html(label).text(); // strip HTML for menu text
-		if (menuLabel.trim()) {
-			const $menuItem = page.add_menu_item(menuLabel, clickHandler, false);
-			$menuItem.addClass("hidden-xl"); // hide on desktop, visible on mobile
-		}
-
 		return $btn;
 	}
 

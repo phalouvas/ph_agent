@@ -17,6 +17,9 @@
   "enable_streaming",
   "enable_thinking",
   "is_temporary",
+  "section_reference",
+  "reference_doctype",
+  "reference_name",
   "section_tools",
   "disable_tools",
   "tool_groups",
@@ -123,6 +126,34 @@
    "fieldname": "is_temporary",
    "fieldtype": "Check",
    "label": "Temporary Session"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_reference",
+   "fieldtype": "Section Break",
+   "label": "Reference Document"
+  },
+  {
+   "description": "The DocType this session is linked to (e.g. a portfolio, security, or sales order). Set programmatically at session creation.",
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Reference DocType",
+   "options": "DocType",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "description": "The specific document name this session is linked to. Set programmatically at session creation.",
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Reference Name",
+   "options": "reference_doctype",
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "section_tools",

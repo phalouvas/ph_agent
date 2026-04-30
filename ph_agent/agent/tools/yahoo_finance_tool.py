@@ -245,8 +245,30 @@ def yahoo_finance_tool(
             }, indent=2, ensure_ascii=False)
 
         elif operation == "recommendations":
-            recs = ticker.recommendations
+            # yfinance v1.3+ changed recommendations to a summary table.
+            # Use upgrades_downgrades for individual analyst actions with dates.
+            recs = ticker.upgrades_downgrades
             if recs is None or recs.empty:
+                # Fallback: try the summary table
+                summary = ticker.recommendations
+                if summary is not None and not summary.empty:
+                    records = []
+                    for _, row in summary.iterrows():
+                        records.append({
+                            "period": row.get("period", ""),
+                            "strong_buy": int(row.get("strongBuy", 0)),
+                            "buy": int(row.get("buy", 0)),
+                            "hold": int(row.get("hold", 0)),
+                            "sell": int(row.get("sell", 0)),
+                            "strong_sell": int(row.get("strongSell", 0)),
+                        })
+                    return json.dumps({
+                        "symbol": symbol,
+                        "type": "summary",
+                        "count": len(records),
+                        "recommendations": records,
+                    }, indent=2, ensure_ascii=False)
+
                 return json.dumps({
                     "symbol": symbol,
                     "message": f"No analyst recommendations found for '{symbol}'.",
@@ -254,16 +276,22 @@ def yahoo_finance_tool(
 
             records = []
             for date, row in recs.head(10).iterrows():
-                records.append({
-                    "date": str(date.date()),
+                entry = {
                     "firm": row.get("Firm", ""),
                     "action": row.get("Action", ""),
-                    "to_grade": row.get("To Grade", ""),
-                    "from_grade": row.get("From Grade", ""),
-                })
+                    "to_grade": row.get("ToGrade", row.get("To Grade", "")),
+                    "from_grade": row.get("FromGrade", row.get("From Grade", "")),
+                }
+                # Handle both DatetimeIndex and integer index
+                if hasattr(date, "date"):
+                    entry["date"] = str(date.date())
+                else:
+                    entry["date"] = str(date)
+                records.append(entry)
 
             return json.dumps({
                 "symbol": symbol,
+                "type": "upgrades_downgrades",
                 "count": len(records),
                 "recommendations": records,
             }, indent=2, ensure_ascii=False)

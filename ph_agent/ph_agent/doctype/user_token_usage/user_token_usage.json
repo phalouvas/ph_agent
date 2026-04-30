@@ -61,7 +61,8 @@
   {
    "fieldname": "section_overrides",
    "fieldtype": "Section Break",
-   "label": "Per-User Cost Overrides"
+   "label": "Per-User Cost Overrides",
+   "permlevel": 1
   },
   {
    "default": "0",
@@ -69,6 +70,7 @@
    "fieldname": "input_cost_over_per_1m",
    "fieldtype": "Float",
    "label": "Input Cost Override per 1M Tokens (\u20ac)",
+   "permlevel": 1,
    "precision": "6"
   },
   {
@@ -77,6 +79,7 @@
    "fieldname": "output_cost_over_per_1m",
    "fieldtype": "Float",
    "label": "Output Cost Override per 1M Tokens (\u20ac)",
+   "permlevel": 1,
    "precision": "6"
   },
   {
@@ -85,6 +88,7 @@
    "fieldname": "cache_hit_cost_over_per_1m",
    "fieldtype": "Float",
    "label": "Cache Hit Cost Override per 1M Tokens (\u20ac)",
+   "permlevel": 1,
    "precision": "6"
   }
  ],
@@ -106,6 +110,12 @@
    "report": 1,
    "role": "System Manager",
    "share": 1,
+   "write": 1
+  },
+  {
+   "permlevel": 1,
+   "role": "System Manager",
+   "read": 1,
    "write": 1
   },
   {

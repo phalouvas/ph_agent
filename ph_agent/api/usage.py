@@ -6,6 +6,9 @@ from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserToke
 def get_user_usage(user: str | None = None) -> dict:
 	"""Get token usage and cost summary for a user.
 
+	PH Agent User role can only view their own usage.
+	System Manager can view any user's usage.
+
 	Args:
 		user: Frappe User name. Defaults to the current session user.
 
@@ -15,6 +18,10 @@ def get_user_usage(user: str | None = None) -> dict:
 		cache_hit_cost_over_per_1m.
 	"""
 	if not user:
+		user = frappe.session.user
+
+	# PH Agent User can only view their own usage
+	if not frappe.has_permission("User Token Usage", "write"):
 		user = frappe.session.user
 
 	# Ensure the record exists

@@ -9,6 +9,25 @@ class UserTokenUsage(Document):
 	visit and updated after every agent response.
 	"""
 
+	def has_permission(self, ptype: str | None = None, user: str | None = None) -> bool:
+		"""Restrict PH Agent User to only see their own record.
+
+		System Manager can see all records.
+		"""
+		if not user:
+			user = frappe.session.user
+
+		# System Manager has full access
+		if "System Manager" in frappe.get_roles(user):
+			return True
+
+		# PH Agent User can only see their own record
+		if ptype == "read":
+			return self.user == user
+
+		# Other operations (write, create, delete) not allowed for PH Agent User
+		return False
+
 	@staticmethod
 	def get_or_create_for_user(user: str) -> str:
 		"""Get existing User Token Usage record for user, or create one.

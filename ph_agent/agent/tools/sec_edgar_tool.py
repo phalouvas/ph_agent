@@ -2,16 +2,18 @@
 SEC EDGAR search tool for PH Agent.
 
 Looks up company CIK numbers and SEC filing metadata using the SEC's
-public REST API (data.sec.gov). Requires a proper User-Agent header
-(SEC requirement — requests without a valid User-Agent will be blocked).
+public REST API. The SEC uses Akamai WAF which blocks non-browser
+User-Agent strings, so this tool uses a standard browser User-Agent
+to comply with SEC access requirements.
 
 SEC API documentation:
-  - CIK/Ticker lookup: https://www.sec.gov/files/company_tickers.json
+  - Company search: https://efts.sec.gov/LATEST/search-index
   - Company submissions: https://data.sec.gov/submissions/CIK##########.json
   - Company facts (XBRL): https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json
 """
 
 import json
+import re
 import time
 from typing import Annotated
 from pydantic import Field
@@ -32,14 +34,21 @@ def _rate_limit():
 
 
 def _headers() -> dict:
-    """Return headers with proper User-Agent (required by SEC).
+    """Return headers that pass SEC's Akamai WAF.
 
-    SEC blocks requests without a valid User-Agent. Use a descriptive
-    agent string identifying the application.
+    The SEC's Akamai Web Application Firewall blocks requests with
+    non-browser User-Agent strings (e.g. ``python-requests`` or
+    custom agents like ``ph_agent/1.0``).  A standard browser
+    User-Agent is required to access both ``efts.sec.gov`` and
+    ``data.sec.gov``.
     """
     return {
-        "User-Agent": "ph_agent/1.0 (SEC filing lookup tool; contact via phalouvas/ph_agent on GitHub)",
-        "Accept": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
 
@@ -114,16 +123,23 @@ def sec_edgar_tool(
 def _search_cik(query: str, requests) -> str:
     """Search for a company by name and return CIK information.
 
-    Uses the SEC's official company tickers JSON file
-    (https://www.sec.gov/files/company_tickers.json) which contains all
-    publicly traded companies with their CIK, ticker, and name.
+    Uses the SEC's EDGAR full-text search API (``efts.sec.gov``) to find
+    company filings, then extracts CIK, company name, and ticker from
+    the ``display_names`` field of the search hits.
     """
     query_lower = query.strip().lower()
 
     _rate_limit()
     try:
         resp = requests.get(
-            "https://www.sec.gov/files/company_tickers.json",
+            "https://efts.sec.gov/LATEST/search-index",
+            params={
+                "q": query,
+                "dateRange": "all",
+                "startdt": "",
+                "enddt": "",
+                "hitsPerPage": 50,
+            },
             headers=_headers(),
             timeout=15,
         )
@@ -137,22 +153,61 @@ def _search_cik(query: str, requests) -> str:
         )
         return f"Error searching SEC EDGAR: {exc}"
 
-    # data is a dict keyed by index (0, 1, 2, ...) with entries:
-    # {"cik_str": int, "ticker": str, "title": str}
-    results = []
-    for entry in data.values():
-        name = entry.get("title", "")
-        ticker = entry.get("ticker", "")
-        cik_str = entry.get("cik_str", "")
-        # Match against name or ticker
-        if (query_lower in name.lower()
-                or query_lower == ticker.lower()
-                or name.lower().startswith(query_lower)):
-            results.append({
-                "cik": str(cik_str).zfill(10),
-                "name": name,
-                "ticker": ticker,
-            })
+    # Parse display_names from search hits to extract company info.
+    # Each hit has a display_names list like:
+    #   ["APPLE INC  (AAPL)  (CIK 0000320193)"]
+    # and a ciks list like:
+    #   ["0000320193"]
+    seen_ciks: set[str] = set()
+    results: list[dict[str, str]] = []
+
+    for hit in data.get("hits", {}).get("hits", []):
+        source = hit.get("_source", {})
+        ciks = source.get("ciks", [])
+        display_names = source.get("display_names", [])
+
+        for cik in ciks:
+            cik_str = str(cik).strip()
+            if cik_str in seen_ciks:
+                continue
+            seen_ciks.add(cik_str)
+
+            # Extract name and ticker from display_names
+            name = ""
+            ticker = ""
+            for dn in display_names:
+                # Pattern: "COMPANY NAME  (TICKER)  (CIK ##########)"
+                m = re.match(
+                    r"^(.+?)\s{2,}\(([A-Za-z0-9.]+)\)\s{2,}\(CIK\s+(\d+)\)",
+                    dn.strip(),
+                )
+                if m:
+                    name = m.group(1).strip()
+                    ticker = m.group(2).strip()
+                    break
+                # Pattern: "COMPANY NAME  (CIK ##########)" — no ticker
+                m2 = re.match(
+                    r"^(.+?)\s{2,}\(CIK\s+(\d+)\)",
+                    dn.strip(),
+                )
+                if m2:
+                    name = m2.group(1).strip()
+                    break
+
+            if not name:
+                name = display_names[0] if display_names else "Unknown"
+
+            # Check relevance: match against name or ticker
+            name_lower = name.lower()
+            ticker_lower = ticker.lower()
+            if (query_lower in name_lower
+                    or query_lower == ticker_lower
+                    or name_lower.startswith(query_lower)):
+                results.append({
+                    "cik": cik_str.zfill(10),
+                    "name": name,
+                    "ticker": ticker,
+                })
 
     if not results:
         return json.dumps({

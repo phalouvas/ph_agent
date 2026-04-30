@@ -574,6 +574,33 @@ def _validate_context_limit(session_doc, provider_doc) -> int:
 	return max_tokens
 
 
+def _reference_enrich_title(session_doc) -> None:
+	"""Enrich the session title based on the referenced document.
+
+	If ``reference_doctype`` and ``reference_name`` are set, reads the
+	referenced document's ``title_field`` and prepends it to the session
+	title (e.g. "Growth Portfolio — New Chat").  Uses ``frappe.db.set_value``
+	for a lightweight write without loading the full document.
+	"""
+	ref_doctype = session_doc.get("reference_doctype")
+	ref_name = session_doc.get("reference_name")
+	if not ref_doctype or not ref_name:
+		return
+
+	try:
+		# Resolve the title field for this doctype
+		meta = frappe.get_meta(ref_doctype)
+		title_field = meta.get("title_field") or "name"
+		title_value = frappe.db.get_value(ref_doctype, ref_name, title_field)
+		if title_value:
+			new_title = f"{title_value} — {session_doc.title or 'New Chat'}"
+			if new_title != session_doc.title:
+				frappe.db.set_value("Chat Session", session_doc.name, "title", new_title)
+				session_doc.title = new_title
+	except Exception:
+		logger.exception("Failed to enrich title from %s %s", ref_doctype, ref_name)
+
+
 def _build_instructions(session_doc) -> str | None:
 	"""Assemble the agent instructions from system_prompt and cross_session_context.
 
@@ -642,26 +669,46 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		default_options["temperature"] = temperature
 		default_options["extra_body"] = {"thinking": {"type": "disabled"}}
 
+	# Auto-title enrichment: if reference_doctype and reference_name are set,
+	# read the document's title field and optionally prefix the session title.
+	_reference_enrich_title(session_doc)
+
 	# Build skills provider from both file-based and DocType-based sources
 	skills_provider = _build_skills_provider()
+
+	# Build base context providers (always present)
+	context_providers: list = [
+		# FrappeMemoryProvider handles all conversation history via the
+		# Chat Message DocType.  InMemoryHistoryProvider is intentionally
+		# omitted — having both would duplicate messages in the context
+		# and produce malformed conversations (e.g. orphaned tool_calls
+		# without matching tool results), triggering 400 errors from the
+		# LLM provider.
+		FrappeMemoryProvider(),
+		skills_provider,
+		UserPreferenceProvider(),
+		LLMMemoryProvider(),
+	]
+
+	# Load hook-registered context providers from other apps.
+	# Each entry in ph_agent_context_providers is a dotted path to a
+	# ContextProvider subclass.  The hook receives the session doc so
+	# providers can decide whether to activate based on reference fields.
+	_hook_providers = frappe.get_hooks("ph_agent_context_providers") or []
+	for dotted_path in _hook_providers:
+		try:
+			cls = frappe.get_attr(dotted_path)
+			provider_instance = cls(session_doc=session_doc)
+			context_providers.append(provider_instance)
+		except Exception:
+			logger.exception("Failed to load context provider: %s", dotted_path)
 
 	return Agent(
 		client=chat_client,
 		instructions=_build_instructions(session_doc),
 		tools=tools,
 		default_options=default_options,
-		context_providers=[
-			# FrappeMemoryProvider handles all conversation history via the
-			# Chat Message DocType.  InMemoryHistoryProvider is intentionally
-			# omitted — having both would duplicate messages in the context
-			# and produce malformed conversations (e.g. orphaned tool_calls
-			# without matching tool results), triggering 400 errors from the
-			# LLM provider.
-			FrappeMemoryProvider(),
-			skills_provider,
-			UserPreferenceProvider(),
-			LLMMemoryProvider(),
-		],
+		context_providers=context_providers,
 	)
 
 

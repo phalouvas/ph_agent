@@ -67,20 +67,19 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 			if (personaSelector) personaSelector.hide();
 
 			if (!personaCompactBtn) {
-				personaCompactBtn = $(`<button class="btn btn-default btn-sm btn-persona-compact"></button>`);
+				personaCompactBtn = $(`<button class="btn btn-default btn-sm btn-persona-compact">👤</button>`);
 				personaCompactBtn.on("click", function (e) {
 					e.stopPropagation();
 					$(".ph-persona-dropdown").remove();
 
 					const $menu = $(`<div class="ph-persona-dropdown" style="position:fixed;z-index:9999;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.18);min-width:180px;padding:4px 0;"></div>`);
 					personaList.forEach(p => {
-						const icon = _personaIcon(p);
 						const isActive = p.name === (window.phAgent?.state?.getActivePersona?.() || current?.name);
-						const $item = $(`<div class="ph-persona-dropdown-item${isActive ? ' active' : ''}"><span>${icon}</span><span>${p.persona_name}</span>${isActive ? '<span class="check-mark">✓</span>' : ""}</div>`);
+						const $item = $(`<div class="ph-persona-dropdown-item${isActive ? ' active' : ''}"><span>${p.persona_name}</span>${isActive ? '<span class="check-mark">✓</span>' : ""}</div>`);
 						$item.on("click", function () {
 							$menu.remove();
 							_switchPersona(p.name);
-							personaCompactBtn.attr("title", p.persona_name).text(icon);
+							personaCompactBtn.attr("title", p.persona_name);
 						});
 						$menu.append($item);
 					});
@@ -100,8 +99,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 			}
 
 			personaCompactBtn.show()
-				.attr("title", current?.persona_name || "")
-				.text(_personaIcon(current));
+				.attr("title", current?.persona_name || "");
 
 		} else {
 			// ── Full select on desktop/tablet ──────────────────────
@@ -118,8 +116,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 			personaSelector.show();
 			const optionsHtml = personaList.map(p => {
 				const selected = p.name === current?.name ? "selected" : "";
-				const icon = _personaIcon(p);
-				return `<option value="${p.name}" ${selected}>${icon} ${p.persona_name}</option>`;
+				return `<option value="${p.name}" ${selected}>${p.persona_name}</option>`;
 			}).join("");
 			personaSelector.html(optionsHtml);
 		}

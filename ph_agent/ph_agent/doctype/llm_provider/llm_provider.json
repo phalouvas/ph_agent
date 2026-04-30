@@ -23,6 +23,11 @@
   "max_output_tokens",
   "context_length",
   "auto_summary_threshold",
+  "section_pricing",
+  "input_cost_per_1m_tokens",
+  "output_cost_per_1m_tokens",
+  "cache_hit_cost_per_1m_tokens",
+  "cost_currency",
   "section_file_limits",
   "max_file_size_mb",
   "system_prompt"
@@ -149,6 +154,43 @@
    "fieldname": "auto_summary_threshold",
    "fieldtype": "Int",
    "label": "Auto Summary Threshold (%)"
+  },
+  {
+   "fieldname": "section_pricing",
+   "fieldtype": "Section Break",
+   "label": "Pricing"
+  },
+  {
+   "default": "0",
+   "description": "Cost per 1 million input tokens (\u20ac). Copy from provider pricing page (e.g., DeepSeek: 0.14).",
+   "fieldname": "input_cost_per_1m_tokens",
+   "fieldtype": "Float",
+   "label": "Input Cost per 1M Tokens (\u20ac)",
+   "precision": "6"
+  },
+  {
+   "default": "0",
+   "description": "Cost per 1 million output tokens (\u20ac). Copy from provider pricing page (e.g., DeepSeek: 0.28).",
+   "fieldname": "output_cost_per_1m_tokens",
+   "fieldtype": "Float",
+   "label": "Output Cost per 1M Tokens (\u20ac)",
+   "precision": "6"
+  },
+  {
+   "default": "0",
+   "description": "Cost per 1 million tokens when cache is hit (\u20ac). Copy from provider pricing page (e.g., DeepSeek: 0.0028).",
+   "fieldname": "cache_hit_cost_per_1m_tokens",
+   "fieldtype": "Float",
+   "label": "Cache Hit Cost per 1M Tokens (\u20ac)",
+   "precision": "6"
+  },
+  {
+   "default": "EUR",
+   "description": "Currency for all pricing fields on this provider.",
+   "fieldname": "cost_currency",
+   "fieldtype": "Data",
+   "label": "Currency",
+   "length": 3
   },
   {
    "fieldname": "section_file_limits",

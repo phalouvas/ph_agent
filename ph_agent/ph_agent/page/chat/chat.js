@@ -133,6 +133,16 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		});
 	});
 
+	// Ensure User Token Usage record exists for this user (fire-and-forget)
+	frappe.call({
+		method: "ph_agent.api.chat.ensure_user_setup",
+		callback: function(r) {
+			if (!r.message || r.message.status !== "ok") {
+				console.warn("Failed to ensure user token usage setup");
+			}
+		}
+	});
+
 	page.set_primary_action(__("New Chat"), () => {
 		if (window.phAgent && window.phAgent.roomService) {
 			window.phAgent.roomService.createNewSession();

@@ -1,0 +1,121 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:user",
+ "creation": "2026-04-30 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "total_input_tokens",
+  "total_output_tokens",
+  "total_cost",
+  "last_updated",
+  "section_overrides",
+  "input_cost_over_per_1m",
+  "output_cost_over_per_1m",
+  "cache_hit_cost_over_per_1m"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "0",
+   "description": "Total input tokens consumed across all sessions (including temporary).",
+   "fieldname": "total_input_tokens",
+   "fieldtype": "Int",
+   "label": "Total Input Tokens",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Total output tokens consumed across all sessions (including temporary).",
+   "fieldname": "total_output_tokens",
+   "fieldtype": "Int",
+   "label": "Total Output Tokens",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Total cost in EUR across all sessions, calculated from provider pricing and user overrides.",
+   "fieldname": "total_cost",
+   "fieldtype": "Float",
+   "label": "Total Cost (\u20ac)",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_updated",
+   "fieldtype": "Datetime",
+   "label": "Last Updated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_overrides",
+   "fieldtype": "Section Break",
+   "label": "Per-User Cost Overrides"
+  },
+  {
+   "default": "0",
+   "description": "Additive override on top of provider input cost per 1M tokens. Positive = surcharge, negative = discount, zero = use provider rate as-is.",
+   "fieldname": "input_cost_over_per_1m",
+   "fieldtype": "Float",
+   "label": "Input Cost Override per 1M Tokens (\u20ac)",
+   "precision": "6"
+  },
+  {
+   "default": "0",
+   "description": "Additive override on top of provider output cost per 1M tokens. Positive = surcharge, negative = discount, zero = use provider rate as-is.",
+   "fieldname": "output_cost_over_per_1m",
+   "fieldtype": "Float",
+   "label": "Output Cost Override per 1M Tokens (\u20ac)",
+   "precision": "6"
+  },
+  {
+   "default": "0",
+   "description": "Additive override on top of provider cache hit cost per 1M tokens. Positive = surcharge, negative = discount, zero = use provider rate as-is.",
+   "fieldname": "cache_hit_cost_over_per_1m",
+   "fieldtype": "Float",
+   "label": "Cache Hit Cost Override per 1M Tokens (\u20ac)",
+   "precision": "6"
+  }
+ ],
+ "links": [],
+ "modified": "2026-04-30 00:00:00",
+ "modified_by": "Administrator",
+ "module": "PH Agent",
+ "name": "User Token Usage",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "PH Agent User"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

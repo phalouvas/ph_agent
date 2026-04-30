@@ -76,7 +76,7 @@
    "reqd": 1
   },
   {
-   "default": "https://api.deepseek.com/v1",
+   "default": "https://api.deepseek.com/",
    "fieldname": "api_url",
    "fieldtype": "Data",
    "label": "API URL",
@@ -130,15 +130,15 @@
    "label": "Token Limits"
   },
   {
-   "default": "32768",
-   "description": "Maximum tokens the model can generate per response. Default: 32768 (recommended for thinking models).",
+   "default": "384000",
+   "description": "Maximum tokens the model can generate per response. Default: 384000 (recommended for thinking models).",
    "fieldname": "max_output_tokens",
    "fieldtype": "Int",
    "label": "Max Output Tokens"
   },
   {
-   "default": "128000",
-   "description": "Maximum total tokens (prompt + completion) the model supports. Default: 128000. DeepSeek supports up to 1M tokens for compatible models.",
+   "default": "1000000",
+   "description": "Maximum total tokens (prompt + completion) the model supports. Default: 1000000. DeepSeek supports up to 1M tokens for compatible models.",
    "fieldname": "context_length",
    "fieldtype": "Int",
    "label": "Context Length"

@@ -430,6 +430,29 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Custom instruction template for SkillsProvider.
+# Softens the default "follow these steps in exact order: load_skill first" instruction
+# so that skills are treated as optional reference material rather than a mandatory
+# first step. The agent should follow its primary instructions (system prompt) and
+# only load a skill when it needs additional domain-specific guidance.
+_CUSTOM_SKILLS_TEMPLATE = """\
+You have access to skills containing domain-specific knowledge and capabilities.
+Each skill provides specialized instructions, reference documents, and assets for specific tasks.
+
+<available_skills>
+{skills}
+</available_skills>
+
+If you need additional guidance beyond your primary instructions, you may use the
+skills below. When a task aligns with a skill's domain, you can optionally:
+- Use `load_skill` to retrieve the skill's instructions.
+- Follow the provided guidance.
+- Use `read_skill_resource` to read any referenced resources, using the name exactly as listed
+   (e.g. `"style-guide"` not `"style-guide.md"`, `"references/FAQ.md"` not `"FAQ.md"`).
+{runner_instructions}
+Only load what is needed, when it is needed."""
+
+
 def _build_skills_provider() -> SkillsProvider:
 	"""Build a SkillsProvider with both file-based and DocType-based skills.
 
@@ -465,6 +488,7 @@ def _build_skills_provider() -> SkillsProvider:
 		skills=code_skills,
 		require_script_approval=True,
 		script_runner=run_file_script,
+		instruction_template=_CUSTOM_SKILLS_TEMPLATE,
 	)
 
 

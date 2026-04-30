@@ -145,9 +145,27 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		}
 	}, "add");
 
-	// ── Temporary Mode Toggle (via Frappe native add_button) ────────
-	// add_button creates the button + auto-adds a menu item for mobile overflow
-	const tempBtn = page.add_button("👻 " + __("Temporary"), function () {
+	// ── Helper: create a page action button directly in .standard-actions ──
+	// Bypasses page.add_button() which appends to .custom-actions (hidden on
+	// mobile via hidden-xs hidden-md classes).  We create the button ourselves
+	// and append to .standard-actions so it's visible at ALL breakpoints.
+	// Also adds a matching menu item in .menu-btn-group for the three-dots menu.
+	function _createPageButton(label, clickHandler, btnClass) {
+		const $btn = $(`<button class="btn btn-default btn-sm ellipsis ${btnClass}">${label}</button>`);
+		$btn.on("click", clickHandler);
+		$(page.page_actions).find(".standard-actions").append($btn);
+
+		// Also add a menu item in the three-dots overflow menu (for very narrow
+		// screens where even icon-only buttons might not fit).
+		const menuLabel = $("<span>").html(label).text(); // strip HTML for menu text
+		const $menuItem = page.add_menu_item(menuLabel, clickHandler, false);
+		$menuItem.addClass("hidden-xl"); // hide on desktop, visible on mobile
+
+		return $btn;
+	}
+
+	// ── Temporary Mode Toggle ──────────────────────────────────────
+	const tempBtn = _createPageButton("👻 " + __("Temporary"), function () {
 		const state = window.phAgent?.state;
 		if (!state) return;
 		const activeRoomId = state.getActiveRoomId();
@@ -197,7 +215,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 				}
 			}
 		});
-	}, { btn_class: "btn-temp-mode" });
+	}, "btn-temp-mode");
 	// Restore inner span so mobile CSS can hide text while keeping icon
 	tempBtn.html(`👻 <span data-text>${__("Temporary")}</span>`);
 	// Move after primary action for correct visual order
@@ -208,9 +226,8 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 		tempBtn.find("[data-text]").text(__("Temporary ON"));
 	}
 
-	// ── Summary Button (via Frappe native add_button) ────────────────
-	// Hidden by default; shown when token % > 20
-	const summaryButton = page.add_button("", () => {
+	// ── Summary Button ─────────────────────────────────────────────
+	const summaryButton = _createPageButton("", () => {
 		const session = window.phAgent?.state?.getActiveRoomId?.();
 		if (!session) {
 			frappe.show_alert({
@@ -246,7 +263,7 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 					`);
 				});
 		}
-	}, { btn_class: "btn-summary-conversation" });
+	}, "btn-summary-conversation");
 	summaryButton.html(`<i class="fa fa-refresh"></i><span data-text>${__("Summarize")}</span>`);
 	summaryButton.hide();
 	summaryButton.insertAfter(tempBtn);

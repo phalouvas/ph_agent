@@ -342,11 +342,10 @@ vue-advanced-chat {
  * using icon-only mode so the most-used buttons stay accessible.
  */
 
-/* Prevent Frappe from hiding buttons into the three-dots overflow menu.
- * These buttons must always be directly visible. */
+/* Buttons are created directly in .standard-actions (not .custom-actions)
+ * so they are visible at ALL breakpoints.  Keep them from shrinking. */
 .btn-temp-mode,
 .btn-summary-conversation {
-	display: inline-flex !important;
 	flex-shrink: 0;
 }
 

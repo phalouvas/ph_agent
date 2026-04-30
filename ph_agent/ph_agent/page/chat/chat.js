@@ -364,7 +364,11 @@ function initPhChat(container, page, $status) {
 	chat.setAttribute("show-audio", "false");
 	chat.setAttribute("rooms-loaded", "false");
 	chat.setAttribute("messages-loaded", "false");
-	chat.setAttribute("room-actions", JSON.stringify([{ name: "deleteRoom", title: __("Delete") }]));
+	chat.setAttribute("room-actions", JSON.stringify([
+		{ name: "closeRoom", title: __("Close") },
+		{ name: "archiveRoom", title: __("Archive") },
+		{ name: "deleteRoom", title: __("Delete") }
+	]));
 	chat.setAttribute("message-actions", JSON.stringify([
 		{ name: "editMessage", title: __("Edit"), onlyMe: true },
 		{ name: "deleteMessage", title: __("Delete") },

@@ -605,6 +605,9 @@ def _reference_enrich_title(session_doc) -> None:
 	referenced document's ``title_field`` and prepends it to the session
 	title (e.g. "Growth Portfolio — New Chat").  Uses ``frappe.db.set_value``
 	for a lightweight write without loading the full document.
+
+	Idempotent: if the title already starts with the reference value, no
+	change is made (prevents repeated prepends on subsequent calls).
 	"""
 	ref_doctype = session_doc.get("reference_doctype")
 	ref_name = session_doc.get("reference_name")
@@ -617,10 +620,13 @@ def _reference_enrich_title(session_doc) -> None:
 		title_field = meta.get("title_field") or "name"
 		title_value = frappe.db.get_value(ref_doctype, ref_name, title_field)
 		if title_value:
-			new_title = f"{title_value} — {session_doc.title or 'New Chat'}"
-			if new_title != session_doc.title:
-				frappe.db.set_value("Chat Session", session_doc.name, "title", new_title)
-				session_doc.title = new_title
+			# Idempotency check: skip if title already starts with the reference value
+			current_title = session_doc.title or "New Chat"
+			if current_title.startswith(f"{title_value} — "):
+				return
+			new_title = f"{title_value} — {current_title}"
+			frappe.db.set_value("Chat Session", session_doc.name, "title", new_title)
+			session_doc.title = new_title
 	except Exception:
 		logger.exception("Failed to enrich title from %s %s", ref_doctype, ref_name)
 

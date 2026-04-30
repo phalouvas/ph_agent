@@ -13,8 +13,103 @@ from ph_agent.agent.framework_agent import (
 	run_after_approval,
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
+from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
 from ph_agent.utils.file_extractor import extract_file_text
 
+
+
+# ---------------------------------------------------------------------------
+# Token usage & cost helpers
+# ---------------------------------------------------------------------------
+
+
+def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens: int) -> None:
+	"""Accumulate token counts and cost into the user's User Token Usage record.
+
+	Calculates cost from LLM Provider pricing + per-user overrides.
+	Safe to call for both temporary and permanent sessions — the User Token
+	Usage record survives temporary session cleanup.
+
+	Args:
+		session_name: Chat Session name (used to look up user + provider).
+		input_tokens: Input tokens to add.
+		output_tokens: Output tokens to add.
+	"""
+	try:
+		session_doc = frappe.get_doc("Chat Session", session_name)
+		user = session_doc.user
+		provider_name = session_doc.llm_provider
+
+		# Get or create the user token usage record (defense-in-depth)
+		usage_name = UserTokenUsage.get_or_create_for_user(user)
+
+		# Read provider pricing
+		provider = frappe.get_doc("LLM Provider", provider_name)
+		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
+		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
+
+		# Read user overrides (default to 0 if not set)
+		usage_doc = frappe.get_doc("User Token Usage", usage_name)
+		override_input = float(usage_doc.input_cost_over_per_1m or 0)
+		override_output = float(usage_doc.output_cost_over_per_1m or 0)
+
+		# Effective rates = provider base + user override
+		effective_input_rate = provider_input_rate + override_input
+		effective_output_rate = provider_output_rate + override_output
+
+		# Calculate cost in EUR
+		cost = (input_tokens * effective_input_rate + output_tokens * effective_output_rate) / 1_000_000
+
+		# Atomic update — read current values and add
+		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
+		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
+		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
+
+		frappe.db.set_value("User Token Usage", usage_name, {
+			"total_input_tokens": current_input + input_tokens,
+			"total_output_tokens": current_output + output_tokens,
+			"total_cost": current_cost + cost,
+			"last_updated": frappe.utils.now_datetime(),
+		})
+		frappe.db.commit()
+	except Exception:
+		frappe.log_error(
+			title="Failed to credit user token usage",
+			message=f"Session: {session_name}, Input: {input_tokens}, Output: {output_tokens}",
+		)
+
+
+def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens: int) -> float:
+	"""Calculate the EUR cost of a single message based on provider pricing + user overrides.
+
+	Args:
+		session_name: Chat Session name.
+		input_tokens: Input tokens for this message.
+		output_tokens: Output tokens for this message.
+
+	Returns:
+		Cost in EUR.
+	"""
+	try:
+		session_doc = frappe.get_doc("Chat Session", session_name)
+		user = session_doc.user
+		provider_name = session_doc.llm_provider
+
+		provider = frappe.get_doc("LLM Provider", provider_name)
+		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
+		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
+
+		usage_name = UserTokenUsage.get_or_create_for_user(user)
+		usage_doc = frappe.get_doc("User Token Usage", usage_name)
+		override_input = float(usage_doc.input_cost_over_per_1m or 0)
+		override_output = float(usage_doc.output_cost_over_per_1m or 0)
+
+		effective_input_rate = provider_input_rate + override_input
+		effective_output_rate = provider_output_rate + override_output
+
+		return (input_tokens * effective_input_rate + output_tokens * effective_output_rate) / 1_000_000
+	except Exception:
+		return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +579,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						agent_msg.content = processed_content
 					agent_msg.input_tokens = input_tokens
 					agent_msg.output_tokens = output_tokens
+					agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens)
 					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
@@ -551,6 +647,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					agent_msg.content = processed_content
 				agent_msg.input_tokens = input_tokens
 				agent_msg.output_tokens = output_tokens
+				agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens)
 				agent_msg.save(ignore_permissions=True)
 				frappe.db.commit()
 				emit_status("")
@@ -582,6 +679,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				agent_msg.content = processed_content
 			agent_msg.input_tokens = input_tokens
 			agent_msg.output_tokens = output_tokens
+			agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens)
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
 			emit_status("")
@@ -711,6 +809,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		},
 	)
 	frappe.db.commit()
+
+	# Credit tokens to user-level aggregate (survives temporary session cleanup)
+	_credit_user_token_usage(session, input_tokens, output_tokens)
 
 	# Release lock and clear the status indicator immediately — before any
 	# DB reads or realtime publishes — so the "Calling AI…" text disappears
@@ -1059,6 +1160,9 @@ def _execute_approved_tool(approval_name):
 			},
 		)
 		frappe.db.commit()
+
+		# Credit tokens to user-level aggregate
+		_credit_user_token_usage(session, input_tokens, output_tokens)
 
 		# Post-response auto-compaction check for approved tool execution
 		session_doc = frappe.get_doc("Chat Session", session)

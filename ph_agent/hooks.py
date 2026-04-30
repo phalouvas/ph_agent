@@ -25,7 +25,7 @@ add_to_apps_screen = [
 # ------------------
 
 # include js, css files in header of desk.html
-app_include_css = "/assets/ph_agent/css/chat.css?v=2"
+app_include_css = "/assets/ph_agent/css/chat.css?v=3"
 # app_include_js = "/assets/ph_agent/js/ph_agent.js"
 
 # include js, css files in header of web template

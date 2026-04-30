@@ -1,5 +1,5 @@
-/* Chat page container */
-.page-content-wrapper .page-content {
+/* Chat page container — scope to chat page only */
+[data-page-route="chat"] .page-content-wrapper .page-content {
 	padding: 0;
 }
 
@@ -352,21 +352,21 @@ vue-advanced-chat {
 
 /* Hide the three-dots overflow menu entirely — all buttons are directly
  * visible in .standard-actions at every breakpoint. */
-.menu-btn-group {
+[data-page-route="chat"] .menu-btn-group {
 	display: none !important;
 }
 
 /* Tier 1: Tablet (≤ 768px) */
 @media (max-width: 768px) {
-	.page-actions {
+	[data-page-route="chat"] .page-actions {
 		flex-wrap: nowrap;
 		gap: 4px;
 	}
-	.page-actions .standard-actions {
+	[data-page-route="chat"] .page-actions .standard-actions {
 		flex-wrap: nowrap;
 		gap: 4px;
 	}
-	.page-actions .persona-selector {
+	[data-page-route="chat"] .page-actions .persona-selector {
 		min-width: 120px;
 	}
 }
@@ -374,7 +374,7 @@ vue-advanced-chat {
 /* Tier 2: Phone (≤ 480px) — icon-only for all buttons, persona compact */
 @media (max-width: 480px) {
 	/* Persona dropdown select → compact icon button (handled by JS) */
-	.page-actions .persona-selector {
+	[data-page-route="chat"] .page-actions .persona-selector {
 		min-width: 100px;
 		max-width: 120px;
 		font-size: 11px;
@@ -382,14 +382,14 @@ vue-advanced-chat {
 	}
 
 	/* New Chat button: icon-only, hide text */
-	.page-actions .primary-action .hidden-xs {
+	[data-page-route="chat"] .page-actions .primary-action .hidden-xs {
 		display: none !important;
 	}
-	.page-actions .primary-action {
+	[data-page-route="chat"] .page-actions .primary-action {
 		padding: 2px 6px;
 		min-width: 0;
 	}
-	.page-actions .primary-action svg.icon {
+	[data-page-route="chat"] .page-actions .primary-action svg.icon {
 		margin-right: 0 !important;
 	}
 
@@ -430,14 +430,14 @@ vue-advanced-chat {
 
 /* Tier 3: Very narrow (≤ 360px) */
 @media (max-width: 360px) {
-	.page-actions {
+	[data-page-route="chat"] .page-actions {
 		gap: 2px;
 	}
-	.page-actions .btn-primary {
+	[data-page-route="chat"] .page-actions .btn-primary {
 		padding: 4px 8px;
 		font-size: 11px;
 	}
-	.page-actions .persona-selector {
+	[data-page-route="chat"] .page-actions .persona-selector {
 		min-width: 60px;
 		max-width: 90px;
 		font-size: 10px;

@@ -54,6 +54,18 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "badge-euro",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "User Token Usage",
+   "link_to": "User Token Usage",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
    "icon": "cloud-cog",
@@ -138,7 +150,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-04-29 18:49:38.805776",
+ "modified": "2026-04-30 11:35:29.907539",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

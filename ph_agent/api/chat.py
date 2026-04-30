@@ -120,6 +120,22 @@ def update_session_provider(session, provider_name):
 
 
 @frappe.whitelist()
+def ensure_user_setup():
+	"""Ensure the current user has a User Token Usage record.
+
+	Auto-creates one if missing. Called on chat page load so token tracking
+	is always ready before any messages are sent.
+
+	Returns:
+		dict with ``status`` and ``user_token_usage`` name.
+	"""
+	from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+
+	name = UserTokenUsage.get_or_create_for_user(frappe.session.user)
+	return {"status": "ok", "user_token_usage": name}
+
+
+@frappe.whitelist()
 def update_session_settings(session, title=None, provider_name=None, enable_thinking=None,
 							temperature=None, enable_streaming=None, enable_suggestions=None,
 							system_prompt=None, disable_tools=None, tool_groups=None):

@@ -366,6 +366,7 @@ function initPhChat(container, page, $status) {
 	chat.setAttribute("messages-loaded", "false");
 	chat.setAttribute("room-actions", JSON.stringify([
 		{ name: "closeRoom", title: __("Close") },
+		{ name: "archiveRoom", title: __("Archive") },
 		{ name: "deleteRoom", title: __("Delete") }
 	]));
 	chat.setAttribute("message-actions", JSON.stringify([

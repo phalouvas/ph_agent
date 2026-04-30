@@ -116,6 +116,21 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 window._phSyncTempModeButton(!!room.isTemporary);
             }
             
+            // Update room-actions based on session status (Open vs Close)
+            const currentRoom = state.getRoomById(room.roomId);
+            if (currentRoom && currentRoom.status) {
+                // Access the private _updateRoomActions via the chat's room-actions attribute
+                const chat = document.querySelector("vue-advanced-chat");
+                if (chat) {
+                    const actions = [
+                        { name: currentRoom.status === "Closed" ? "openRoom" : "closeRoom", title: currentRoom.status === "Closed" ? __("Open") : __("Close") },
+                        { name: "archiveRoom", title: __("Archive") },
+                        { name: "deleteRoom", title: __("Delete") }
+                    ];
+                    chat.setAttribute("room-actions", JSON.stringify(actions));
+                }
+            }
+            
             // When switching away from a room that's mid-generation, the
             // agent_status("") event from the old room will be filtered out
             // (data.session !== _activeRoomId).  Clear the status bar and
@@ -949,6 +964,50 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                 .catch(err => {
                                     frappe.show_alert({ 
                                         message: __("Failed to close chat session"), 
+                                        indicator: "red" 
+                                    });
+                                });
+                        },
+                        () => {
+                            // User cancelled
+                        }
+                    );
+                    break;
+                    
+                case "openRoom":
+                    frappe.confirm(
+                        __("Re-open this chat session?"),
+                        () => {
+                            // User confirmed
+                            roomService.openRoom(roomId)
+                                .then(() => {
+                                    // Open was successful — alert shown in openRoom
+                                })
+                                .catch(err => {
+                                    frappe.show_alert({ 
+                                        message: __("Failed to re-open chat session"), 
+                                        indicator: "red" 
+                                    });
+                                });
+                        },
+                        () => {
+                            // User cancelled
+                        }
+                    );
+                    break;
+                    
+                case "archiveRoom":
+                    frappe.confirm(
+                        __("Are you sure you want to archive this chat session? It will be hidden from the room list."),
+                        () => {
+                            // User confirmed
+                            roomService.archiveRoom(roomId)
+                                .then(() => {
+                                    // Archive was successful — alert shown in archiveRoom
+                                })
+                                .catch(err => {
+                                    frappe.show_alert({ 
+                                        message: __("Failed to archive chat session"), 
                                         indicator: "red" 
                                     });
                                 });

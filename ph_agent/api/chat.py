@@ -549,6 +549,75 @@ def close_session(session):
 
 
 @frappe.whitelist()
+def open_session(session):
+	"""Re-open a previously closed Chat Session.
+
+	Sets the session status back to "Open". The session state was
+	already cleared when it was closed, so it will be rebuilt from
+	conversation history on the next agent invocation.
+
+	Args:
+		session: Chat Session name to re-open.
+	"""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+
+	frappe.db.set_value("Chat Session", session, "status", "Open")
+	frappe.db.commit()
+
+	# Notify frontend
+	frappe.publish_realtime(
+		event="session_opened",
+		message={"session": session},
+		room="website",
+	)
+
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
+def archive_session(session):
+	"""Archive a Chat Session.
+
+	Sets the session status to "Archived", clears session state, and
+	cancels any running background job. The session is hidden from the
+	default room list (filtered out by status != "Archived") but can
+	still be accessed directly.
+
+	Args:
+		session: Chat Session name to archive.
+	"""
+	frappe.has_permission("Chat Session", doc=session, throw=True)
+
+	# Cancel any running background job for this session
+	job_id = frappe.cache().get_value(f"ph_agent:job:{session}")
+	if job_id:
+		try:
+			from frappe.utils.background_jobs import get_redis_conn
+			from rq.command import send_stop_job_command
+			jid = job_id.decode() if isinstance(job_id, bytes) else job_id
+			send_stop_job_command(connection=get_redis_conn(), job_id=jid)
+		except Exception:
+			pass
+		frappe.cache().delete_value(f"ph_agent:job:{session}")
+	frappe.cache().delete_value(f"ph_agent:lock:{session}")
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+
+	# Set status to Archived — the before_save hook on ChatSession clears session_state
+	frappe.db.set_value("Chat Session", session, "status", "Archived")
+	frappe.db.commit()
+
+	# Notify frontend
+	_emit_status(session, "")
+	frappe.publish_realtime(
+		event="session_archived",
+		message={"session": session},
+		room="website",
+	)
+
+	return {"status": "ok"}
+
+
+@frappe.whitelist()
 def edit_message(message_id, content):
 	"""Edit a user message, delete all subsequent messages, and re-run the agent."""
 	msg = frappe.get_doc("Chat Message", message_id)

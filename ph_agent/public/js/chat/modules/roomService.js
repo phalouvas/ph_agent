@@ -12,6 +12,23 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
     let _currentUserId = null;
     let _agentId = "ph_agent";
     
+    // ── Private helpers ────────────────────────────────────────────
+    
+    /**
+     * Update the room-actions attribute on the chat component based on session status.
+     * Closed sessions show "Open" instead of "Close".
+     * @param {string} status - "Open" or "Closed"
+     */
+    function _updateRoomActions(status) {
+        if (!_chat) return;
+        const actions = [
+            { name: status === "Closed" ? "openRoom" : "closeRoom", title: status === "Closed" ? __("Open") : __("Close") },
+            { name: "archiveRoom", title: __("Archive") },
+            { name: "deleteRoom", title: __("Delete") }
+        ];
+        _chat.setAttribute("room-actions", JSON.stringify(actions));
+    }
+    
     // Public API
     return {
         // --- Initialization ---
@@ -76,6 +93,7 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                             roomId: s.name,
                             roomName: roomName,
                             isTemporary: !!s.is_temporary,
+                            status: s.status,
                             users: [
                                 { _id: _currentUserId, username: frappe.boot.user.full_name || _currentUserId },
                                 { _id: _agentId, username: "AI Agent" },
@@ -153,6 +171,7 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                             roomId: session.session,
                             roomName: roomName,
                             isTemporary: !!session.is_temporary,
+                            status: "Open",
                             users: [
                                 { _id: _currentUserId, username: frappe.boot.user.full_name || _currentUserId },
                                 { _id: _agentId, username: "AI Agent" },
@@ -250,11 +269,15 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                                 // Add closed indicator to room name if not already present
                                 if (!room.roomName.includes("🔒")) {
                                     state.updateRoom(roomId, {
-                                        roomName: "🔒 " + room.roomName
+                                        roomName: "🔒 " + room.roomName,
+                                        status: "Closed"
                                     });
                                     _chat.rooms = state.getRooms();
                                 }
                             }
+                            
+                            // Update room-actions to show Open instead of Close
+                            _updateRoomActions("Closed");
                             
                             frappe.show_alert({
                                 message: __("Chat session closed"),
@@ -267,6 +290,94 @@ window.phAgent.roomService = window.phAgent.roomService || (function() {
                     },
                     error: (err) => {
                         console.error("Failed to close room:", err);
+                        reject(err);
+                    }
+                });
+            });
+        },
+        
+        /**
+         * Re-open a previously closed room (chat session)
+         * @param {string} roomId - ID of the room to re-open
+         * @returns {Promise} Promise that resolves when room is opened
+         */
+        openRoom: function(roomId) {
+            return new Promise((resolve, reject) => {
+                frappe.call({
+                    method: "ph_agent.api.chat.open_session",
+                    args: { session: roomId },
+                    callback: (r) => {
+                        if (r.message && r.message.status === "ok") {
+                            // Update room name to remove closed indicator
+                            const state = window.phAgent.state;
+                            const room = state.getRoomById(roomId);
+                            if (room) {
+                                // Remove 🔒 prefix and update status
+                                const newName = room.roomName.replace(/^🔒 /, "");
+                                state.updateRoom(roomId, {
+                                    roomName: newName,
+                                    status: "Open"
+                                });
+                                _chat.rooms = state.getRooms();
+                            }
+                            
+                            // Update room-actions to show Close instead of Open
+                            _updateRoomActions("Open");
+                            
+                            frappe.show_alert({
+                                message: __("Chat session reopened"),
+                                indicator: "green"
+                            });
+                            resolve();
+                        } else {
+                            reject(new Error("Failed to open room"));
+                        }
+                    },
+                    error: (err) => {
+                        console.error("Failed to open room:", err);
+                        reject(err);
+                    }
+                });
+            });
+        },
+        
+        /**
+         * Archive a room (chat session) — hides it from the default room list
+         * @param {string} roomId - ID of the room to archive
+         * @returns {Promise} Promise that resolves when room is archived
+         */
+        archiveRoom: function(roomId) {
+            return new Promise((resolve, reject) => {
+                frappe.call({
+                    method: "ph_agent.api.chat.archive_session",
+                    args: { session: roomId },
+                    callback: (r) => {
+                        if (r.message && r.message.status === "ok") {
+                            // Remove room from state (it's hidden from the list)
+                            const state = window.phAgent.state;
+                            state.removeRoom(roomId);
+                            state.removeRoomProvider(roomId);
+                            
+                            // Update chat component
+                            _chat.rooms = state.getRooms();
+                            
+                            // If archived room was active, clear active room
+                            if (state.getActiveRoomId() === roomId) {
+                                state.setActiveRoomId(null);
+                                _chat.setAttribute("room-id", "");
+                            }
+                            
+                            frappe.show_alert({
+                                message: __("Chat session archived"),
+                                indicator: "blue"
+                            });
+                            resolve();
+                        } else {
+                            reject(new Error("Failed to archive room"));
+                        }
+                    },
+                    error: (err) => {
+                        console.error("Failed to archive room:", err);
                         reject(err);
                     }
                 });

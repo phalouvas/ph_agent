@@ -455,7 +455,21 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					level="WARNING",
 				)
 		if file_texts:
-			agent_content = content + "\n\n" + "\n\n".join(file_texts)		
+			# Build a metadata block with File doc names so the agent can use
+			# attach_files_to_record to link files to created records.
+			file_meta_lines = []
+			for file_name in file_names:
+				filename = frappe.db.get_value('File', file_name, 'file_name')
+				file_meta_lines.append(f"- `{file_name}` ({filename})")
+			file_meta_block = (
+				"**Attached Files (use these names with attach_files_to_record):**\n"
+				+ "\n".join(file_meta_lines)
+			)
+			agent_content = (
+				content
+				+ "\n\n" + file_meta_block
+				+ "\n\n" + "\n\n".join(file_texts)
+			)		
 
 	emit_status(frappe._("Calling AI…"))
 

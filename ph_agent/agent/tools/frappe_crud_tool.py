@@ -120,8 +120,10 @@ def _get_context_info(ctx: FunctionInvocationContext | None) -> str:
 	name="create_frappe_record",
 	description=(
 		"Create a new record in Frappe/ERPNext. "
-		"Supply the DocType name and field values as a JSON object. "
-		"Returns the created record name and details. "
+		"Supply the DocType and field values as a JSON object. "
+		"Returns the created record details including its name. "
+		"Optionally attach uploaded files to the new record by providing "
+		"file names (from the Attached Files metadata in your context). "
 		f"Allowed DocTypes: {', '.join(sorted(ALLOWED_WRITE_DOCTYPES))}."
 	),
 )
@@ -136,6 +138,13 @@ def create_frappe_record_tool(
 						  "e.g. '{\"customer_name\": \"Acme Corp\", \"customer_type\": \"Company\", "
 						  "\"territory\": \"United States\"}'"),
 	],
+	attach_files: Annotated[
+		Optional[str],
+		Field(description="OPTIONAL — JSON array of existing File doc names to attach to the new record, "
+						  "e.g. '[\"File-abc123\"]'. Only use when the user explicitly asked to attach files "
+						  "or when your instructions say to attach the source file. "
+						  "The file names are listed in the Attached Files metadata in your context."),
+	] = None,
 	ctx: FunctionInvocationContext = None,
 ) -> str:
 	"""
@@ -144,6 +153,7 @@ def create_frappe_record_tool(
 	Args:
 		doctype: The DocType to create a record in.
 		field_values: JSON string of field names and values.
+		attach_files: Optional JSON array of File doc names to attach.
 		ctx: Function invocation context (injected by framework).
 
 	Returns:
@@ -195,6 +205,34 @@ def create_frappe_record_tool(
 		frappe.db.commit()
 
 		summary = f"✅ Successfully created {doctype}: **{doc.name}**"
+
+		# Attach files if requested
+		if attach_files:
+			try:
+				files_list = json.loads(attach_files)
+				if isinstance(files_list, list) and files_list:
+					valid_files = []
+					attach_errors = []
+					for fname in files_list:
+						if isinstance(fname, str) and fname.strip():
+							if frappe.db.exists("File", fname.strip()):
+								valid_files.append(fname.strip())
+							else:
+								attach_errors.append(f"File '{fname}' does not exist")
+					if valid_files:
+						add_attachments(
+							doctype=doctype,
+							name=doc.name,
+							attachments=valid_files,
+						)
+						frappe.db.commit()
+						summary += f"\n📎 Attached {len(valid_files)} file(s)."
+					if attach_errors:
+						summary += f"\n⚠️ Could not attach: {'; '.join(attach_errors)}"
+			except Exception as attach_e:
+				logger.exception("Error attaching files to %s '%s'", doctype, doc.name)
+				summary += f"\n⚠️ Could not attach files: {attach_e}"
+
 		return summary + "\n\n```json\n" + json.dumps(result, indent=2, default=str) + "\n```"
 
 	except frappe.PermissionError:

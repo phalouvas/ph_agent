@@ -611,6 +611,85 @@ def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int, i
 	return int(input_tokens), int(output_tokens), int(cache_hit_tokens)
 
 
+def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxiliary") -> None:
+	"""Credit token usage from auxiliary API calls (title, suggestions, summary).
+
+	These calls bypass the agent framework so tokens must be tracked here.
+	Reads provider pricing + user overrides and credits User Token Usage.
+	Also updates Chat Session counters.
+
+	Args:
+		session_name: Chat Session name.
+		usage: OpenAI CompletionUsage object with prompt_tokens,
+		       completion_tokens, and prompt_tokens_details.cached_tokens.
+		label: Human-readable label for error logging.
+	"""
+	try:
+		input_tokens = usage.prompt_tokens or 0
+		output_tokens = usage.completion_tokens or 0
+		cache_hit_tokens = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None) or 0
+		if not input_tokens and not output_tokens:
+			return
+
+		session_doc = frappe.get_doc("Chat Session", session_name)
+		user = session_doc.user
+		provider_name = session_doc.llm_provider
+		provider = frappe.get_doc("LLM Provider", provider_name)
+
+		# Pricing
+		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
+		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
+		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
+
+		# User token usage record (get or create)
+		from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+		usage_name = UserTokenUsage.get_or_create_for_user(user)
+		usage_doc = frappe.get_doc("User Token Usage", usage_name)
+		override_input = float(usage_doc.input_cost_over_per_1m or 0)
+		override_output = float(usage_doc.output_cost_over_per_1m or 0)
+		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
+
+		# Effective rates
+		eff_input = provider_input_rate + override_input
+		eff_output = provider_output_rate + override_output
+		eff_cache = provider_cache_rate + override_cache
+
+		# 3-tier cost
+		cache_miss = max(0, input_tokens - cache_hit_tokens)
+		cost = (cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output) / 1_000_000
+
+		# Atomic update — User Token Usage
+		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
+		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
+		current_cache = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
+		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
+		frappe.db.set_value("User Token Usage", usage_name, {
+			"total_input_tokens": current_input + input_tokens,
+			"total_output_tokens": current_output + output_tokens,
+			"total_cache_hit_tokens": current_cache + cache_hit_tokens,
+			"total_cost": current_cost + cost,
+			"last_updated": frappe.utils.now_datetime(),
+		})
+
+		# Update Chat Session counters
+		session_input = frappe.db.get_value("Chat Session", session_name, "input_tokens") or 0
+		session_output = frappe.db.get_value("Chat Session", session_name, "output_tokens") or 0
+		session_cache = frappe.db.get_value("Chat Session", session_name, "cache_hit_tokens") or 0
+		session_est = frappe.db.get_value("Chat Session", session_name, "estimated_conversation_tokens") or 0
+		frappe.db.set_value("Chat Session", session_name, {
+			"input_tokens": session_input + input_tokens,
+			"output_tokens": session_output + output_tokens,
+			"cache_hit_tokens": session_cache + cache_hit_tokens,
+			"estimated_conversation_tokens": session_est + input_tokens + output_tokens,
+		})
+		frappe.db.commit()
+	except Exception:
+		frappe.log_error(
+			title=f"Failed to credit auxiliary API tokens ({label})",
+			message=f"Session: {session_name}",
+		)
+
+
 def _validate_context_limit(session_doc, provider_doc) -> int:
 	context_length = provider_doc.context_length or 128000
 	estimated_tokens = session_doc.estimated_conversation_tokens or 0
@@ -1453,6 +1532,8 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 				max_tokens=max_tokens,
 			)
 		)
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "session_title")
 		return (response.choices[0].message.content or "").strip()
 	except Exception:
 		frappe.log_error(
@@ -1500,6 +1581,8 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 				max_tokens=max_tokens,
 			)
 		)
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "conversation_summary")
 		return (response.choices[0].message.content or "").strip()
 	except Exception:
 		frappe.log_error(
@@ -1543,6 +1626,9 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 				response_format={"type": "json_object"},
 			)
 		)
+
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "followup_suggestions")
 
 		raw = (response.choices[0].message.content or "").strip()
 		if not raw:

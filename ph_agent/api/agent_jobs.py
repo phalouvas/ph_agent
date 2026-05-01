@@ -419,6 +419,12 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	# Build enriched content: append extracted file text from attachments
 	agent_content = content
 	if file_names:
+		# Store file names in cache keyed by session so tools can auto-attach
+		frappe.cache().set_value(
+			f"ph_agent:files:{session}",
+			list(file_names),
+			expires_in_sec=600,
+		)
 		file_texts = []
 		emit_status(frappe._("Extracting file contents…"))
 		for file_name in file_names:
@@ -455,6 +461,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					level="WARNING",
 				)
 		if file_texts:
+			# Append extracted text first (primary content), then file metadata
+			# (supplementary info for attach_files_to_record). Metadata goes after
+			# so it doesn't interrupt the flow between skill prompts and invoice text.
+			agent_content = content + "\n\n" + "\n\n".join(file_texts)
+
 			# Build a metadata block with File doc names so the agent can use
 			# attach_files_to_record to link files to created records.
 			file_meta_lines = []
@@ -462,14 +473,10 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				filename = frappe.db.get_value('File', file_name, 'file_name')
 				file_meta_lines.append(f"- `{file_name}` ({filename})")
 			file_meta_block = (
-				"**Attached Files (use these names with attach_files_to_record):**\n"
+				"\n\n**Attached Files (use these names with attach_files_to_record):**\n"
 				+ "\n".join(file_meta_lines)
 			)
-			agent_content = (
-				content
-				+ "\n\n" + file_meta_block
-				+ "\n\n" + "\n\n".join(file_texts)
-			)		
+			agent_content += file_meta_block		
 
 	emit_status(frappe._("Calling AI…"))
 
@@ -887,6 +894,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	# DB reads or realtime publishes — so the "Calling AI…" text disappears
 	# as fast as possible and the user can send a new message.
 	release_lock()
+	frappe.cache().delete_value(f"ph_agent:files:{session}")
 	emit_status("")
 
 	# Get updated token counts for realtime update

@@ -122,8 +122,9 @@ def _get_context_info(ctx: FunctionInvocationContext | None) -> str:
 		"Create a new record in Frappe/ERPNext. "
 		"Supply the DocType and field values as a JSON object. "
 		"Returns the created record details including its name. "
-		"Optionally attach uploaded files to the new record by providing "
-		"file names (from the Attached Files metadata in your context). "
+		"You can also attach uploaded files to the new record in one step "
+		"by passing file names via the 'attach_files' parameter "
+		"(file names are listed in the 'Attached Files' metadata in your context). "
 		f"Allowed DocTypes: {', '.join(sorted(ALLOWED_WRITE_DOCTYPES))}."
 	),
 )
@@ -140,10 +141,10 @@ def create_frappe_record_tool(
 	],
 	attach_files: Annotated[
 		Optional[str],
-		Field(description="OPTIONAL — JSON array of existing File doc names to attach to the new record, "
-						  "e.g. '[\"File-abc123\"]'. Only use when the user explicitly asked to attach files "
-						  "or when your instructions say to attach the source file. "
-						  "The file names are listed in the Attached Files metadata in your context."),
+		Field(description="JSON array of existing File doc names to attach to the new record, "
+						  "e.g. '[\"File-abc123\"]'. Use this when your instructions say to attach "
+						  "the source file to the record (e.g., attaching an invoice PDF to a Purchase Invoice). "
+						  "The file names are listed in the 'Attached Files' metadata in your context."),
 	] = None,
 	ctx: FunctionInvocationContext = None,
 ) -> str:
@@ -206,29 +207,43 @@ def create_frappe_record_tool(
 
 		summary = f"✅ Successfully created {doctype}: **{doc.name}**"
 
-		# Attach files if requested
+		# Attach files if explicitly requested, OR auto-attach from cache
+		files_to_attach = None
 		if attach_files:
 			try:
-				files_list = json.loads(attach_files)
-				if isinstance(files_list, list) and files_list:
-					valid_files = []
-					attach_errors = []
-					for fname in files_list:
-						if isinstance(fname, str) and fname.strip():
-							if frappe.db.exists("File", fname.strip()):
-								valid_files.append(fname.strip())
-							else:
-								attach_errors.append(f"File '{fname}' does not exist")
-					if valid_files:
-						add_attachments(
-							doctype=doctype,
-							name=doc.name,
-							attachments=valid_files,
-						)
-						frappe.db.commit()
-						summary += f"\n📎 Attached {len(valid_files)} file(s)."
-					if attach_errors:
-						summary += f"\n⚠️ Could not attach: {'; '.join(attach_errors)}"
+				files_to_attach = json.loads(attach_files)
+			except json.JSONDecodeError:
+				pass
+		if not files_to_attach and ctx and ctx.kwargs:
+			# Auto-attach: check if files were uploaded with the current message
+			session_name = ctx.kwargs.get("session_name", "")
+			if session_name:
+				cached_files = frappe.cache().get_value(
+					f"ph_agent:files:{session_name}"
+				)
+				if cached_files and isinstance(cached_files, list) and cached_files:
+					files_to_attach = list(cached_files)
+
+		if files_to_attach:
+			try:
+				valid_files = []
+				attach_errors = []
+				for fname in files_to_attach:
+					if isinstance(fname, str) and fname.strip():
+						if frappe.db.exists("File", fname.strip()):
+							valid_files.append(fname.strip())
+						else:
+							attach_errors.append(f"File '{fname}' does not exist")
+				if valid_files:
+					add_attachments(
+						doctype=doctype,
+						name=doc.name,
+						attachments=valid_files,
+					)
+					frappe.db.commit()
+					summary += f"\n📎 Attached {len(valid_files)} file(s)."
+				if attach_errors:
+					summary += f"\n⚠️ Could not attach: {'; '.join(attach_errors)}"
 			except Exception as attach_e:
 				logger.exception("Error attaching files to %s '%s'", doctype, doc.name)
 				summary += f"\n⚠️ Could not attach files: {attach_e}"
@@ -553,10 +568,11 @@ def run_frappe_method_tool(
 @tool(
 	name="attach_files_to_record",
 	description=(
-		"OPTIONAL — Attach uploaded files (PDFs, images, documents) to a specific record "
-		"AFTER creating it. Use this when: (1) you created a record from a file "
-		"(e.g., an invoice from a PDF) and should link the source file to the new record, "
+		"Attach uploaded files (PDFs, images, documents) to a specific record "
+		"AFTER creating it. Use this when: (1) your instructions say to attach the source file "
+		"to the created record (e.g., attaching an invoice PDF to a Purchase Invoice), "
 		"or (2) the user explicitly asked to attach files. "
+		"The file names are listed in the 'Attached Files' metadata in your context. "
 		"Do NOT use when: you're just answering a question, the file content was only used "
 		"as reference, the record doesn't exist yet, or the user didn't request file attachment."
 	),

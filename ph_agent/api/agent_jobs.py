@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import traceback
 
 import frappe
@@ -14,6 +15,7 @@ from ph_agent.agent.framework_agent import (
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
 from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+from ph_agent.utils.debug_logger import debug_log
 from ph_agent.utils.file_extractor import extract_file_text
 
 
@@ -374,6 +376,13 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	Background job: optionally extract PDFs, call the LLM agent, store the reply,
 	and push realtime events back to the user who enqueued the job.
 	"""
+	job_start = time.time()
+	debug_log(
+		"_call_agent_background entry",
+		f"Session: {session}, Content length: {len(content)}, Files: {len(file_names) if file_names else 0}, "
+		f"Regenerating: {bool(agent_msg_name)}, Enqueued by: {enqueued_by}",
+		session=session,
+	)
 
 	def emit_status(msg):
 		frappe.publish_realtime(
@@ -424,11 +433,27 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				)
 				return
 			# Get max file size from provider settings
+			extract_start = time.time()
 			max_size_mb = provider_doc.max_file_size_mb or 50
 			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
+			extract_elapsed = time.time() - extract_start
 			if text:
 				filename = frappe.db.get_value('File', file_name, 'file_name')
-				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")							
+				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
+				debug_log(
+					"File extraction complete",
+					f"Session: {session}, File: {filename}, Type: {file_type_label}, "
+					f"Extracted length: {len(text)}, Elapsed: {extract_elapsed:.2f}s",
+					session=session,
+				)
+			else:
+				filename = frappe.db.get_value('File', file_name, 'file_name')
+				debug_log(
+					"File extraction returned no text",
+					f"Session: {session}, File: {filename}, Elapsed: {extract_elapsed:.2f}s",
+					session=session,
+					level="WARNING",
+				)
 		if file_texts:
 			agent_content = content + "\n\n" + "\n\n".join(file_texts)		
 
@@ -502,6 +527,12 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			output_tokens = 0
 			streaming_successful = False
 			approval_data = None
+			
+			debug_log(
+				"Starting streaming path",
+				f"Session: {session}, Content length: {len(agent_content)}",
+				session=session,
+			)
 			
 			try:
 				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status, skip_session_state=bool(agent_msg_name)):
@@ -608,6 +639,12 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				
 			except Exception as stream_error:
 				# If streaming fails, fall back to non-streaming
+				debug_log(
+					"Streaming failed, falling back to non-streaming",
+					f"Session: {session}, Error: {stream_error}",
+					session=session,
+					level="WARNING",
+				)
 				frappe.log_error(
 					title=f"Streaming failed for session {session}, falling back to non-streaming",
 					message=f"{stream_error}\n{traceback.format_exc()}"
@@ -653,6 +690,11 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				emit_status("")
 		else:
 			# Non-streaming path - update the existing placeholder message
+			debug_log(
+				"Starting non-streaming path",
+				f"Session: {session}, Content length: {len(agent_content)}",
+				session=session,
+			)
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
 			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 			reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
@@ -754,6 +796,13 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	except Exception as e:
 		# Catch-all: ensure lock is always released and frontend is always
 		# unfrozen, regardless of what kind of exception occurs.
+		job_elapsed = time.time() - job_start
+		debug_log(
+			"Agent background job failed",
+			f"Session: {session}, Elapsed: {job_elapsed:.1f}s, Error: {e}",
+			session=session,
+			level="WARNING",
+		)
 		frappe.log_error(
 			title=f"Agent background job failed for session {session}",
 			message=f"{e}\n{traceback.format_exc()}",
@@ -797,6 +846,13 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		frappe.cache().delete_value(cancel_key)
 		emit_status("")
 		return
+
+	job_elapsed = time.time() - job_start
+	debug_log(
+		"Agent background job completed",
+		f"Session: {session}, Elapsed: {job_elapsed:.1f}s, Input tokens: {input_tokens}, Output tokens: {output_tokens}",
+		session=session,
+	)
 
 	# Update token counts on the session
 	frappe.db.set_value(

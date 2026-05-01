@@ -26,6 +26,7 @@ from ph_agent.agent.tools.tool_router_provider import (
     _ROUTING_THRESHOLD,
     _ROUTER_MAX_TOKENS,
 )
+from ph_agent.utils.debug_logger import debug_log
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +391,8 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 		base_url=provider_doc.api_url or "https://api.openai.com/v1",
 	)
 
+	import time
+	route_start = time.time()
 	try:
 		user_content = (
 			f"User message: {user_query}\n\n"
@@ -422,7 +425,21 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 		filtered = [t for t in tools if t.name in selected_set]
 
 		agent.default_options["tools"] = filtered
+		route_elapsed = time.time() - route_start
+		debug_log(
+			"_try_route_tools success",
+			f"Session: {session_name}, Tools before: {len(tools)}, After: {len(filtered)}, "
+			f"Elapsed: {route_elapsed:.2f}s",
+			session=session_name,
+		)
 	except Exception:
+		route_elapsed = time.time() - route_start
+		debug_log(
+			"_try_route_tools failed",
+			f"Session: {session_name}, Elapsed: {route_elapsed:.2f}s — keeping all tools",
+			session=session_name,
+			level="WARNING",
+		)
 		pass  # Safety-first: keep all tools on failure
 
 
@@ -482,6 +499,11 @@ def _build_skills_provider() -> SkillsProvider:
 			if Path(d).name not in doctype_skill_names
 		]
 		skill_paths = filtered_dirs if filtered_dirs else None
+
+	debug_log(
+		"_build_skills_provider",
+		f"DocType skills: {len(code_skills)}, File-based dirs: {len(skill_paths) if skill_paths else 0}",
+	)
 
 	return SkillsProvider(
 		skill_paths=skill_paths,
@@ -650,6 +672,11 @@ def _build_instructions(session_doc) -> str | None:
 
 
 def _build_agent(session_name: str, user: str | None = None) -> Agent:
+	debug_log(
+		"_build_agent entry",
+		f"Session: {session_name}, User: {user or frappe.session.user}, Persona: {frappe.get_doc('Chat Session', session_name).persona}",
+		session=session_name,
+	)
 	session_doc = frappe.get_doc("Chat Session", session_name)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	api_key = provider_doc.get_password("api_key")
@@ -753,9 +780,20 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		session_doc = frappe.get_doc("Chat Session", session_name)
 		if session_doc.session_state:
 			data = json.loads(session_doc.session_state)
+			state_size = len(session_doc.session_state)
+			debug_log(
+				"_load_session_state",
+				f"Session: {session_name}, State size: {state_size} bytes",
+				session=session_name,
+			)
 			# Restore full AgentSession with proper object deserialization
 			restored = AgentSession.from_dict(data)
 			return restored.state
+		debug_log(
+			"_load_session_state",
+			f"Session: {session_name}, No session state found",
+			session=session_name,
+		)
 		return {}
 	except Exception as e:
 		import traceback
@@ -784,11 +822,18 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		if not serialized:
 			return
 
+		state_json = json.dumps(serialized, indent=2, default=str)
+		debug_log(
+			"_save_session_state",
+			f"Session: {session_name}, State size: {len(state_json)} bytes",
+			session=session_name,
+		)
+
 		frappe.db.set_value(
 			"Chat Session",
 			session_name,
 			{
-				"session_state": json.dumps(serialized, indent=2, default=str),
+				"session_state": state_json,
 				"last_state_update": frappe.utils.now(),
 			},
 		)
@@ -889,6 +934,12 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 	so that provider state (including ``InMemoryHistoryProvider`` messages)
 	survives across invocations.
 	"""
+	user_text = _extract_text_from_messages(message if isinstance(message, list) else [message])
+	debug_log(
+		"_run_agent entry",
+		f"Session: {session_name}, Message length: {len(user_text)}, Has session_state: {session_state is not None}",
+		session=session_name,
+	)
 	agent = _build_agent(session_name=session_name, user=user)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
@@ -900,6 +951,11 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 	asyncio.run(_try_route_tools(agent, session_name, user_text))
 
 	result = asyncio.run(agent.run(messages, session=agent_session))
+	debug_log(
+		"_run_agent complete",
+		f"Session: {session_name}, Tokens: {_get_usage_tokens(result.usage_details)}",
+		session=session_name,
+	)
 	return result, agent_session
 
 
@@ -910,6 +966,12 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 	so that provider state (including ``InMemoryHistoryProvider`` messages)
 	survives across invocations.
 	"""
+	user_text = _extract_text_from_messages(message if isinstance(message, list) else [message])
+	debug_log(
+		"_run_agent_stream entry",
+		f"Session: {session_name}, Message length: {len(user_text)}, Has session_state: {session_state is not None}",
+		session=session_name,
+	)
 	agent = _build_agent(session_name=session_name, user=user)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
@@ -923,6 +985,11 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 	stream = agent.run(messages, session=agent_session, stream=True)
 	if inspect.isawaitable(stream):
 		stream = await stream
+	debug_log(
+		"_run_agent_stream complete",
+		f"Session: {session_name}, Stream obtained",
+		session=session_name,
+	)
 	return stream, agent_session
 
 
@@ -1070,8 +1137,18 @@ def get_agent_response_stream(
 					result_queue.put(("done", ("", 0, 0)))
 					return
 
+				debug_log(
+					"Stream: awaiting final_response",
+					f"Session: {session_name}, Chunks streamed: {chunk_count}, Reasoning chunks: {reasoning_chunk_count}",
+					session=session_name,
+				)
 				final_response = await stream.get_final_response()
 				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
+				debug_log(
+					"Stream: final_response received",
+					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}",
+					session=session_name,
+				)
 				approval_data = _extract_approval_data(final_response, session_name=session_name)
 				
 				# Always save session state, regardless of approval flow

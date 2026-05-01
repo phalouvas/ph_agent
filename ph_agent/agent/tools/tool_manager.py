@@ -12,6 +12,7 @@ from typing import List, Optional, Dict, Any, get_type_hints
 
 import frappe
 from agent_framework import FunctionInvocationContext, FunctionTool, tool
+from ph_agent.utils.debug_logger import debug_log
 from pydantic import BaseModel, Field, create_model
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,13 @@ class ToolManager:
         tools = cls._filter_by_session(tools, session_name, persona)
 
         # Inject context if needed
-        return cls._inject_context_into_tools(tools, session_name, user)
+        result = cls._inject_context_into_tools(tools, session_name, user)
+        debug_log(
+            "ToolManager: tools loaded",
+            f"Session: {session_name}, Persona: {persona}, Total: {len(result)}",
+            session=session_name,
+        )
+        return result
     
     @classmethod
     def _filter_by_session(cls, tools: List, session_name: Optional[str], persona: Optional[str]) -> List:
@@ -253,6 +260,12 @@ class ToolManager:
         if tool_obj is not None:
             setattr(tool_obj, "tool_group", record.get("tool_group") or "General")
 
+        debug_log(
+            "ToolManager: registered tool",
+			f"Name: {record['tool_name']}, Type: {script_type}, "
+			f"Group: {record.get('tool_group', 'General')}, "
+			f"Requires approval: {record.get('requires_approval', False)}",
+        )
         return tool_obj
     
     @classmethod

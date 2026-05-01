@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 import frappe
 from agent_framework import Skill, SkillResource, SkillScript
+from ph_agent.utils.debug_logger import debug_log
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ class SkillManager:
 		# Cache the metadata
 		cls._cache_skills(skills)
 
+		debug_log(
+			"SkillManager: loaded skills",
+			f"Total: {len(skills)}, Names: {[s.name for s in skills]}",
+		)
 		logger.info("Successfully loaded %d skills from Skill Registry", len(skills))
 		return skills
 
@@ -313,12 +318,20 @@ class SkillManager:
 			raise ValueError(f"Invalid dotted path: '{dotted_path}'. Expected 'module.function' format.")
 
 		module_path, attr_name = parts
+		debug_log(
+			"SkillManager: importing callable",
+			f"Path: {dotted_path}, Module: {module_path}, Attr: {attr_name}",
+		)
 		module = importlib.import_module(module_path)
 		callable_obj = getattr(module, attr_name)
 
 		if not callable(callable_obj):
 			raise TypeError(f"'{dotted_path}' is not callable")
 
+		debug_log(
+			"SkillManager: import successful",
+			f"Path: {dotted_path}",
+		)
 		return callable_obj
 
 	@classmethod

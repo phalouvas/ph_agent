@@ -40,17 +40,3 @@ class SkillRegistry(Document):
 				frappe._("Description must be {0} characters or fewer.").format(MAX_DESCRIPTION_LENGTH)
 			)
 
-	def on_update(self):
-		"""Invalidate skill cache when a skill is updated."""
-		from ph_agent.agent.skills.skill_manager import invalidate_skill_cache
-		invalidate_skill_cache()
-
-	def after_insert(self):
-		"""Invalidate skill cache when a skill is created."""
-		from ph_agent.agent.skills.skill_manager import invalidate_skill_cache
-		invalidate_skill_cache()
-
-	def on_trash(self):
-		"""Invalidate skill cache when a skill is deleted."""
-		from ph_agent.agent.skills.skill_manager import invalidate_skill_cache
-		invalidate_skill_cache()

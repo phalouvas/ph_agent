@@ -291,15 +291,25 @@ def create_session(provider_name=None, persona=None, is_temporary=0):
 def send_message(session, content, **kwargs):
 	"""Store a user message and enqueue the LLM agent response as a background job."""
 	frappe.has_permission("Chat Session", doc=session, throw=True)
-	
+
+	# Validate content
+	if not content or not content.strip():
+		frappe.throw(frappe._("Message content cannot be empty."), frappe.exceptions.ValidationError)
+	if len(content) > 100000:
+		frappe.throw(
+			frappe._("Message content exceeds the maximum length of 100,000 characters."),
+			frappe.exceptions.ValidationError,
+		)
+
 	# Get file_names from kwargs (might be passed as file_names or files)
 	file_names = kwargs.get('file_names') or kwargs.get('files')
 	
 	# Per-session lock: prevent concurrent processing
 	lock_key = f"ph_agent:lock:{session}"
-	if frappe.cache().get_value(lock_key):
+	from frappe.utils.background_jobs import get_redis_conn
+	redis_conn = get_redis_conn()
+	if not redis_conn.set(lock_key, "1", nx=True, ex=660):
 		frappe.throw(frappe._("Another message is already being processed. Please wait."), frappe.exceptions.ValidationError)
-	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
 
 	# Clear any stale cancel flag from a previous Stop (e.g. if the worker was killed mid-flight)
 	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
@@ -340,8 +350,13 @@ def send_message(session, content, **kwargs):
 	# Also check what the actual File documents look like
 	if file_names_list:
 		for file_name in file_names_list:
-			# Check if file exists
+			# Check if file exists and user has permission
 			if frappe.db.exists("File", file_name):
+				if not frappe.has_permission("File", doc=file_name, ptype="read"):
+					frappe.throw(
+						frappe._("You do not have permission to access file: {0}").format(file_name),
+						frappe.exceptions.PermissionError,
+					)
 				file_doc = frappe.get_doc("File", file_name)
 				frappe.db.set_value(
 					"File",
@@ -360,7 +375,6 @@ def send_message(session, content, **kwargs):
 	job = frappe.enqueue(
 		"ph_agent.api.agent_jobs._call_agent_background",
 		session=session,
-		user_msg_name=user_msg.name,
 		content=content,
 		file_names=file_names_list,
 		enqueued_by=frappe.session.user,
@@ -397,7 +411,7 @@ def cancel_generation(session):
 	frappe.cache().delete_value(f"ph_agent:lock:{session}")
 
 	# Set cooperative cancellation flag for in-progress PDF extraction checks
-	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=300)
 
 	# Clear the status bar and notify the frontend
 	_emit_status(session, "")
@@ -457,7 +471,7 @@ def delete_session(session):
 		frappe.cache().delete_value(f"ph_agent:job:{session}")
 	# Release the per-session processing lock and set cancel flag
 	frappe.cache().delete_value(f"ph_agent:lock:{session}")
-	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=300)
 
 	# 2. Get all messages in this session
 	messages = frappe.get_all(
@@ -531,10 +545,15 @@ def close_session(session):
 			pass
 		frappe.cache().delete_value(f"ph_agent:job:{session}")
 	frappe.cache().delete_value(f"ph_agent:lock:{session}")
-	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=300)
 
-	# Set status to Closed — the before_save hook on ChatSession clears session_state
-	frappe.db.set_value("Chat Session", session, "status", "Closed")
+	# Set status to Closed and clear session state (set_value bypasses
+	# the before_save hook, so we explicitly clear session_state here)
+	frappe.db.set_value("Chat Session", session, {
+		"status": "Closed",
+		"session_state": None,
+		"last_state_update": None,
+	})
 	frappe.db.commit()
 
 	# Notify frontend
@@ -600,10 +619,15 @@ def archive_session(session):
 			pass
 		frappe.cache().delete_value(f"ph_agent:job:{session}")
 	frappe.cache().delete_value(f"ph_agent:lock:{session}")
-	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=60)
+	frappe.cache().set_value(f"ph_agent:cancel:{session}", True, expires_in_sec=300)
 
-	# Set status to Archived — the before_save hook on ChatSession clears session_state
-	frappe.db.set_value("Chat Session", session, "status", "Archived")
+	# Set status to Archived and clear session state (set_value bypasses
+	# the before_save hook, so we explicitly clear session_state here)
+	frappe.db.set_value("Chat Session", session, {
+		"status": "Archived",
+		"session_state": None,
+		"last_state_update": None,
+	})
 	frappe.db.commit()
 
 	# Notify frontend
@@ -629,7 +653,9 @@ def edit_message(message_id, content):
 
 	session = msg.chat_session
 	lock_key = f"ph_agent:lock:{session}"
-	if frappe.cache().get_value(lock_key):
+	from frappe.utils.background_jobs import get_redis_conn
+	redis_conn = get_redis_conn()
+	if not redis_conn.set(lock_key, "1", nx=True, ex=660):
 		frappe.throw(
 			frappe._("Another message is already being processed. Please wait."),
 			frappe.exceptions.ValidationError,
@@ -673,7 +699,6 @@ def edit_message(message_id, content):
 
 	# Show status immediately — before any DB queries — so the user sees
 	# "Calling AI…" as fast as possible after clicking edit.
-	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
 	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
 	_emit_status(session, frappe._("Calling AI…"))
 
@@ -687,7 +712,6 @@ def edit_message(message_id, content):
 	job = frappe.enqueue(
 		"ph_agent.api.agent_jobs._call_agent_background",
 		session=session,
-		user_msg_name=message_id,
 		content=content,
 		file_names=file_names,
 		enqueued_by=frappe.session.user,
@@ -918,7 +942,9 @@ def regenerate_message(message_id):
 
 	session = msg.chat_session
 	lock_key = f"ph_agent:lock:{session}"
-	if frappe.cache().get_value(lock_key):
+	from frappe.utils.background_jobs import get_redis_conn
+	redis_conn = get_redis_conn()
+	if not redis_conn.set(lock_key, "1", nx=True, ex=660):
 		frappe.throw(
 			frappe._("Another message is already being processed. Please wait."),
 			frappe.exceptions.ValidationError,
@@ -943,14 +969,12 @@ def regenerate_message(message_id):
 	)
 
 	# Set lock and enqueue agent (the background job will delete the old agent message)
-	frappe.cache().set_value(lock_key, "1", expires_in_sec=660)
 	frappe.cache().delete_value(f"ph_agent:cancel:{session}")
 	_emit_status(session, frappe._("Calling AI…"))
 
 	job = frappe.enqueue(
 		"ph_agent.api.agent_jobs._call_agent_background",
 		session=session,
-		user_msg_name=user_msg.name,
 		content=user_msg.content,
 		file_names=file_names,
 		enqueued_by=frappe.session.user,

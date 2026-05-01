@@ -15,6 +15,7 @@ from ph_agent.agent.framework_agent import (
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
 from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
 from ph_agent.utils.debug_logger import debug_log
 from ph_agent.utils.file_extractor import extract_file_text
 
@@ -74,20 +75,8 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 			+ output_tokens * effective_output_rate
 		) / 1_000_000
 
-		# Atomic update — read current values and add
-		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
-		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
-		current_cache_hit = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
-		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
-
-		frappe.db.set_value("User Token Usage", usage_name, {
-			"total_input_tokens": current_input + input_tokens,
-			"total_output_tokens": current_output + output_tokens,
-			"total_cache_hit_tokens": current_cache_hit + cache_hit_tokens,
-			"total_cost": current_cost + cost,
-			"last_updated": frappe.utils.now_datetime(),
-		})
-		frappe.db.commit()
+		# Atomic update — increment counters directly in SQL to avoid races
+		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
 	except Exception:
 		frappe.log_error(
 			title="Failed to credit user token usage",
@@ -397,7 +386,7 @@ def _perform_auto_summary(session: str, enqueued_by: str | None = None,
 	return True
 
 
-def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
+def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_name=None):
 	"""
 	Background job: optionally extract PDFs, call the LLM agent, store the reply,
 	and push realtime events back to the user who enqueued the job.
@@ -638,6 +627,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						)
 				
 				if approval_data:
+					# Credit tokens before entering approval flow (otherwise lost on early return)
+					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -714,6 +706,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					raise  # Let the outer except Exception handle it
 				
 				if approval_data:
+					# Credit tokens before entering approval flow (otherwise lost on early return)
+					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -752,6 +747,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 			
 			if approval_data:
+				# Credit tokens before entering approval flow (otherwise lost on early return)
+				_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+				_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 				# Handle approval flow
 				_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 				release_lock()
@@ -908,17 +906,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	)
 
 	# Update token counts on the session
-	frappe.db.set_value(
-		"Chat Session",
-		session,
-		{
-			"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
-			"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
-			"cache_hit_tokens": frappe.db.get_value("Chat Session", session, "cache_hit_tokens") + cache_hit_tokens,
-			"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
-		},
-	)
-	frappe.db.commit()
+	_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
 
 	# Credit tokens to user-level aggregate (survives temporary session cleanup)
 	_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
@@ -953,7 +941,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		room="website",
 	)
 	
-	# Publish the final message content (with reasoning block if applicable)
+	# Publish the final message to the frontend (non-streaming paths rely on this;
+	# streaming path already sent content via message_chunk events)
 	frappe.publish_realtime(
 		event="new_message",
 		message={
@@ -1018,8 +1007,14 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	if current_title == "New Chat":
 		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
 		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
-			# Use agent_msg.content which contains either streaming or non-streaming content
-			agent_reply = agent_msg.content
+			# Strip reasoning HTML before title generation to avoid polluting the title
+			import re
+			agent_reply = re.sub(
+				r'<details class="ph-reasoning-block">.*?</details>\s*',
+				"",
+				agent_msg.content,
+				flags=re.DOTALL,
+			)
 			new_title = generate_session_title(session, agent_content, agent_reply)
 			if new_title:
 				frappe.db.set_value("Chat Session", session, "title", new_title)
@@ -1262,17 +1257,7 @@ def _execute_approved_tool(approval_name):
 		)
 		
 		# Update token counts on session
-		frappe.db.set_value(
-			"Chat Session",
-			session,
-			{
-				"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
-				"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
-				"cache_hit_tokens": frappe.db.get_value("Chat Session", session, "cache_hit_tokens") + cache_hit_tokens,
-				"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
-			},
-		)
-		frappe.db.commit()
+		_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
 
 		# Credit tokens to user-level aggregate
 		_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)

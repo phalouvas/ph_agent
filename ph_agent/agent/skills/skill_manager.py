@@ -18,10 +18,6 @@ from ph_agent.utils.debug_logger import debug_log
 
 logger = logging.getLogger(__name__)
 
-# Cache key for storing loaded skills metadata
-CACHE_KEY = "ph_agent:skills:registered"
-
-
 class SkillManager:
 	"""Manager for loading skills from the Skill Registry DocType."""
 
@@ -34,17 +30,8 @@ class SkillManager:
 			List of agent_framework.Skill objects ready to be passed to
 			SkillsProvider constructor.
 		"""
-		# Try cache first
-		cached = cls._get_cached_skills()
-		if cached is not None:
-			logger.debug("Returning %d skills from cache", len(cached))
-			return cached
-
 		# Load from database
 		skills = cls._load_skills_from_db()
-
-		# Cache the metadata
-		cls._cache_skills(skills)
 
 		debug_log(
 			"SkillManager: loaded skills",
@@ -335,39 +322,6 @@ class SkillManager:
 		return callable_obj
 
 	@classmethod
-	def _get_cached_skills(cls) -> Optional[list[Skill]]:
-		"""Get skills from cache if available.
-
-		Note: Only metadata is cached; actual Skill objects can't be reliably
-		pickled across requests. Returns None to force fresh load from DB.
-		"""
-		return None
-
-	@classmethod
-	def _cache_skills(cls, skills: list[Skill]):
-		"""Cache skill metadata (not callable objects)."""
-		try:
-			skill_meta = []
-			for s in skills:
-				skill_meta.append({
-					"name": s.name,
-					"description": s.description,
-				})
-			frappe.cache().set_value(CACHE_KEY, skill_meta, expires_in_sec=3600)
-			logger.debug("Cached metadata for %d skills", len(skills))
-		except Exception as e:
-			logger.warning("Failed to cache skills: %s", str(e))
-
-	@classmethod
-	def invalidate_cache(cls):
-		"""Invalidate the skill cache."""
-		try:
-			frappe.cache().delete_value(CACHE_KEY)
-			logger.info("Invalidated skill cache")
-		except Exception as e:
-			logger.warning("Failed to invalidate cache: %s", str(e))
-
-	@classmethod
 	def get_enabled_skill_names(cls) -> list[str]:
 		"""
 		Get the names of all enabled skills from the Skill Registry.
@@ -390,6 +344,3 @@ def get_code_skills() -> list[Skill]:
 	return SkillManager.get_code_skills()
 
 
-def invalidate_skill_cache(doc=None, method=None):
-	"""Invalidate the skill cache. Can be called from doc_events hooks."""
-	SkillManager.invalidate_cache()

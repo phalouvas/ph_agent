@@ -16,8 +16,9 @@ from agent_framework import SkillsProvider
 from openai import AsyncOpenAI
 from ph_agent.agent.context.llm_memory_provider import LLMMemoryProvider
 from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider
-from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
+from ph_agent.agent.skills import get_code_skills
 from ph_agent.agent.skills.script_runner import run_file_script
+from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
 from ph_agent.agent.tools.tool_manager import ToolManager
 
 logger = logging.getLogger(__name__)
@@ -704,31 +705,9 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 		cache_miss = max(0, input_tokens - cache_hit_tokens)
 		cost = (cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output) / 1_000_000
 
-		# Atomic update — User Token Usage
-		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
-		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
-		current_cache = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
-		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
-		frappe.db.set_value("User Token Usage", usage_name, {
-			"total_input_tokens": current_input + input_tokens,
-			"total_output_tokens": current_output + output_tokens,
-			"total_cache_hit_tokens": current_cache + cache_hit_tokens,
-			"total_cost": current_cost + cost,
-			"last_updated": frappe.utils.now_datetime(),
-		})
-
-		# Update Chat Session counters
-		session_input = frappe.db.get_value("Chat Session", session_name, "input_tokens") or 0
-		session_output = frappe.db.get_value("Chat Session", session_name, "output_tokens") or 0
-		session_cache = frappe.db.get_value("Chat Session", session_name, "cache_hit_tokens") or 0
-		session_est = frappe.db.get_value("Chat Session", session_name, "estimated_conversation_tokens") or 0
-		frappe.db.set_value("Chat Session", session_name, {
-			"input_tokens": session_input + input_tokens,
-			"output_tokens": session_output + output_tokens,
-			"cache_hit_tokens": session_cache + cache_hit_tokens,
-			"estimated_conversation_tokens": session_est + input_tokens + output_tokens,
-		})
-		frappe.db.commit()
+		# Atomic updates — increment counters directly in SQL to avoid races
+		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
+		_atomic_update_chat_session_tokens(session_name, input_tokens, output_tokens, cache_hit_tokens)
 	except Exception:
 		frappe.log_error(
 			title=f"Failed to credit auxiliary API tokens ({label})",
@@ -936,6 +915,23 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		return {}
 
 
+
+class LoggingEncoder(json.JSONEncoder):
+	"""JSON encoder that logs warnings for non-standard types instead of silently stringifying."""
+
+	def default(self, obj):
+		if isinstance(obj, (str, int, float, bool, type(None), list, dict)):
+			return super().default(obj)
+		logger.warning(
+			"_save_session_state: non-standard type %s encountered during JSON serialization",
+			type(obj).__name__,
+		)
+		try:
+			return super().default(obj)
+		except TypeError:
+			return str(obj)
+
+
 def _save_session_state(session_name: str, session: AgentSession) -> None:
 	"""Save session state to Chat Session DocType.
 
@@ -954,7 +950,7 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		if not serialized:
 			return
 
-		state_json = json.dumps(serialized, indent=2, default=str)
+		state_json = json.dumps(serialized, indent=2, cls=LoggingEncoder)
 		debug_log(
 			"_save_session_state",
 			f"Session: {session_name}, State size: {len(state_json)} bytes",
@@ -1049,8 +1045,8 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 				}
 			)
 
-			if not approval_requests:
-				return None
+	if not approval_requests:
+		return None
 
 	return {
 		"approval_needed": True,

@@ -596,12 +596,25 @@ class FrappeMemoryProvider(HistoryProvider):
 		return
 
 
-def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int]:
+def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int, int]:
+	"""Extract token counts from usage_details.
+
+	Returns:
+		tuple of (input_tokens, output_tokens, cache_hit_tokens).
+	"""
 	if not usage_details:
-		return 0, 0
+		return 0, 0, 0
 	input_tokens = usage_details.get("input_token_count") or 0
 	output_tokens = usage_details.get("output_token_count") or 0
-	return int(input_tokens), int(output_tokens)
+	# Try common field names for cache-hit tokens across providers.
+	# DeepSeek returns "cache_read_input_tokens"; other providers may vary.
+	cache_hit_tokens = (
+		usage_details.get("cache_read_input_tokens")
+		or usage_details.get("cached_tokens")
+		or usage_details.get("cache_hit_tokens")
+		or 0
+	)
+	return int(input_tokens), int(output_tokens), int(cache_hit_tokens)
 
 
 def _validate_context_limit(session_doc, provider_doc) -> int:
@@ -956,6 +969,13 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 		f"Session: {session_name}, Tokens: {_get_usage_tokens(result.usage_details)}",
 		session=session_name,
 	)
+	# Debug-log the raw usage_details keys to confirm cache token field name
+	if result.usage_details:
+		debug_log(
+			"_run_agent usage_details keys",
+			f"Session: {session_name}, Keys: {list(result.usage_details.keys())}",
+			session=session_name,
+		)
 	return result, agent_session
 
 
@@ -1010,7 +1030,7 @@ def _extract_reasoning_from_response(response) -> str:
 	return "\n".join(reasoning_parts)
 
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, dict | None, str]:
+def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, int, dict | None, str]:
 	"""Get agent response (non-streaming).
 
 	Args:
@@ -1022,7 +1042,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 			to prevent stale messages from leaking into the new context.
 	
 	Returns:
-		tuple of (response_text, input_tokens, output_tokens, approval_data, reasoning_content)
+		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content)
 	"""
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
@@ -1035,7 +1055,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
-	input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
+	input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 	approval_data = _extract_approval_data(response, session_name=session_name)
 	reasoning_content = _extract_reasoning_from_response(response)
 	
@@ -1047,7 +1067,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 		# run_after_approval will reconstruct the AgentSession from this.
 		approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
 	
-	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, approval_data, reasoning_content
+	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content
 
 
 def get_agent_response_stream(
@@ -1056,7 +1076,12 @@ def get_agent_response_stream(
 	cancel_check=None,
 	status_callback=None,
 	skip_session_state: bool = False,
-) -> Generator[tuple[Any, bool, int, int], None, None]:
+) -> Generator[tuple[Any, bool, int, int, int], None, None]:
+	"""Stream agent response.
+
+	Yields:
+		tuples of (chunk, is_final, input_tokens, output_tokens, cache_hit_tokens).
+	"""
 	if status_callback:
 		status_callback(frappe._("Calling AI…"))
 
@@ -1143,10 +1168,10 @@ def get_agent_response_stream(
 					session=session_name,
 				)
 				final_response = await stream.get_final_response()
-				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
+				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(final_response.usage_details)
 				debug_log(
 					"Stream: final_response received",
-					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}",
+					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}, Cache hit tokens: {cache_hit_tokens}",
 					session=session_name,
 				)
 				approval_data = _extract_approval_data(final_response, session_name=session_name)
@@ -1158,9 +1183,9 @@ def get_agent_response_stream(
 					# Also store full session dict in approval data for continuation.
 					# run_after_approval will reconstruct the AgentSession from this.
 					approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-					result_queue.put(("approval", (approval_data, input_tokens, output_tokens)))
+					result_queue.put(("approval", (approval_data, input_tokens, output_tokens, cache_hit_tokens)))
 				else:
-					result_queue.put(("done", ("", input_tokens, output_tokens)))
+					result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
 			except Exception as exc:
 				result_queue.put(("error", exc))
 
@@ -1225,12 +1250,12 @@ def get_agent_response_stream(
 			yield payload, False, 0, 0
 			continue
 		if event_type == "approval":
-			approval_data, input_tokens, output_tokens = payload
-			yield approval_data, True, input_tokens, output_tokens
+			approval_data, input_tokens, output_tokens, cache_hit_tokens = payload
+			yield approval_data, True, input_tokens, output_tokens, cache_hit_tokens
 			break
 		if event_type == "done":
-			chunk, input_tokens, output_tokens = payload
-			yield (chunk, full_reasoning), True, input_tokens, output_tokens
+			chunk, input_tokens, output_tokens, cache_hit_tokens = payload
+			yield (chunk, full_reasoning), True, input_tokens, output_tokens, cache_hit_tokens
 			break
 		if event_type == "error":
 			raise payload
@@ -1241,7 +1266,7 @@ def run_after_approval(
 	conversation_state: dict[str, Any],
 	approved: bool,
 	user: str | None = None,
-) -> tuple[str, int, int, str]:
+) -> tuple[str, int, int, int, str]:
 	import traceback
 	
 	approval_requests = (conversation_state or {}).get("approval_requests") or []
@@ -1379,13 +1404,13 @@ def run_after_approval(
 				session_state=session_state,
 			)
 
-		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
+		input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 		reasoning_content = _extract_reasoning_from_response(response)
 		
 		# Save updated session state to Chat Session
 		_save_session_state(session_name, agent_session)
 		
-		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, reasoning_content
+		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, reasoning_content
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error in _run_agent for {session_name}",

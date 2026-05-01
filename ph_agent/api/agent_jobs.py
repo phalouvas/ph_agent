@@ -25,10 +25,13 @@ from ph_agent.utils.file_extractor import extract_file_text
 # ---------------------------------------------------------------------------
 
 
-def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens: int) -> None:
+def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0) -> None:
 	"""Accumulate token counts and cost into the user's User Token Usage record.
 
-	Calculates cost from LLM Provider pricing + per-user overrides.
+	Calculates cost from LLM Provider pricing + per-user overrides using a
+	3-tier formula:
+	  cost = (cache_miss * eff_input_rate + cache_hit * eff_cache_rate + output * eff_output_rate) / 1_000_000
+
 	Safe to call for both temporary and permanent sessions — the User Token
 	Usage record survives temporary session cleanup.
 
@@ -36,6 +39,7 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 		session_name: Chat Session name (used to look up user + provider).
 		input_tokens: Input tokens to add.
 		output_tokens: Output tokens to add.
+		cache_hit_tokens: Input tokens that were cache hits (charged at cache rate).
 	"""
 	try:
 		session_doc = frappe.get_doc("Chat Session", session_name)
@@ -49,27 +53,37 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 		provider = frappe.get_doc("LLM Provider", provider_name)
 		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
 		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
+		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
 
 		# Read user overrides (default to 0 if not set)
 		usage_doc = frappe.get_doc("User Token Usage", usage_name)
 		override_input = float(usage_doc.input_cost_over_per_1m or 0)
 		override_output = float(usage_doc.output_cost_over_per_1m or 0)
+		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
 
 		# Effective rates = provider base + user override
 		effective_input_rate = provider_input_rate + override_input
 		effective_output_rate = provider_output_rate + override_output
+		effective_cache_rate = provider_cache_rate + override_cache
 
-		# Calculate cost in EUR
-		cost = (input_tokens * effective_input_rate + output_tokens * effective_output_rate) / 1_000_000
+		# 3-tier cost calculation
+		cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
+		cost = (
+			cache_miss_tokens * effective_input_rate
+			+ cache_hit_tokens * effective_cache_rate
+			+ output_tokens * effective_output_rate
+		) / 1_000_000
 
 		# Atomic update — read current values and add
 		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
 		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
+		current_cache_hit = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
 		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
 
 		frappe.db.set_value("User Token Usage", usage_name, {
 			"total_input_tokens": current_input + input_tokens,
 			"total_output_tokens": current_output + output_tokens,
+			"total_cache_hit_tokens": current_cache_hit + cache_hit_tokens,
 			"total_cost": current_cost + cost,
 			"last_updated": frappe.utils.now_datetime(),
 		})
@@ -77,17 +91,21 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 	except Exception:
 		frappe.log_error(
 			title="Failed to credit user token usage",
-			message=f"Session: {session_name}, Input: {input_tokens}, Output: {output_tokens}",
+			message=f"Session: {session_name}, Input: {input_tokens}, Output: {output_tokens}, Cache hit: {cache_hit_tokens}",
 		)
 
 
-def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens: int) -> float:
+def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0) -> float:
 	"""Calculate the EUR cost of a single message based on provider pricing + user overrides.
+
+	Uses a 3-tier formula:
+	  cost = (cache_miss * eff_input_rate + cache_hit * eff_cache_rate + output * eff_output_rate) / 1_000_000
 
 	Args:
 		session_name: Chat Session name.
 		input_tokens: Input tokens for this message.
 		output_tokens: Output tokens for this message.
+		cache_hit_tokens: Input tokens that were cache hits (charged at cache rate).
 
 	Returns:
 		Cost in EUR.
@@ -100,16 +118,24 @@ def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens:
 		provider = frappe.get_doc("LLM Provider", provider_name)
 		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
 		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
+		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
 
 		usage_name = UserTokenUsage.get_or_create_for_user(user)
 		usage_doc = frappe.get_doc("User Token Usage", usage_name)
 		override_input = float(usage_doc.input_cost_over_per_1m or 0)
 		override_output = float(usage_doc.output_cost_over_per_1m or 0)
+		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
 
 		effective_input_rate = provider_input_rate + override_input
 		effective_output_rate = provider_output_rate + override_output
+		effective_cache_rate = provider_cache_rate + override_cache
 
-		return (input_tokens * effective_input_rate + output_tokens * effective_output_rate) / 1_000_000
+		cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
+		return (
+			cache_miss_tokens * effective_input_rate
+			+ cache_hit_tokens * effective_cache_rate
+			+ output_tokens * effective_output_rate
+		) / 1_000_000
 	except Exception:
 		return 0.0
 
@@ -546,6 +572,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			full_reasoning = ""
 			input_tokens = 0
 			output_tokens = 0
+			cache_hit_tokens = 0
 			streaming_successful = False
 			approval_data = None
 			
@@ -556,7 +583,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			)
 			
 			try:
-				for chunk, is_final, chunk_input_tokens, chunk_output_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status, skip_session_state=bool(agent_msg_name)):
+				for chunk, is_final, chunk_input_tokens, chunk_output_tokens, chunk_cache_hit_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status, skip_session_state=bool(agent_msg_name)):
 					if is_cancelled():
 						raise asyncio.CancelledError()
 						
@@ -573,11 +600,13 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 							full_reasoning = reasoning_text or full_reasoning
 							input_tokens = chunk_input_tokens
 							output_tokens = chunk_output_tokens
+							cache_hit_tokens = chunk_cache_hit_tokens
 							streaming_successful = True
 						else:
 							# Normal final chunk with token usage
 							input_tokens = chunk_input_tokens
 							output_tokens = chunk_output_tokens
+							cache_hit_tokens = chunk_cache_hit_tokens
 							streaming_successful = True
 					elif isinstance(chunk, tuple) and chunk[0] == "reasoning_chunk":
 						# Reasoning content chunk
@@ -631,7 +660,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						agent_msg.content = processed_content
 					agent_msg.input_tokens = input_tokens
 					agent_msg.output_tokens = output_tokens
-					agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens)
+					agent_msg.cache_hit_tokens = cache_hit_tokens
+					agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens, cache_hit_tokens)
 					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
@@ -675,7 +705,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
 				try:
-					reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+					reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 				except Exception as fallback_error:
 					frappe.log_error(
 						title=f"Non-streaming fallback also failed for session {session}",
@@ -705,7 +735,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					agent_msg.content = processed_content
 				agent_msg.input_tokens = input_tokens
 				agent_msg.output_tokens = output_tokens
-				agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens)
+				agent_msg.cache_hit_tokens = cache_hit_tokens
+				agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens, cache_hit_tokens)
 				agent_msg.save(ignore_permissions=True)
 				frappe.db.commit()
 				emit_status("")
@@ -718,7 +749,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			)
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
 			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
-			reply, input_tokens, output_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+			reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 			
 			if approval_data:
 				# Handle approval flow
@@ -742,7 +773,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 				agent_msg.content = processed_content
 			agent_msg.input_tokens = input_tokens
 			agent_msg.output_tokens = output_tokens
-			agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens)
+			agent_msg.cache_hit_tokens = cache_hit_tokens
+			agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens, cache_hit_tokens)
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
 			emit_status("")
@@ -882,13 +914,14 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		{
 			"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
 			"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
+			"cache_hit_tokens": frappe.db.get_value("Chat Session", session, "cache_hit_tokens") + cache_hit_tokens,
 			"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
 		},
 	)
 	frappe.db.commit()
 
 	# Credit tokens to user-level aggregate (survives temporary session cleanup)
-	_credit_user_token_usage(session, input_tokens, output_tokens)
+	_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 
 	# Release lock and clear the status indicator immediately — before any
 	# DB reads or realtime publishes — so the "Calling AI…" text disappears
@@ -1146,7 +1179,7 @@ def _execute_approved_tool(approval_name):
 	
 	try:
 		notify_user = approval_doc.approver or frappe.session.user
-		reply, input_tokens, output_tokens, reasoning_content = run_after_approval(
+		reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = run_after_approval(
 			session_name=session,
 			conversation_state=conversation_state,
 			approved=True,
@@ -1177,6 +1210,7 @@ def _execute_approved_tool(approval_name):
 				"reasoning_content": reasoning_content or None,
 				"input_tokens": input_tokens,
 				"output_tokens": output_tokens,
+				"cache_hit_tokens": cache_hit_tokens,
 			}
 		).insert(ignore_permissions=True)
 		frappe.db.commit()
@@ -1234,13 +1268,14 @@ def _execute_approved_tool(approval_name):
 			{
 				"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
 				"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
+				"cache_hit_tokens": frappe.db.get_value("Chat Session", session, "cache_hit_tokens") + cache_hit_tokens,
 				"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
 			},
 		)
 		frappe.db.commit()
 
 		# Credit tokens to user-level aggregate
-		_credit_user_token_usage(session, input_tokens, output_tokens)
+		_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 
 		# Post-response auto-compaction check for approved tool execution
 		session_doc = frappe.get_doc("Chat Session", session)

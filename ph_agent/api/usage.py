@@ -32,6 +32,7 @@ def get_user_usage(user: str | None = None) -> dict:
 	return {
 		"total_input_tokens": usage.total_input_tokens or 0,
 		"total_output_tokens": usage.total_output_tokens or 0,
+		"total_cache_hit_tokens": usage.total_cache_hit_tokens or 0,
 		"total_cost": usage.total_cost or 0,
 		"currency": "EUR",
 		"input_cost_over_per_1m": usage.input_cost_over_per_1m or 0,

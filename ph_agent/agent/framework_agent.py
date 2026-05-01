@@ -606,14 +606,8 @@ def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int, i
 		return 0, 0, 0
 	input_tokens = usage_details.get("input_token_count") or 0
 	output_tokens = usage_details.get("output_token_count") or 0
-	# Try common field names for cache-hit tokens across providers.
-	# DeepSeek returns "cache_read_input_tokens"; other providers may vary.
-	cache_hit_tokens = (
-		usage_details.get("cache_read_input_tokens")
-		or usage_details.get("cached_tokens")
-		or usage_details.get("cache_hit_tokens")
-		or 0
-	)
+	# agent_framework_openai maps prompt_tokens_details.cached_tokens → "prompt/cached_tokens"
+	cache_hit_tokens = usage_details.get("prompt/cached_tokens") or 0
 	return int(input_tokens), int(output_tokens), int(cache_hit_tokens)
 
 
@@ -1159,7 +1153,7 @@ def get_agent_response_stream(
 						result_queue.put(("chunk", delta[idx : idx + 500]))
 
 				if stop_event.is_set():
-					result_queue.put(("done", ("", 0, 0)))
+					result_queue.put(("done", ("", 0, 0, 0)))
 					return
 
 				debug_log(
@@ -1168,6 +1162,13 @@ def get_agent_response_stream(
 					session=session_name,
 				)
 				final_response = await stream.get_final_response()
+				# Debug: dump all usage_details keys to find cache token field
+				if final_response.usage_details:
+					debug_log(
+						"Stream: usage_details keys",
+						f"Session: {session_name}, Keys: {list(final_response.usage_details.keys())}",
+						session=session_name,
+					)
 				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(final_response.usage_details)
 				debug_log(
 					"Stream: final_response received",
@@ -1244,10 +1245,10 @@ def get_agent_response_stream(
 
 		if event_type == "reasoning_chunk":
 			full_reasoning += payload
-			yield ("reasoning_chunk", payload), False, 0, 0
+			yield ("reasoning_chunk", payload), False, 0, 0, 0
 			continue
 		if event_type == "chunk":
-			yield payload, False, 0, 0
+			yield payload, False, 0, 0, 0
 			continue
 		if event_type == "approval":
 			approval_data, input_tokens, output_tokens, cache_hit_tokens = payload

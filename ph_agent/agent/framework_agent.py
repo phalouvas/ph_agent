@@ -596,12 +596,98 @@ class FrappeMemoryProvider(HistoryProvider):
 		return
 
 
-def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int]:
+def _get_usage_tokens(usage_details: dict[str, Any] | None) -> tuple[int, int, int]:
+	"""Extract token counts from usage_details.
+
+	Returns:
+		tuple of (input_tokens, output_tokens, cache_hit_tokens).
+	"""
 	if not usage_details:
-		return 0, 0
+		return 0, 0, 0
 	input_tokens = usage_details.get("input_token_count") or 0
 	output_tokens = usage_details.get("output_token_count") or 0
-	return int(input_tokens), int(output_tokens)
+	# agent_framework_openai maps prompt_tokens_details.cached_tokens → "prompt/cached_tokens"
+	cache_hit_tokens = usage_details.get("prompt/cached_tokens") or 0
+	return int(input_tokens), int(output_tokens), int(cache_hit_tokens)
+
+
+def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxiliary") -> None:
+	"""Credit token usage from auxiliary API calls (title, suggestions, summary).
+
+	These calls bypass the agent framework so tokens must be tracked here.
+	Reads provider pricing + user overrides and credits User Token Usage.
+	Also updates Chat Session counters.
+
+	Args:
+		session_name: Chat Session name.
+		usage: OpenAI CompletionUsage object with prompt_tokens,
+		       completion_tokens, and prompt_tokens_details.cached_tokens.
+		label: Human-readable label for error logging.
+	"""
+	try:
+		input_tokens = usage.prompt_tokens or 0
+		output_tokens = usage.completion_tokens or 0
+		cache_hit_tokens = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None) or 0
+		if not input_tokens and not output_tokens:
+			return
+
+		session_doc = frappe.get_doc("Chat Session", session_name)
+		user = session_doc.user
+		provider_name = session_doc.llm_provider
+		provider = frappe.get_doc("LLM Provider", provider_name)
+
+		# Pricing
+		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
+		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
+		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
+
+		# User token usage record (get or create)
+		from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+		usage_name = UserTokenUsage.get_or_create_for_user(user)
+		usage_doc = frappe.get_doc("User Token Usage", usage_name)
+		override_input = float(usage_doc.input_cost_over_per_1m or 0)
+		override_output = float(usage_doc.output_cost_over_per_1m or 0)
+		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
+
+		# Effective rates
+		eff_input = provider_input_rate + override_input
+		eff_output = provider_output_rate + override_output
+		eff_cache = provider_cache_rate + override_cache
+
+		# 3-tier cost
+		cache_miss = max(0, input_tokens - cache_hit_tokens)
+		cost = (cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output) / 1_000_000
+
+		# Atomic update — User Token Usage
+		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
+		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
+		current_cache = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
+		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
+		frappe.db.set_value("User Token Usage", usage_name, {
+			"total_input_tokens": current_input + input_tokens,
+			"total_output_tokens": current_output + output_tokens,
+			"total_cache_hit_tokens": current_cache + cache_hit_tokens,
+			"total_cost": current_cost + cost,
+			"last_updated": frappe.utils.now_datetime(),
+		})
+
+		# Update Chat Session counters
+		session_input = frappe.db.get_value("Chat Session", session_name, "input_tokens") or 0
+		session_output = frappe.db.get_value("Chat Session", session_name, "output_tokens") or 0
+		session_cache = frappe.db.get_value("Chat Session", session_name, "cache_hit_tokens") or 0
+		session_est = frappe.db.get_value("Chat Session", session_name, "estimated_conversation_tokens") or 0
+		frappe.db.set_value("Chat Session", session_name, {
+			"input_tokens": session_input + input_tokens,
+			"output_tokens": session_output + output_tokens,
+			"cache_hit_tokens": session_cache + cache_hit_tokens,
+			"estimated_conversation_tokens": session_est + input_tokens + output_tokens,
+		})
+		frappe.db.commit()
+	except Exception:
+		frappe.log_error(
+			title=f"Failed to credit auxiliary API tokens ({label})",
+			message=f"Session: {session_name}",
+		)
 
 
 def _validate_context_limit(session_doc, provider_doc) -> int:
@@ -956,6 +1042,13 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 		f"Session: {session_name}, Tokens: {_get_usage_tokens(result.usage_details)}",
 		session=session_name,
 	)
+	# Debug-log the raw usage_details keys to confirm cache token field name
+	if result.usage_details:
+		debug_log(
+			"_run_agent usage_details keys",
+			f"Session: {session_name}, Keys: {list(result.usage_details.keys())}",
+			session=session_name,
+		)
 	return result, agent_session
 
 
@@ -1010,7 +1103,7 @@ def _extract_reasoning_from_response(response) -> str:
 	return "\n".join(reasoning_parts)
 
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, dict | None, str]:
+def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, int, dict | None, str]:
 	"""Get agent response (non-streaming).
 
 	Args:
@@ -1022,7 +1115,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 			to prevent stale messages from leaking into the new context.
 	
 	Returns:
-		tuple of (response_text, input_tokens, output_tokens, approval_data, reasoning_content)
+		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content)
 	"""
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
@@ -1035,7 +1128,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
-	input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
+	input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 	approval_data = _extract_approval_data(response, session_name=session_name)
 	reasoning_content = _extract_reasoning_from_response(response)
 	
@@ -1047,7 +1140,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 		# run_after_approval will reconstruct the AgentSession from this.
 		approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
 	
-	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, approval_data, reasoning_content
+	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content
 
 
 def get_agent_response_stream(
@@ -1056,7 +1149,12 @@ def get_agent_response_stream(
 	cancel_check=None,
 	status_callback=None,
 	skip_session_state: bool = False,
-) -> Generator[tuple[Any, bool, int, int], None, None]:
+) -> Generator[tuple[Any, bool, int, int, int], None, None]:
+	"""Stream agent response.
+
+	Yields:
+		tuples of (chunk, is_final, input_tokens, output_tokens, cache_hit_tokens).
+	"""
 	if status_callback:
 		status_callback(frappe._("Calling AI…"))
 
@@ -1134,7 +1232,7 @@ def get_agent_response_stream(
 						result_queue.put(("chunk", delta[idx : idx + 500]))
 
 				if stop_event.is_set():
-					result_queue.put(("done", ("", 0, 0)))
+					result_queue.put(("done", ("", 0, 0, 0)))
 					return
 
 				debug_log(
@@ -1143,10 +1241,17 @@ def get_agent_response_stream(
 					session=session_name,
 				)
 				final_response = await stream.get_final_response()
-				input_tokens, output_tokens = _get_usage_tokens(final_response.usage_details)
+				# Debug: dump all usage_details keys to find cache token field
+				if final_response.usage_details:
+					debug_log(
+						"Stream: usage_details keys",
+						f"Session: {session_name}, Keys: {list(final_response.usage_details.keys())}",
+						session=session_name,
+					)
+				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(final_response.usage_details)
 				debug_log(
 					"Stream: final_response received",
-					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}",
+					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}, Cache hit tokens: {cache_hit_tokens}",
 					session=session_name,
 				)
 				approval_data = _extract_approval_data(final_response, session_name=session_name)
@@ -1158,9 +1263,9 @@ def get_agent_response_stream(
 					# Also store full session dict in approval data for continuation.
 					# run_after_approval will reconstruct the AgentSession from this.
 					approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-					result_queue.put(("approval", (approval_data, input_tokens, output_tokens)))
+					result_queue.put(("approval", (approval_data, input_tokens, output_tokens, cache_hit_tokens)))
 				else:
-					result_queue.put(("done", ("", input_tokens, output_tokens)))
+					result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
 			except Exception as exc:
 				result_queue.put(("error", exc))
 
@@ -1219,18 +1324,18 @@ def get_agent_response_stream(
 
 		if event_type == "reasoning_chunk":
 			full_reasoning += payload
-			yield ("reasoning_chunk", payload), False, 0, 0
+			yield ("reasoning_chunk", payload), False, 0, 0, 0
 			continue
 		if event_type == "chunk":
-			yield payload, False, 0, 0
+			yield payload, False, 0, 0, 0
 			continue
 		if event_type == "approval":
-			approval_data, input_tokens, output_tokens = payload
-			yield approval_data, True, input_tokens, output_tokens
+			approval_data, input_tokens, output_tokens, cache_hit_tokens = payload
+			yield approval_data, True, input_tokens, output_tokens, cache_hit_tokens
 			break
 		if event_type == "done":
-			chunk, input_tokens, output_tokens = payload
-			yield (chunk, full_reasoning), True, input_tokens, output_tokens
+			chunk, input_tokens, output_tokens, cache_hit_tokens = payload
+			yield (chunk, full_reasoning), True, input_tokens, output_tokens, cache_hit_tokens
 			break
 		if event_type == "error":
 			raise payload
@@ -1241,7 +1346,7 @@ def run_after_approval(
 	conversation_state: dict[str, Any],
 	approved: bool,
 	user: str | None = None,
-) -> tuple[str, int, int, str]:
+) -> tuple[str, int, int, int, str]:
 	import traceback
 	
 	approval_requests = (conversation_state or {}).get("approval_requests") or []
@@ -1379,13 +1484,13 @@ def run_after_approval(
 				session_state=session_state,
 			)
 
-		input_tokens, output_tokens = _get_usage_tokens(response.usage_details)
+		input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 		reasoning_content = _extract_reasoning_from_response(response)
 		
 		# Save updated session state to Chat Session
 		_save_session_state(session_name, agent_session)
 		
-		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, reasoning_content
+		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, reasoning_content
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error in _run_agent for {session_name}",
@@ -1427,6 +1532,8 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 				max_tokens=max_tokens,
 			)
 		)
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "session_title")
 		return (response.choices[0].message.content or "").strip()
 	except Exception:
 		frappe.log_error(
@@ -1474,6 +1581,8 @@ def generate_conversation_summary(session_name: str, conversation_history: list)
 				max_tokens=max_tokens,
 			)
 		)
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "conversation_summary")
 		return (response.choices[0].message.content or "").strip()
 	except Exception:
 		frappe.log_error(
@@ -1517,6 +1626,9 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 				response_format={"type": "json_object"},
 			)
 		)
+
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "followup_suggestions")
 
 		raw = (response.choices[0].message.content or "").strip()
 		if not raw:

@@ -97,3 +97,18 @@ The chat UI is `ph_agent/ph_agent/page/chat/chat.js` (loaded via `hooks.py:page_
 ## Additional context
 
 The `.github/copilot-instructions.md` file contains complementary guidelines about front-end patterns (MutationObserver, conditional auto-scroll), session state serialization, and the tool approval workflow — consult it for those details.
+
+## Command style
+- Always write bash commands as single lines
+- Never use newlines inside quoted strings in bash commands
+- Avoid using `#` inside quoted arguments
+```
+
+This will be read at the start of every session and should prevent Claude from constructing commands that trigger that warning.
+
+However, note that this is a **guidance** to Claude, not a hard rule. If Claude still occasionally writes commands with newlines inside quotes, you can also add a more explicit instruction:
+
+```markdown
+## Critical: Avoid validation warnings
+- NEVER use newlines followed by `#` inside quoted strings in bash commands
+- If a command would require a multi-line string, write it to a temporary script file instead and execute that

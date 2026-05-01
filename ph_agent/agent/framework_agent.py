@@ -58,6 +58,11 @@ def _extract_reasoning_from_message(msg) -> str | None:
 		reasoning = msg.model_extra.get("reasoning_content")
 		if reasoning is not None:
 			return str(reasoning)
+	# Belt-and-suspenders: check reasoning_content as direct attribute
+	# (in case a future SDK version promotes it from model_extra).
+	reasoning = getattr(msg, "reasoning_content", None)
+	if reasoning is not None:
+		return str(reasoning)
 	return None
 
 
@@ -120,6 +125,13 @@ def _patched_parse_update(self, chunk):
 						protected_data=json.dumps(reasoning_text)
 					)
 				)
+			else:
+				# Update existing text_reasoning content's protected_data
+				# so the latest cumulative reasoning is preserved.
+				for c in update.contents:
+					if getattr(c, "type", None) == "text_reasoning":
+						c.protected_data = json.dumps(reasoning_text)
+						break
 	return update
 
 
@@ -137,12 +149,41 @@ _orig_prepare_message = _openai_client_mod.OpenAIChatCompletionClient._prepare_m
 
 
 def _patched_prepare_message_for_openai(self, message):
-	"""Patched message preparer: renames reasoning_details → reasoning_content."""
+	"""Patched message preparer: renames reasoning_details → reasoning_content,
+	with belt-and-suspenders fallback for text_reasoning Content."""
 	result = _orig_prepare_message(self, message)
 	# Rename reasoning_details → reasoning_content for DeepSeek compatibility
 	for msg_dict in result:
 		if "reasoning_details" in msg_dict:
 			msg_dict["reasoning_content"] = msg_dict.pop("reasoning_details")
+	# Belt-and-suspenders: if the message has text_reasoning Content but
+	# no output dict ended up with reasoning_content, extract it directly.
+	# This catches cases where the upstream _prepare_message_for_openai
+	# fails to serialize text_reasoning (e.g. protected_data is None,
+	# or content ordering causes the pending buffer to be dropped).
+	if message.role == "assistant" and result:
+		if not any("reasoning_content" in md for md in result):
+			reasoning_text = None
+			for c in getattr(message, "contents", []) or []:
+				if getattr(c, "type", None) == "text_reasoning":
+					protected = getattr(c, "protected_data", None)
+					if protected is not None:
+						try:
+							reasoning_text = json.loads(protected)
+						except (json.JSONDecodeError, TypeError):
+							reasoning_text = protected
+					else:
+						reasoning_text = getattr(c, "text", None)
+					if reasoning_text:
+						break
+			if reasoning_text:
+				result[-1]["reasoning_content"] = reasoning_text
+				logger.warning(
+					"Belt-and-suspenders: injected missing reasoning_content "
+					"(len=%d) for message role=%s — upstream serialization "
+					"did not produce reasoning_details",
+					len(reasoning_text), message.role,
+				)
 	return result
 
 
@@ -559,6 +600,11 @@ class FrappeMemoryProvider(HistoryProvider):
 			else:
 				assistant_msg = Message("assistant", [content])
 				if msg.reasoning_content:
+					debug_log(
+						"FrappeMemoryProvider: loaded reasoning_content",
+						f"Session: {session_id}, Reasoning length: {len(msg.reasoning_content)}",
+						session=session_id,
+					)
 					assistant_msg.contents.append(
 						Content.from_text_reasoning(
 							protected_data=json.dumps(msg.reasoning_content)
@@ -1003,8 +1049,8 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 				}
 			)
 
-	if not approval_requests:
-		return None
+			if not approval_requests:
+				return None
 
 	return {
 		"approval_needed": True,

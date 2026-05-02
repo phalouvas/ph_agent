@@ -157,56 +157,46 @@ def _patched_prepare_message_for_openai(self, message):
 	for msg_dict in result:
 		if "reasoning_details" in msg_dict:
 			msg_dict["reasoning_content"] = msg_dict.pop("reasoning_details")
-	# Fix reasoning_content placement: the upstream serialiser puts
-	# reasoning_details on the *last* dict (typically tool_calls-only).
 	# DeepSeek requires reasoning_content on EVERY dict for an assistant
 	# message — when a tool call is present DeepSeek checks the
 	# tool_calls-bearing dict for reasoning_content and returns 400 if
-	# it is missing.  Copy (don't move) so all dicts carry it.
-	reasoning_value = None
-	for msg_dict in result:
-		if "reasoning_content" in msg_dict and not msg_dict.get("content"):
-			reasoning_value = msg_dict["reasoning_content"]
-			break
-	if reasoning_value is not None:
-		# Ensure the content dict also has reasoning_content
-		for msg_dict in result:
-			if "content" in msg_dict and "reasoning_content" not in msg_dict:
-				msg_dict["reasoning_content"] = reasoning_value
-				break
-
-	# Belt-and-suspenders: if the message has text_reasoning Content but
-	# no output dict ended up with reasoning_content, extract it directly.
-	# This catches cases where the upstream _prepare_message_for_openai
-	# fails to serialize text_reasoning (e.g. protected_data is None,
-	# or content ordering causes the pending buffer to be dropped).
+	# it is missing.  The upstream serialiser puts reasoning_details on
+	# only ONE dict (whichever happens last in content order).  Gather
+	# it and copy it to EVERY dict so we satisfy DeepSeek.
 	if message.role == "assistant" and result:
-		if not any("reasoning_content" in md for md in result):
-			reasoning_text = None
+		# Find reasoning_content from any dict that has it.
+		reasoning_value = None
+		for msg_dict in result:
+			if "reasoning_content" in msg_dict:
+				reasoning_value = msg_dict["reasoning_content"]
+				break
+		# If not found via serialisation, extract directly from
+		# text_reasoning Content on the message.
+		if reasoning_value is None:
 			for c in getattr(message, "contents", []) or []:
 				if getattr(c, "type", None) == "text_reasoning":
 					protected = getattr(c, "protected_data", None)
 					if protected is not None:
 						try:
-							reasoning_text = json.loads(protected)
+							reasoning_value = json.loads(protected)
 						except (json.JSONDecodeError, TypeError):
-							reasoning_text = protected
+							reasoning_value = protected
 					else:
-						reasoning_text = getattr(c, "text", None)
-					if reasoning_text:
+						reasoning_value = getattr(c, "text", None)
+					if reasoning_value:
+						logger.warning(
+							"Belt-and-suspenders: extracted missing reasoning_content "
+							"(len=%d) from text_reasoning Content for message role=%s",
+							len(str(reasoning_value)), message.role,
+						)
 						break
-			if reasoning_text:
-				# Put reasoning_content on EVERY assistant message dict —
-				# DeepSeek requires it on every dict when tool calls are present.
+		# Copy the found reasoning_content onto EVERY assistant dict.
+		if reasoning_value is not None:
+			needs_copy = any("reasoning_content" not in md for md in result)
+			if needs_copy:
 				for msg_dict in result:
 					if "reasoning_content" not in msg_dict:
-						msg_dict["reasoning_content"] = reasoning_text
-				logger.warning(
-					"Belt-and-suspenders: injected missing reasoning_content "
-					"(len=%d) for message role=%s — upstream serialization "
-					"did not produce reasoning_details",
-					len(reasoning_text), message.role,
-				)
+						msg_dict["reasoning_content"] = reasoning_value
 	return result
 
 
@@ -219,14 +209,15 @@ _openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = _pat
 # ---------------------------------------------------------------------------
 # Diagnostic patch: log DeepSeek API request when thinking mode is enabled
 # ---------------------------------------------------------------------------
-_orig_prepare_options = _openai_client_mod.RawOpenAIChatCompletionClient._prepare_options
+_orig_prepare_options = _openai_client_mod.OpenAIChatCompletionClient._prepare_options
 
 
 def _patched_prepare_options(self, messages, options):
 	"""Patched _prepare_options: logs request body for thinking-mode debugging."""
 	result = _orig_prepare_options(self, messages, options)
 
-	thinking_cfg = result.get("thinking")
+	extra_body = result.get("extra_body", {})
+	thinking_cfg = extra_body.get("thinking") if isinstance(extra_body, dict) else None
 	if isinstance(thinking_cfg, dict) and thinking_cfg.get("type") == "enabled":
 		msg_summary = []
 		for i, msg in enumerate(result.get("messages", [])):
@@ -255,7 +246,7 @@ def _patched_prepare_options(self, messages, options):
 	return result
 
 
-_openai_client_mod.RawOpenAIChatCompletionClient._prepare_options = _patched_prepare_options
+_openai_client_mod.OpenAIChatCompletionClient._prepare_options = _patched_prepare_options
 
 
 # ---------------------------------------------------------------------------

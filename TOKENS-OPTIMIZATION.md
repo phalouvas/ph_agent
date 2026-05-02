@@ -10,7 +10,7 @@ framework_agent.py:444 — _try_route_tools() fires a dedicated LLM call to filt
 
 **Implementation:** Replaced the LLM router call with embedding-based cosine similarity selection via `ph_agent/agent/tools/embedding_router.py`. When `embedding_model` is configured on the LLM Provider, tool embeddings are computed once (cached in Redis, 1-hour TTL) and routing runs in single-digit milliseconds. General-group tools are always preserved; top-K (8) non-General tools are selected by similarity. The old LLM router is preserved as fallback when `embedding_model` is not configured. Cache invalidates automatically via version counter when Tool Registry records change (doc_events hook).
 
-2. Reasoning Content Accumulates Unboundedly
+2. ~~Reasoning Content Accumulates Unboundedly~~ **COMPLETED**
 framework_agent.py:657-668 — All historical reasoning_content is echoed back in every request (required by DeepSeek's thinking mode). If a conversation has 10 turns with thinking mode, each assistant message carries its full reasoning block forward, and the API sees all of them. Reasoning tokens can be 3–10x the visible output tokens.
 
 Recommendation: After auto-summarization or after N turns, strip reasoning content from older messages. Since summaries capture the outcome of reasoning (not the process), old reasoning chains can be safely dropped. Add a configurable max_reasoning_turns threshold.

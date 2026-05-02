@@ -640,6 +640,18 @@ class FrappeMemoryProvider(HistoryProvider):
 			return []
 
 		last_summary_message = frappe.db.get_value("Chat Session", session_id, "last_summary_message")
+
+		# Look up max_reasoning_turns from the LLM Provider configuration.
+		max_reasoning_turns = 5
+		try:
+			provider_name = frappe.db.get_value("Chat Session", session_id, "llm_provider")
+			if provider_name:
+				val = frappe.db.get_value("LLM Provider", provider_name, "max_reasoning_turns")
+				if val is not None:
+					max_reasoning_turns = int(val)
+		except Exception:
+			pass
+
 		if last_summary_message:
 			last_summary_doc = frappe.get_doc("Chat Message", last_summary_message)
 			prior_messages = frappe.get_all(
@@ -678,12 +690,42 @@ class FrappeMemoryProvider(HistoryProvider):
 					)
 				history.append(assistant_msg)
 
+		# Strip text_reasoning content from older assistant messages to save
+		# input tokens. Only the most recent `max_reasoning_turns` assistant
+		# messages that contain reasoning keep their reasoning blocks. Older
+		# reasoning chains are dropped because summaries (or the visible text
+		# content) capture the outcome of reasoning, not the process.
+		if max_reasoning_turns > 0:
+			reasoning_msg_count = 0
+			for msg in reversed(history):
+				if msg.role != "assistant":
+					continue
+				has_reasoning = any(
+					getattr(c, "type", None) == "text_reasoning" for c in msg.contents
+				)
+				if not has_reasoning:
+					continue
+				reasoning_msg_count += 1
+				if reasoning_msg_count > max_reasoning_turns:
+					msg.contents = [
+						c for c in msg.contents
+						if getattr(c, "type", None) != "text_reasoning"
+					]
+					debug_log(
+						"FrappeMemoryProvider: stripped reasoning_content from old message",
+						f"Session: {session_id}, "
+						f"Max reasoning turns: {max_reasoning_turns}, "
+						f"Discarded position: {reasoning_msg_count} from end",
+						session=session_id,
+					)
+
 		# Strip non-text content types from assistant messages in history.
 		# Tool call/result pairs (function_call, function_result) exist only
 		# in-memory during execution and are not persisted to the DB.
-		# Reasoning tokens (text_reasoning) ARE persisted and MUST be preserved
-		# because DeepSeek's thinking mode requires reasoning_content to be
-		# echoed back in subsequent requests.
+		# Reasoning tokens (text_reasoning) ARE persisted but are stripped
+		# from older messages per the max_reasoning_turns threshold to save
+		# input tokens. The most recent N assistant messages with reasoning
+		# retain their text_reasoning content for DeepSeek compatibility.
 		filtered: list[Message] = []
 		for msg in history:
 			if msg.role == "assistant":

@@ -22,3 +22,8 @@ class LLMProvider(Document):
 		if self.temperature is not None:
 			if self.temperature < 0 or self.temperature > 1.5:
 				frappe.throw(frappe._("Temperature must be between 0 and 1.5"))
+
+		# Validate max_reasoning_turns range
+		if self.max_reasoning_turns is not None:
+			if self.max_reasoning_turns < 1 or self.max_reasoning_turns > 20:
+				frappe.throw(frappe._("Max Reasoning Turns must be between 1 and 20"))

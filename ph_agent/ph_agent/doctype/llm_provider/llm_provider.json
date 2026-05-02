@@ -21,6 +21,7 @@
   "section_thinking",
   "enable_thinking",
   "reasoning_effort",
+  "max_reasoning_turns",
   "section_token_limits",
   "max_output_tokens",
   "context_length",
@@ -136,6 +137,14 @@
    "fieldtype": "Select",
    "label": "Reasoning Effort",
    "options": "high\nmax"
+  },
+  {
+   "default": "5",
+   "description": "Maximum number of recent assistant messages whose reasoning_content is echoed back to the LLM. Older reasoning blocks are stripped at read time to save context tokens. Range: 1-20. Default: 5.",
+   "fieldname": "max_reasoning_turns",
+   "fieldtype": "Int",
+   "label": "Max Reasoning Turns",
+   "non_negative": 1
   },
   {
    "description": "Default system prompt for all sessions using this provider. Can be overridden per session.",

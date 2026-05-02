@@ -1217,12 +1217,22 @@ def _execute_approved_tool(approval_name):
 
 	try:
 		notify_user = approval_doc.approver or frappe.session.user
-		reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = run_after_approval(
+		reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content, _new_approval_data = run_after_approval(
 			session_name=session,
 			conversation_state=conversation_state,
 			approved=True,
 			user=notify_user,
 		)
+
+		# The LLM may respond with new tool calls that also require
+		# approval (new_approval_data is not None).  Instead of
+		# creating recursive Tool Approval Requests — which can loop
+		# indefinitely when the LLM keeps requesting tools — we save
+		# whatever text reply the LLM generated and let the
+		# conversation continue.  The approved tool's results are
+		# already in the session state for the next user turn.
+		if not reply.strip():
+			reply = "The approved tool was executed. You can continue the conversation."
 
 		# Build content with reasoning block if reasoning exists
 		processed_content = _fix_agent_response_text(reply)

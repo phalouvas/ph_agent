@@ -1515,17 +1515,75 @@ def get_agent_response_stream(
 			raise payload
 
 
+def _build_auto_approval_messages(
+	response: Any,
+	approval_data: dict[str, Any],
+	original_reasoning: str | None,
+) -> list[Any] | None:
+	"""Build messages to auto-approve recursive tool calls.
+
+	Extracts function_approval_request items from the response messages,
+	creates matching function_approval_response (approved=True) items,
+	and returns [assistant_msg, user_msg] for the next _run_agent call.
+	"""
+	approval_requests = approval_data.get("approval_requests") or []
+	if not approval_requests:
+		return None
+
+	# Collect function_approval_request contents from the response
+	approval_request_contents: list[Any] = []
+	for msg in (response.messages or []):
+		for content in (msg.contents or []):
+			if getattr(content, "type", "") == "function_approval_request":
+				approval_request_contents.append(content)
+
+	if not approval_request_contents:
+		return None
+
+	# Build assistant message with the approval requests
+	assistant_msg = Message("assistant", list(approval_request_contents))
+	if original_reasoning:
+		try:
+			assistant_msg.contents.append(
+				Content.from_text_reasoning(
+					protected_data=json.dumps(original_reasoning)
+				)
+			)
+		except Exception:
+			pass
+
+	# Build user message with approval responses (all approved)
+	approval_responses: list[Any] = []
+	for content in approval_request_contents:
+		try:
+			fc = content.function_call
+			approval_responses.append(
+				Content.from_function_approval_response(
+					approved=True,
+					id=getattr(content, "id", "") or "",
+					function_call=fc,
+				)
+			)
+		except Exception:
+			continue
+
+	if not approval_responses:
+		return None
+
+	return [assistant_msg, Message("user", approval_responses)]
+
+
 def run_after_approval(
 	session_name: str,
 	conversation_state: dict[str, Any],
 	approved: bool,
 	user: str | None = None,
-) -> tuple[str, int, int, int, str]:
+) -> tuple[str, int, int, int, str, dict[str, Any] | None]:
 	import traceback
 
 	approval_requests = (conversation_state or {}).get("approval_requests") or []
 	if not approval_requests:
-		return "", 0, 0
+		return "", 0, 0, 0, "", None
 
 	approval = approval_requests[0]
 	arguments_raw = approval.get("arguments") or "{}"
@@ -1689,9 +1747,50 @@ def run_after_approval(
 				user=user,
 				session_state=session_state,
 			)
-
 		input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 		reasoning_content = _extract_reasoning_from_response(response)
+
+		# After the LLM receives tool results, it may request additional
+		# tools (e.g. refining a search).  If the response has no text
+		# — only new tool calls — auto-approve one round so the LLM
+		# gets a second chance to synthesise a text response from the
+		# accumulated results.  This avoids an infinite approval loop
+		# while still allowing the LLM to gather the data it needs.
+		MAX_AUTO_APPROVE_DEPTH = 1
+		for _auto_depth in range(MAX_AUTO_APPROVE_DEPTH + 1):
+			new_approval_data = _extract_approval_data(
+				response, session_name=session_name, available_tools=available_tools,
+			)
+			if not new_approval_data:
+				break
+
+			response_text = (response.text or "").strip()
+			if response_text:
+				break  # has meaningful text, let the caller show it
+
+			# Build auto-approval messages from the pending approval
+			# requests and re-invoke _run_agent with them pre-approved.
+			if _auto_depth < MAX_AUTO_APPROVE_DEPTH:
+				approval_messages = _build_auto_approval_messages(
+					response, new_approval_data, original_reasoning,
+				)
+				if approval_messages:
+					response2, agent_session2, available_tools2 = _run_agent(
+						session_name,
+						approval_messages,
+						user=user,
+						session_state=agent_session.state,
+					)
+					response = response2
+					agent_session = agent_session2
+					available_tools = available_tools2
+					usage = _get_usage_tokens(response.usage_details)
+					input_tokens += usage[0]
+					output_tokens += usage[1]
+					cache_hit_tokens += usage[2]
+					rc = _extract_reasoning_from_response(response)
+					if rc:
+						reasoning_content = (reasoning_content or "") + rc
 
 		# Save updated session state to Chat Session
 		_save_session_state(session_name, agent_session)
@@ -1702,6 +1801,7 @@ def run_after_approval(
 			output_tokens,
 			cache_hit_tokens,
 			reasoning_content,
+			new_approval_data,
 		)
 	except Exception as e:
 		frappe.log_error(

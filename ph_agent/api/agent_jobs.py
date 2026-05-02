@@ -10,6 +10,7 @@ from ph_agent.agent.framework_agent import (
 	generate_conversation_summary,
 	generate_followup_suggestions,
 	generate_session_title,
+	generate_session_title_and_suggestions,
 	get_agent_response,
 	get_agent_response_stream,
 )
@@ -28,7 +29,9 @@ from ph_agent.utils.file_extractor import extract_file_text
 # ---------------------------------------------------------------------------
 
 
-def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0) -> None:
+def _credit_user_token_usage(
+	session_name: str, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0
+) -> None:
 	"""Accumulate token counts and cost into the user's User Token Usage record.
 
 	Calculates cost from LLM Provider pricing + per-user overrides using a
@@ -47,7 +50,9 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 	try:
 		rates = _resolve_effective_rates(session_name)
 		cost = _calculate_cost_from_rates(input_tokens, output_tokens, cache_hit_tokens, rates)
-		_atomic_update_user_token_usage(rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost)
+		_atomic_update_user_token_usage(
+			rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost
+		)
 	except Exception:
 		frappe.log_error(
 			title="Failed to credit user token usage",
@@ -55,7 +60,9 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 		)
 
 
-def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0) -> float:
+def _calculate_message_cost(
+	session_name: str, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0
+) -> float:
 	"""Calculate the EUR cost of a single message based on provider pricing + user overrides.
 
 	Uses a 3-tier formula:
@@ -80,6 +87,7 @@ def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens:
 # ---------------------------------------------------------------------------
 # Auto-compaction helpers
 # ---------------------------------------------------------------------------
+
 
 def _is_recently_summarized(session: str, min_interval_seconds: int = 60) -> bool:
 	"""Check if an auto-summary was created recently to avoid churn."""
@@ -197,15 +205,15 @@ def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
 				"context_length": context_length,
 				"percentage": 0,
 			},
-room="website",
+			room="website",
 		)
 
 	return deleted_count
 
 
-def _perform_auto_summary(session: str, enqueued_by: str | None = None,
-						  emit_status: callable | None = None,
-						  is_async: bool = False) -> bool:
+def _perform_auto_summary(
+	session: str, enqueued_by: str | None = None, emit_status: callable | None = None, is_async: bool = False
+) -> bool:
 	"""Summarize conversation since last summary. Returns True if summary was created.
 
 	Args:
@@ -218,8 +226,10 @@ def _perform_auto_summary(session: str, enqueued_by: str | None = None,
 		True if a summary was successfully created, False otherwise.
 	"""
 	if emit_status is None:
+
 		def _noop(msg):
 			pass
+
 		emit_status = _noop
 
 	session_doc = frappe.get_doc("Chat Session", session)
@@ -359,6 +369,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 
 	def release_lock():
 		from frappe.utils.background_jobs import get_redis_conn
+
 		get_redis_conn().delete(lock_key)
 
 	def is_cancelled():
@@ -433,6 +444,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			# of literal "{{actual_text}}" markers.
 			combined_text = "\n\n".join(file_texts)
 			import re
+
 			agent_content = re.sub(
 				r"\{\{\w+\}\}",
 				combined_text,
@@ -576,7 +588,19 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			)
 
 			try:
-				for chunk, is_final, chunk_input_tokens, chunk_output_tokens, chunk_cache_hit_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status, skip_session_state=bool(agent_msg_name)):
+				for (
+					chunk,
+					is_final,
+					chunk_input_tokens,
+					chunk_output_tokens,
+					chunk_cache_hit_tokens,
+				) in get_agent_response_stream(
+					session,
+					agent_content,
+					cancel_check=is_cancelled,
+					status_callback=emit_status,
+					skip_session_state=bool(agent_msg_name),
+				):
 					if is_cancelled():
 						raise asyncio.CancelledError()
 
@@ -621,7 +645,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 								"session": session,
 								"message_id": agent_msg.name,
 								"chunk": chunk,
-								"is_final": False
+								"is_final": False,
 							},
 							room="website",
 						)
@@ -632,9 +656,9 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					if full_reasoning:
 						reasoning_html = (
 							f'<details class="ph-reasoning-block">\n'
-							f'    <summary>\U0001f913 Thinking process</summary>\n'
-							f'{full_reasoning}\n'
-							f'</details>\n\n'
+							f"    <summary>\U0001f913 Thinking process</summary>\n"
+							f"{full_reasoning}\n"
+							f"</details>\n\n"
 						)
 						agent_msg.content = reasoning_html + processed_content
 						agent_msg.reasoning_content = full_reasoning
@@ -643,7 +667,9 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					agent_msg.input_tokens = input_tokens
 					agent_msg.output_tokens = output_tokens
 					agent_msg.cache_hit_tokens = cache_hit_tokens
-					agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens, cache_hit_tokens)
+					agent_msg.cost = _calculate_message_cost(
+						session, input_tokens, output_tokens, cache_hit_tokens
+					)
 					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
@@ -695,18 +721,25 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				)
 				frappe.log_error(
 					title=f"Streaming failed for session {session}, falling back to non-streaming",
-					message=f"{stream_error}\n{traceback.format_exc()}"
+					message=f"{stream_error}\n{traceback.format_exc()}",
 				)
 				# Reload agent_msg to avoid TimestampMismatchError (it was committed earlier)
 				agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
 				try:
-					reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+					reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = (
+						get_agent_response(
+							session,
+							agent_content,
+							cancel_check=is_cancelled,
+							skip_session_state=bool(agent_msg_name),
+						)
+					)
 				except Exception as fallback_error:
 					frappe.log_error(
 						title=f"Non-streaming fallback also failed for session {session}",
-						message=f"{fallback_error}\n{traceback.format_exc()}"
+						message=f"{fallback_error}\n{traceback.format_exc()}",
 					)
 					raise  # Let the outer except Exception handle it
 
@@ -715,9 +748,9 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				if reasoning_content:
 					reasoning_html = (
 						f'<details class="ph-reasoning-block">\n'
-						f'    <summary>\U0001f913 Thinking process</summary>\n'
-						f'{reasoning_content}\n'
-						f'</details>\n\n'
+						f"    <summary>\U0001f913 Thinking process</summary>\n"
+						f"{reasoning_content}\n"
+						f"</details>\n\n"
 					)
 					agent_msg.content = reasoning_html + processed_content
 					agent_msg.reasoning_content = reasoning_content
@@ -726,7 +759,9 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				agent_msg.input_tokens = input_tokens
 				agent_msg.output_tokens = output_tokens
 				agent_msg.cache_hit_tokens = cache_hit_tokens
-				agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens, cache_hit_tokens)
+				agent_msg.cost = _calculate_message_cost(
+					session, input_tokens, output_tokens, cache_hit_tokens
+				)
 				agent_msg.save(ignore_permissions=True)
 				frappe.db.commit()
 				emit_status("")
@@ -739,16 +774,18 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			)
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
 			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
-			reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+			reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = get_agent_response(
+				session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name)
+			)
 
 			# Build content with reasoning block if reasoning exists
 			processed_content = _fix_agent_response_text(reply)
 			if reasoning_content:
 				reasoning_html = (
 					f'<details class="ph-reasoning-block">\n'
-					f'    <summary>\U0001f913 Thinking process</summary>\n'
-					f'{reasoning_content}\n'
-					f'</details>\n\n'
+					f"    <summary>\U0001f913 Thinking process</summary>\n"
+					f"{reasoning_content}\n"
+					f"</details>\n\n"
 				)
 				agent_msg.content = reasoning_html + processed_content
 				agent_msg.reasoning_content = reasoning_content
@@ -848,10 +885,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 		msg_name = agent_msg.name if agent_msg else None
 		if msg_name and frappe.db.exists("Chat Message", msg_name):
 			try:
-				frappe.db.set_value(
-					"Chat Message", msg_name, "content",
-					"⚠️ " + str(e)
-				)
+				frappe.db.set_value("Chat Message", msg_name, "content", "⚠️ " + str(e))
 				frappe.db.commit()
 				frappe.publish_realtime(
 					event="new_message",
@@ -950,7 +984,68 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			room="website",
 		)
 	session_doc = frappe.get_doc("Chat Session", session)
-	if session_doc.enable_suggestions:
+
+	# --- Title and suggestions (batched on first turn) ---
+	current_title = frappe.db.get_value("Chat Session", session, "title")
+	msg_count = frappe.db.count("Chat Message", {"chat_session": session})
+	is_first_turn = current_title == "New Chat" and msg_count == 2
+
+	if is_first_turn:
+		import re
+
+		agent_reply = re.sub(
+			r'<details class="ph-reasoning-block">.*?</details>\s*',
+			"",
+			agent_msg.content,
+			flags=re.DOTALL,
+		)
+
+		if session_doc.enable_suggestions:
+			prior_messages = frappe.get_all(
+				"Chat Message",
+				filters={"chat_session": session},
+				fields=["sender_type", "content"],
+				order_by="creation asc",
+			)
+			history = [
+				{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
+				for m in prior_messages
+			]
+
+			new_title, suggestions = generate_session_title_and_suggestions(
+				session, agent_content, agent_reply, history
+			)
+
+			if new_title:
+				frappe.db.set_value("Chat Session", session, "title", new_title)
+				frappe.db.commit()
+				frappe.publish_realtime(
+					event="session_renamed",
+					message={"session": session, "title": new_title},
+					room="website",
+				)
+
+			if suggestions:
+				frappe.publish_realtime(
+					event="suggestions_ready",
+					message={
+						"session": session,
+						"message_id": agent_msg.name,
+						"suggestions": suggestions,
+					},
+					room="website",
+				)
+		else:
+			new_title = generate_session_title(session, agent_content, agent_reply)
+			if new_title:
+				frappe.db.set_value("Chat Session", session, "title", new_title)
+				frappe.db.commit()
+				frappe.publish_realtime(
+					event="session_renamed",
+					message={"session": session, "title": new_title},
+					room="website",
+				)
+	elif session_doc.enable_suggestions:
 		frappe.enqueue(
 			"ph_agent.api.agent_jobs._generate_suggestions_background",
 			session=session,
@@ -972,7 +1067,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				"current_tokens": current_tokens,
 				"context_length": context_length,
 				"percentage": round(token_percentage, 1),
-				"message": f"Conversation is using {round(token_percentage, 1)}% of context window ({current_tokens:,}/{context_length:,} tokens). Consider summarizing the conversation."
+				"message": f"Conversation is using {round(token_percentage, 1)}% of context window ({current_tokens:,}/{context_length:,} tokens). Consider summarizing the conversation.",
 			},
 			room="website",
 		)
@@ -985,7 +1080,11 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	# If a single large response pushed us past the threshold, compact now.
 	# Only run if no auto-summary ran in the pre-call phase (avoid duplicate).
 	auto_summary_threshold = provider_doc.auto_summary_threshold or 85
-	if not _auto_summary_performed and token_percentage > auto_summary_threshold and not _is_recently_summarized(session):
+	if (
+		not _auto_summary_performed
+		and token_percentage > auto_summary_threshold
+		and not _is_recently_summarized(session)
+	):
 		# Enqueue asynchronously — purely preparatory for the next user turn
 		frappe.enqueue(
 			"ph_agent.api.agent_jobs._perform_auto_summary",
@@ -996,29 +1095,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			queue="short",
 			timeout=120,
 		)
-
-	# Auto-generate a title after the first exchange (title is still default "New Chat")
-	current_title = frappe.db.get_value("Chat Session", session, "title")
-	if current_title == "New Chat":
-		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
-		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
-			# Strip reasoning HTML before title generation to avoid polluting the title
-			import re
-			agent_reply = re.sub(
-				r'<details class="ph-reasoning-block">.*?</details>\s*',
-				"",
-				agent_msg.content,
-				flags=re.DOTALL,
-			)
-			new_title = generate_session_title(session, agent_content, agent_reply)
-			if new_title:
-				frappe.db.set_value("Chat Session", session, "title", new_title)
-				frappe.db.commit()
-				frappe.publish_realtime(
-					event="session_renamed",
-					message={"session": session, "title": new_title},
-				room="website",
-			)
 
 
 def _generate_suggestions_background(session, agent_message_id, enqueued_by):
@@ -1089,7 +1165,7 @@ def cascade_delete_persona(doc, method):
 		except Exception as e:
 			frappe.log_error(
 				f"Failed to delete session {session_name} during persona cascade: {e!s}",
-				"ph_agent_persona_cascade"
+				"ph_agent_persona_cascade",
 			)
 
 	frappe.db.commit()

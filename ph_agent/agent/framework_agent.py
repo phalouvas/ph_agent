@@ -182,7 +182,7 @@ def _patched_prepare_message_for_openai(self, message):
 					if protected is not None:
 						try:
 							reasoning_value = json.loads(protected)
-						except (json.JSONDecodeError, TypeError):
+						except json.JSONDecodeError, TypeError:
 							reasoning_value = protected
 					else:
 						reasoning_value = getattr(c, "text", None)
@@ -710,17 +710,12 @@ class FrappeMemoryProvider(HistoryProvider):
 			for msg in reversed(history):
 				if msg.role != "assistant":
 					continue
-				has_reasoning = any(
-					getattr(c, "type", None) == "text_reasoning" for c in msg.contents
-				)
+				has_reasoning = any(getattr(c, "type", None) == "text_reasoning" for c in msg.contents)
 				if not has_reasoning:
 					continue
 				reasoning_msg_count += 1
 				if reasoning_msg_count > max_reasoning_turns:
-					msg.contents = [
-						c for c in msg.contents
-						if getattr(c, "type", None) != "text_reasoning"
-					]
+					msg.contents = [c for c in msg.contents if getattr(c, "type", None) != "text_reasoning"]
 					debug_log(
 						"FrappeMemoryProvider: stripped reasoning_content from old message",
 						f"Session: {session_id}, "
@@ -803,7 +798,9 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 
 		rates = _resolve_effective_rates(session_name)
 		cost = _calculate_cost_from_rates(input_tokens, output_tokens, cache_hit_tokens, rates)
-		_atomic_update_user_token_usage(rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost)
+		_atomic_update_user_token_usage(
+			rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost
+		)
 		_atomic_update_chat_session_tokens(session_name, input_tokens, output_tokens, cache_hit_tokens)
 	except Exception:
 		frappe.log_error(
@@ -1171,7 +1168,7 @@ def _extract_reasoning_from_response(response) -> str:
 				if content.protected_data:
 					try:
 						reasoning_parts.append(json.loads(content.protected_data))
-					except (json.JSONDecodeError, TypeError):
+					except json.JSONDecodeError, TypeError:
 						reasoning_parts.append(content.protected_data)
 				else:
 					reasoning_parts.append(content.text or "")
@@ -1271,7 +1268,7 @@ def get_agent_response_stream(
 								if c.protected_data:
 									try:
 										reasoning_text = json.loads(c.protected_data)
-									except (json.JSONDecodeError, TypeError):
+									except json.JSONDecodeError, TypeError:
 										reasoning_text = c.protected_data
 								else:
 									reasoning_text = c.text or ""
@@ -1455,6 +1452,81 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			reference_name=session_name,
 		)
 		return ""
+
+
+def generate_session_title_and_suggestions(
+	session_name: str,
+	user_message: str,
+	agent_reply: str,
+	conversation_history: list,
+) -> tuple[str, list[str]]:
+	"""Generate both a conversation title and follow-up suggestions in a single API call."""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		return "", []
+
+	openai_client = AsyncOpenAI(api_key=api_key, base_url=provider_doc.api_url)
+	temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	max_tokens = _provider_max_tokens(provider_doc)
+
+	context_parts = []
+	for msg in conversation_history[-6:]:
+		role = "User" if msg.get("role") == "user" else "Assistant"
+		context_parts.append(f"{role}: {msg.get('content', '')[:500]}")
+
+	try:
+		response = asyncio.run(
+			openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=[
+					{
+						"role": "system",
+						"content": (
+							"You are a helpful assistant. Based on the conversation, do two things:\n"
+							"1. Generate a concise 5-8 word title that summarizes the conversation.\n"
+							"2. Suggest exactly 3-5 follow-up questions the user might ask next.\n"
+							'Return a JSON object with "title" (string) and "suggestions" (array of strings).\n'
+							'Example: {"title": "Discussing Project Timeline", "suggestions": ["What about budget?", "Timeline for phase 2?", "Who are the stakeholders?"]}'
+						),
+					},
+					{
+						"role": "user",
+						"content": f"User: {user_message}\nAssistant: {agent_reply}\n\nConversation context:\n"
+						+ "\n".join(context_parts),
+					},
+				],
+				temperature=temperature,
+				max_tokens=max_tokens,
+				response_format={"type": "json_object"},
+			)
+		)
+
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "title_and_suggestions")
+
+		raw = (response.choices[0].message.content or "").strip()
+		if not raw:
+			return "", []
+
+		data = json.loads(raw)
+		title = (data.get("title") or "").strip()
+		suggestions = data.get("suggestions", [])
+		if isinstance(suggestions, list):
+			suggestions = [str(s) for s in suggestions if s][:5]
+		else:
+			suggestions = []
+
+		return title, suggestions
+	except Exception:
+		frappe.log_error(
+			title=f"Batched title+suggestions generation failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name,
+		)
+		return "", []
 
 
 def generate_conversation_summary(session_name: str, conversation_history: list) -> str:

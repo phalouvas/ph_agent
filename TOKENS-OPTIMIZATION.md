@@ -18,7 +18,7 @@ Recommendation: After auto-summarization or after N turns, strip reasoning conte
 3. ~~No Prompt Caching Prefix Optimization~~ **COMPLETED**
 The `FrappeMemoryProvider.get_messages()` method now reorders messages so system summary messages form a contiguous prefix before user/assistant history. This maximizes DeepSeek automatic prefix cache hits (90%+ discount on static prefix tokens).
 
-4. Auxiliary API Calls Are Unbatched
+4. ~~Auxiliary API Calls Are Unbatched~~ **COMPLETED**
 Every user turn can trigger up to 4 additional API calls:
 
 Title generation (first turn only) — framework_agent.py:1602

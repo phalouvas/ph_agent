@@ -639,9 +639,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					# Persist reasoning_content before early return so
 					# run_after_approval can echo it back to DeepSeek.
 					if full_reasoning:
-						agent_msg.reasoning_content = full_reasoning
-						agent_msg.save(ignore_permissions=True)
-						frappe.db.commit()
+						agent_msg.db_set("reasoning_content", full_reasoning)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -738,10 +736,8 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 					# Persist reasoning_content before early return so
 					# run_after_approval can echo it back to DeepSeek.
-					if full_reasoning:
-						agent_msg.reasoning_content = full_reasoning
-						agent_msg.save(ignore_permissions=True)
-						frappe.db.commit()
+					if reasoning_content:
+						agent_msg.db_set("reasoning_content", reasoning_content)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -786,9 +782,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				# Persist reasoning_content before early return so
 				# run_after_approval can echo it back to DeepSeek.
 				if reasoning_content:
-					agent_msg.reasoning_content = reasoning_content
-					agent_msg.save(ignore_permissions=True)
-					frappe.db.commit()
+					agent_msg.db_set("reasoning_content", reasoning_content)
 				# Handle approval flow
 				_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 				release_lock()

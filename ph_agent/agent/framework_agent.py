@@ -681,7 +681,7 @@ class FrappeMemoryProvider(HistoryProvider):
 		history: list[Message] = []
 		for msg in prior_messages:
 			content = msg.content or ""
-			if "⏳ Generating response" in content:
+			if "⏳ Generating response" in content or "Waiting for approval" in content:
 				continue
 			if msg.message_type == "Summary":
 				history.append(Message("system", [f"Conversation summary: {content}"]))

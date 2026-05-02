@@ -618,6 +618,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			output_tokens = 0
 			cache_hit_tokens = 0
 			streaming_successful = False
+			_new_message_sent = False
 			approval_data = None
 			
 			debug_log(
@@ -712,10 +713,25 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
+					_new_message_sent = True
 					
-					# Publish a final message_chunk so the frontend clears the
-					# indicator immediately (handleMessageChunk with is_final=true
-					# calls setIsProcessing(false) and setStatus("")).
+					# Publish the final message HTML FIRST so the frontend
+					# has the correct content (with reasoning block and
+					# vue-chat formatting) before clearing the processing
+					# state. Order matters: new_message delivers the
+					# authoritative content; message_chunk(is_final) only
+					# clears the spinner and typing indicator.
+					frappe.publish_realtime(
+						event="new_message",
+						message={
+							"session": session,
+							"name": agent_msg.name,
+							"sender_type": "Agent",
+							"content": agent_msg.content,
+							"creation": str(agent_msg.creation),
+						},
+						room="website",
+					)
 					frappe.publish_realtime(
 						event="message_chunk",
 						message={
@@ -996,19 +1012,21 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 		room="website",
 	)
 	
-	# Publish the final message to the frontend (non-streaming paths rely on this;
-	# streaming path already sent content via message_chunk events)
-	frappe.publish_realtime(
-		event="new_message",
-		message={
-			"session": session,
-			"name": agent_msg.name,
-			"sender_type": "Agent",
-			"content": agent_msg.content,
-			"creation": str(agent_msg.creation),
-		},
-		room="website",
-	)
+	# Publish the final message to the frontend (streaming path
+	# already published new_message above; non-streaming paths
+	# rely on this one).
+	if not _new_message_sent:
+		frappe.publish_realtime(
+			event="new_message",
+			message={
+				"session": session,
+				"name": agent_msg.name,
+				"sender_type": "Agent",
+				"content": agent_msg.content,
+				"creation": str(agent_msg.creation),
+			},
+			room="website",
+		)
 	session_doc = frappe.get_doc("Chat Session", session)
 	if session_doc.enable_suggestions:
 		frappe.enqueue(

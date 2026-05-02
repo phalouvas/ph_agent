@@ -23,10 +23,11 @@ from ph_agent.agent.tools.tool_manager import ToolManager
 
 logger = logging.getLogger(__name__)
 from ph_agent.agent.tools.tool_router_provider import (
-    _ROUTER_SYSTEM_PROMPT,
-    _ROUTING_THRESHOLD,
-    _ROUTER_MAX_TOKENS,
+	_ROUTER_SYSTEM_PROMPT,
+	_ROUTING_THRESHOLD,
+	_ROUTER_MAX_TOKENS,
 )
+from ph_agent.agent.tools.embedding_router import route_tools_by_embedding
 from ph_agent.utils.debug_logger import debug_log
 
 
@@ -45,7 +46,7 @@ import agent_framework_openai._chat_completion_client as _openai_client_mod
 
 def _extract_reasoning_from_message(msg) -> str | None:
 	"""Extract reasoning_content text from an OpenAI message/delta object.
-	
+
 	Checks both direct attribute (``reasoning_details``) and Pydantic
 	``model_extra`` (``reasoning_content`` from DeepSeek).
 	Returns the raw reasoning text string, or None.
@@ -85,16 +86,13 @@ def _patched_parse_response(self, response, options):
 				if m.role == "assistant":
 					# Only add if not already present (avoid duplicates)
 					has_reasoning = any(
-						getattr(c, 'type', None) == "text_reasoning"
-						for c in getattr(m, 'contents', []) or []
+						getattr(c, "type", None) == "text_reasoning" for c in getattr(m, "contents", []) or []
 					)
 					if not has_reasoning:
 						# Use protected_data to match how the library serializes
 						# text_reasoning Content for the API (see _prepare_message_for_openai).
 						m.contents.append(
-							Content.from_text_reasoning(
-								protected_data=json.dumps(reasoning_text)
-							)
+							Content.from_text_reasoning(protected_data=json.dumps(reasoning_text))
 						)
 					break
 	return result
@@ -115,17 +113,12 @@ def _patched_parse_update(self, chunk):
 		if reasoning_text:
 			# Only add if not already present
 			has_reasoning = any(
-				getattr(c, 'type', None) == "text_reasoning"
-				for c in getattr(update, 'contents', []) or []
+				getattr(c, "type", None) == "text_reasoning" for c in getattr(update, "contents", []) or []
 			)
 			if not has_reasoning:
 				# Use protected_data to match how the library serializes
 				# text_reasoning Content for the API (see _prepare_message_for_openai).
-				update.contents.append(
-					Content.from_text_reasoning(
-						protected_data=json.dumps(reasoning_text)
-					)
-				)
+				update.contents.append(Content.from_text_reasoning(protected_data=json.dumps(reasoning_text)))
 			else:
 				# Update existing text_reasoning content's protected_data
 				# so the latest cumulative reasoning is preserved.
@@ -187,7 +180,8 @@ def _patched_prepare_message_for_openai(self, message):
 						logger.warning(
 							"Belt-and-suspenders: extracted missing reasoning_content "
 							"(len=%d) from text_reasoning Content for message role=%s",
-							len(str(reasoning_value)), message.role,
+							len(str(reasoning_value)),
+							message.role,
 						)
 						break
 		# Copy the found reasoning_content onto EVERY assistant dict.
@@ -203,7 +197,9 @@ def _patched_prepare_message_for_openai(self, message):
 # Apply patches
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai = _patched_parse_response
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai = _patched_parse_update
-_openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = _patched_prepare_message_for_openai
+_openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = (
+	_patched_prepare_message_for_openai
+)
 
 
 # ---------------------------------------------------------------------------
@@ -231,9 +227,9 @@ def _patched_prepare_options(self, messages, options):
 				f"  [{i}] role={role} content={has_content}({content_len}c) "
 				f"tool_calls={has_tool_calls} reasoning_content={has_reasoning}({reasoning_len}r)"
 			)
-		messages_json = json.dumps(
-			result.get("messages", []), indent=2, default=str, ensure_ascii=False
-		)[:8000]
+		messages_json = json.dumps(result.get("messages", []), indent=2, default=str, ensure_ascii=False)[
+			:8000
+		]
 		debug_log(
 			"DeepSeek thinking-mode API request",
 			f"model={result.get('model')} messages={len(result.get('messages', []))} "
@@ -277,7 +273,7 @@ def _fix_missing_sentence_spaces(text: str) -> str:
 			r'([.!?])([A-Z"\'\(]|l(?:et|ook)|n(?:ow|o)|t(?:he|his|hat)|i[tf]|w(?:e|hen|hile|ith)|y(?:ou|es)|s(?:o|ee|ince)|h(?:e|ere|ow|owever)|a(?:fter|nd|s)|b(?:ut|y)|f(?:or|rom)|o(?:n|r)|in|at|that)'
 		)
 
-	return _SENTENCE_GAP_RE.sub(r'\1 \2', text)
+	return _SENTENCE_GAP_RE.sub(r"\1 \2", text)
 
 
 # ---------------------------------------------------------------------------
@@ -289,17 +285,17 @@ def _fix_missing_sentence_spaces(text: str) -> str:
 # close-bold (*), leaving a stray "*" that corrupts adjacent characters.
 #
 # Compiled at module level; lazy-initialised on first call.
-_CODE_SEGMENT_RE = None   # matches fenced blocks and inline code spans
-_BOLD_ITALIC_RE = None    # ***text***
-_BOLD_RE = None           # **text**
-_ITALIC_RE = None         # *text*  (not list bullets, not **bold**)
-_HEADING_RE = None        # # heading
-_LINK_RE = None           # [text](url)
-_IMAGE_RE = None          # ![alt](url)
-_BLOCKQUOTE_RE = None     # > quote
-_HR_RE = None             # ---, ***, ___
-_STRIKE_RE = None         # ~~text~~
-_UNDERLINE_RE = None      # °text°
+_CODE_SEGMENT_RE = None  # matches fenced blocks and inline code spans
+_BOLD_ITALIC_RE = None  # ***text***
+_BOLD_RE = None  # **text**
+_ITALIC_RE = None  # *text*  (not list bullets, not **bold**)
+_HEADING_RE = None  # # heading
+_LINK_RE = None  # [text](url)
+_IMAGE_RE = None  # ![alt](url)
+_BLOCKQUOTE_RE = None  # > quote
+_HR_RE = None  # ---, ***, ___
+_STRIKE_RE = None  # ~~text~~
+_UNDERLINE_RE = None  # °text°
 
 
 def _convert_formatting_for_vue_chat(text: str) -> str:
@@ -347,28 +343,28 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 	if _CODE_SEGMENT_RE is None:
 		# Fenced code blocks (``` ... ```) or inline code (`code`).
 		# Use [\s\S] for fenced blocks so newlines are included.
-		_CODE_SEGMENT_RE = re.compile(r'(```[\s\S]*?```|`[^`\n]+`)')
+		_CODE_SEGMENT_RE = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
 		# ***bold-italic***: three asterisks on each side
-		_BOLD_ITALIC_RE = re.compile(r'\*\*\*(.+?)\*\*\*')
+		_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")
 		# **bold**: two asterisks on each side
-		_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+		_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 		# *italic*: single asterisk, not adjacent to another *, not followed
 		# by whitespace (excludes list bullets like "* item").
-		_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)')
+		_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)")
 		# ~~strikethrough~~
-		_STRIKE_RE = re.compile(r'~~(.+?)~~')
+		_STRIKE_RE = re.compile(r"~~(.+?)~~")
 		# °underline° (vue-chat native format, passthrough)
-		_UNDERLINE_RE = re.compile(r'°(.+?)°')
+		_UNDERLINE_RE = re.compile(r"°(.+?)°")
 		# # Heading (1-6 # characters, must be at start of line)
-		_HEADING_RE = re.compile(r'^#{1,6}\s+(.+?)(?:\s*#+\s*)?$', re.MULTILINE)
+		_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)(?:\s*#+\s*)?$", re.MULTILINE)
 		# [text](url) — not inside a < or > to avoid false matches
-		_LINK_RE = re.compile(r'(?<![<\[!])\[([^\]]+)\]\(([^)]+)\)')
+		_LINK_RE = re.compile(r"(?<![<\[!])\[([^\]]+)\]\(([^)]+)\)")
 		# ![alt](url)
-		_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+		_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 		# > blockquote (at start of line, optional leading spaces)
-		_BLOCKQUOTE_RE = re.compile(r'^>\s?(.+)$', re.MULTILINE)
+		_BLOCKQUOTE_RE = re.compile(r"^>\s?(.+)$", re.MULTILINE)
 		# Horizontal rules: ---, ***, ___ (3+ chars, optionally with spaces, on own line)
-		_HR_RE = re.compile(r'^[ \t]*([-*_])[ \t]*\1[ \t]*\1[ \t]*\1*[ \t]*$', re.MULTILINE)
+		_HR_RE = re.compile(r"^[ \t]*([-*_])[ \t]*\1[ \t]*\1[ \t]*\1*[ \t]*$", re.MULTILINE)
 
 	parts = _CODE_SEGMENT_RE.split(text)
 	result = []
@@ -380,26 +376,26 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 			# 1. Italic first: convert *italic* → _italic_
 			#    The italic regex skips ** and *** patterns so they remain
 			#    intact for the next steps.
-			part = _ITALIC_RE.sub(r'_\1_', part)
+			part = _ITALIC_RE.sub(r"_\1_", part)
 			# 2. Bold-italic: ***text*** → *_text_*
-			part = _BOLD_ITALIC_RE.sub(r'*_\1_*', part)
+			part = _BOLD_ITALIC_RE.sub(r"*_\1_*", part)
 			# 3. Bold: **text** → *text*
-			part = _BOLD_RE.sub(r'*\1*', part)
+			part = _BOLD_RE.sub(r"*\1*", part)
 			# 4. Strikethrough: ~~text~~ → ~text~
-			part = _STRIKE_RE.sub(r'~\1~', part)
+			part = _STRIKE_RE.sub(r"~\1~", part)
 			# 5. Underline: °text° → °text° (passthrough, already correct)
 			# 6. Headings: # Title → *Title*
-			part = _HEADING_RE.sub(r'*\1*', part)
+			part = _HEADING_RE.sub(r"*\1*", part)
 			# 7. Links: [text](url) → text (url)
-			part = _LINK_RE.sub(r'\1 (\2)', part)
+			part = _LINK_RE.sub(r"\1 (\2)", part)
 			# 8. Images: ![alt](url) → [Image: alt] (url)
-			part = _IMAGE_RE.sub(r'[Image: \1] (\2)', part)
+			part = _IMAGE_RE.sub(r"[Image: \1] (\2)", part)
 			# 9. Blockquotes: > text → _text_
-			part = _BLOCKQUOTE_RE.sub(r'_\1_', part)
+			part = _BLOCKQUOTE_RE.sub(r"_\1_", part)
 			# 10. Horizontal rules: --- → separator line
-			part = _HR_RE.sub(r'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯', part)
+			part = _HR_RE.sub(r"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯", part)
 			result.append(part)
-	return ''.join(result)
+	return "".join(result)
 
 
 def _fix_agent_response_text(text: str) -> str:
@@ -419,8 +415,8 @@ def _extract_text_from_messages(messages) -> str:
 	"""Extract the first user text from a Message or list of Messages."""
 	msg_list = messages if isinstance(messages, list) else [messages]
 	for msg in msg_list:
-		for c in (getattr(msg, 'contents', None) or []):
-			text = getattr(c, 'text', None)
+		for c in getattr(msg, "contents", None) or []:
+			text = getattr(c, "text", None)
 			if text:
 				return str(text)
 	return ""
@@ -442,10 +438,13 @@ def _get_available_tool_names(agent: Agent) -> set[str]:
 
 
 async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
-	"""Filter ``agent.default_options['tools']`` using a cheap router LLM call.
+	"""Filter ``agent.default_options['tools']`` using embedding similarity
+	or a cheap router LLM call as fallback.
 
-	All tools are treated equally — the router decides per-tool which ones
-	are relevant to the current query. No group-based exemptions.
+	Two-phase strategy:
+	  1. If the LLM Provider has ``embedding_model`` configured, use embedding-based
+	     cosine-similarity routing (eliminates the second API call).
+	  2. Otherwise, fall back to the LLM-based router.
 
 	Only activates when:
 	  1. Persona has ``enable_tool_routing=1`` and not ``disable_tools``.
@@ -469,6 +468,23 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	if len(tools) <= _ROUTING_THRESHOLD:
 		return
 
+	# --- Phase 1: Try embedding-based routing ---
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	if provider_doc.get("embedding_model"):
+		try:
+			done = await route_tools_by_embedding(agent, session_name, user_query)
+			if done:
+				return
+		except Exception:
+			debug_log(
+				"_try_route_tools embedding failed",
+				f"Session: {session_name} — falling back to LLM router",
+				session=session_name,
+				level="WARNING",
+			)
+	# Fall through to LLM router if embedding routing was skipped or failed.
+
+	# --- Phase 2: Fallback LLM-based routing ---
 	# Build compact tool menu for ALL tools
 	lines = []
 	for t in tools:
@@ -478,7 +494,6 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	tool_menu = "\n".join(lines)
 
 	# Call router LLM
-	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	api_key = provider_doc.get_password("api_key")
 	if not api_key:
 		return
@@ -489,6 +504,7 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	)
 
 	import time
+
 	route_start = time.time()
 	try:
 		user_content = (
@@ -538,7 +554,6 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 			level="WARNING",
 		)
 		pass  # Safety-first: keep all tools on failure
-
 
 
 # ---------------------------------------------------------------------------
@@ -591,10 +606,7 @@ def _build_skills_provider() -> SkillsProvider:
 	skill_paths = None
 	if skills_dir.exists():
 		all_dirs = [str(d) for d in skills_dir.iterdir() if d.is_dir()]
-		filtered_dirs = [
-			d for d in all_dirs
-			if Path(d).name not in doctype_skill_names
-		]
+		filtered_dirs = [d for d in all_dirs if Path(d).name not in doctype_skill_names]
 		skill_paths = filtered_dirs if filtered_dirs else None
 
 	debug_log(
@@ -662,9 +674,7 @@ class FrappeMemoryProvider(HistoryProvider):
 						session=session_id,
 					)
 					assistant_msg.contents.append(
-						Content.from_text_reasoning(
-							protected_data=json.dumps(msg.reasoning_content)
-						)
+						Content.from_text_reasoning(protected_data=json.dumps(msg.reasoning_content))
 					)
 				history.append(assistant_msg)
 
@@ -745,6 +755,7 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 
 		# User token usage record (get or create)
 		from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+
 		usage_name = UserTokenUsage.get_or_create_for_user(user)
 		usage_doc = frappe.get_doc("User Token Usage", usage_name)
 		override_input = float(usage_doc.input_cost_over_per_1m or 0)
@@ -758,7 +769,9 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 
 		# 3-tier cost
 		cache_miss = max(0, input_tokens - cache_hit_tokens)
-		cost = (cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output) / 1_000_000
+		cost = (
+			cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output
+		) / 1_000_000
 
 		# Atomic updates — increment counters directly in SQL to avoid races
 		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
@@ -848,9 +861,9 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	api_key = provider_doc.get_password("api_key")
 	if not api_key:
 		frappe.throw(
-			frappe._("API key not configured for provider {0}. Please update the LLM Provider record.").format(
-				provider_doc.name
-			)
+			frappe._(
+				"API key not configured for provider {0}. Please update the LLM Provider record."
+			).format(provider_doc.name)
 		)
 	if not provider_doc.is_enabled:
 		frappe.throw(
@@ -875,7 +888,9 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		if provider_doc.temperature is not None
 		else 1.0
 	)
-	tools = ToolManager.get_tools(session_name=session_name, user=user or frappe.session.user, persona=session_doc.persona)
+	tools = ToolManager.get_tools(
+		session_name=session_name, user=user or frappe.session.user, persona=session_doc.persona
+	)
 
 	chat_client = OpenAIChatCompletionClient(
 		model=provider_doc.default_model,
@@ -963,12 +978,12 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		return {}
 	except Exception as e:
 		import traceback
+
 		frappe.log_error(
 			title="Error loading session state",
-			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}"
+			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}",
 		)
 		return {}
-
 
 
 class LoggingEncoder(json.JSONEncoder):
@@ -1022,9 +1037,10 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		)
 	except Exception as e:
 		import traceback
+
 		frappe.log_error(
 			title="Error saving session state",
-			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}"
+			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}",
 		)
 
 
@@ -1064,7 +1080,7 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 				continue
 
 			arguments = function_call.arguments
-			
+
 			# Handle arguments - they could be dict, string, or string containing JSON
 			if isinstance(arguments, dict):
 				arguments_str = json.dumps(arguments)
@@ -1083,7 +1099,7 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 			else:
 				# Convert other types to string
 				arguments_str = str(arguments) if arguments is not None else "{}"
-			
+
 			approval_requests.append(
 				{
 					"id": content.id or "",
@@ -1110,7 +1126,12 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 	}
 
 
-def _run_agent(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None) -> tuple[Any, AgentSession]:
+def _run_agent(
+	session_name: str,
+	message: Message | list,
+	user: str | None = None,
+	session_state: dict[str, Any] | None = None,
+) -> tuple[Any, AgentSession]:
 	"""Run agent (non-streaming) and return (response, agent_session).
 
 	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
@@ -1149,7 +1170,12 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 	return result, agent_session
 
 
-async def _run_agent_stream(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None) -> tuple[Any, AgentSession]:
+async def _run_agent_stream(
+	session_name: str,
+	message: Message | list,
+	user: str | None = None,
+	session_state: dict[str, Any] | None = None,
+) -> tuple[Any, AgentSession]:
 	"""Run agent with streaming support and return (stream, agent_session).
 
 	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
@@ -1186,9 +1212,9 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 def _extract_reasoning_from_response(response) -> str:
 	"""Extract reasoning content from a non-streaming agent response."""
 	reasoning_parts = []
-	for msg in getattr(response, 'messages', []) or []:
-		for content in getattr(msg, 'contents', []) or []:
-			if getattr(content, 'type', None) == "text_reasoning":
+	for msg in getattr(response, "messages", []) or []:
+		for content in getattr(msg, "contents", []) or []:
+			if getattr(content, "type", None) == "text_reasoning":
 				# Prefer protected_data (JSON-encoded), fall back to text
 				if content.protected_data:
 					try:
@@ -1200,7 +1226,9 @@ def _extract_reasoning_from_response(response) -> str:
 	return "\n".join(reasoning_parts)
 
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, int, dict | None, str]:
+def get_agent_response(
+	session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False
+) -> tuple[str, int, int, int, dict | None, str]:
 	"""Get agent response (non-streaming).
 
 	Args:
@@ -1210,7 +1238,7 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 		skip_session_state: If True, skip loading cached session state
 			(e.g. InMemoryHistoryProvider messages). Used during regeneration
 			to prevent stale messages from leaking into the new context.
-	
+
 	Returns:
 		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content)
 	"""
@@ -1219,8 +1247,10 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 
 	# Load session state before running agent (skip for regeneration)
 	stored_state = None if skip_session_state else _load_session_state(session_name)
-	
-	response, agent_session = _run_agent(session_name, Message("user", [user_message]), session_state=stored_state)
+
+	response, agent_session = _run_agent(
+		session_name, Message("user", [user_message]), session_state=stored_state
+	)
 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
@@ -1228,16 +1258,23 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 	input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 	approval_data = _extract_approval_data(response, session_name=session_name)
 	reasoning_content = _extract_reasoning_from_response(response)
-	
+
 	# Always save session state, regardless of approval flow
 	_save_session_state(session_name, agent_session)
-	
+
 	if approval_data and agent_session.state:
 		# Also store full session dict in approval data for continuation.
 		# run_after_approval will reconstruct the AgentSession from this.
 		approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-	
-	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content
+
+	return (
+		_fix_agent_response_text(response.text or ""),
+		input_tokens,
+		output_tokens,
+		cache_hit_tokens,
+		approval_data,
+		reasoning_content,
+	)
 
 
 def get_agent_response_stream(
@@ -1266,12 +1303,10 @@ def get_agent_response_stream(
 			try:
 				# Load session state before running agent (skip for regeneration)
 				stored_state = None if skip_session_state else _load_session_state(session_name)
-				
+
 				# Use streaming agent runner — returns (stream, AgentSession)
 				stream, agent_session = await _run_agent_stream(
-					session_name, 
-					Message("user", [user_message]), 
-					session_state=stored_state
+					session_name, Message("user", [user_message]), session_state=stored_state
 				)
 
 				seen_text = ""
@@ -1283,9 +1318,9 @@ def get_agent_response_stream(
 					if stop_event.is_set():
 						break
 
-					if hasattr(update, 'contents') and update.contents:
+					if hasattr(update, "contents") and update.contents:
 						for c in update.contents:
-							c_type = getattr(c, 'type', 'unknown')
+							c_type = getattr(c, "type", "unknown")
 							if c_type == "text_reasoning":
 								# Prefer protected_data (JSON-encoded), fall back to text
 								if c.protected_data:
@@ -1296,7 +1331,7 @@ def get_agent_response_stream(
 								else:
 									reasoning_text = c.text or ""
 								if reasoning_text.startswith(seen_reasoning):
-									reasoning_delta = reasoning_text[len(seen_reasoning):]
+									reasoning_delta = reasoning_text[len(seen_reasoning) :]
 									seen_reasoning = reasoning_text
 								else:
 									reasoning_delta = reasoning_text
@@ -1345,22 +1380,26 @@ def get_agent_response_stream(
 						f"Session: {session_name}, Keys: {list(final_response.usage_details.keys())}",
 						session=session_name,
 					)
-				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(final_response.usage_details)
+				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(
+					final_response.usage_details
+				)
 				debug_log(
 					"Stream: final_response received",
 					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}, Cache hit tokens: {cache_hit_tokens}",
 					session=session_name,
 				)
 				approval_data = _extract_approval_data(final_response, session_name=session_name)
-				
+
 				# Always save session state, regardless of approval flow
 				_save_session_state(session_name, agent_session)
-				
+
 				if approval_data:
 					# Also store full session dict in approval data for continuation.
 					# run_after_approval will reconstruct the AgentSession from this.
 					approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-					result_queue.put(("approval", (approval_data, input_tokens, output_tokens, cache_hit_tokens)))
+					result_queue.put(
+						("approval", (approval_data, input_tokens, output_tokens, cache_hit_tokens))
+					)
 				else:
 					result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
 			except Exception as exc:
@@ -1380,6 +1419,7 @@ def get_agent_response_stream(
 			# failure) that the inner _consume() except doesn't cover, so the
 			# main thread gets the error instead of hanging forever.
 			import traceback
+
 			frappe.log_error(
 				title="Streaming producer thread crashed",
 				message=f"Session: {session_name}, Error: {exc}\n{traceback.format_exc()}",
@@ -1407,6 +1447,7 @@ def get_agent_response_stream(
 		# extension, or the thread was killed externally).
 		if not thread.is_alive() and result_queue.empty():
 			import traceback
+
 			error_msg = (
 				f"Streaming producer thread died unexpectedly for session {session_name}. "
 				"No error was placed in the result queue."
@@ -1445,7 +1486,7 @@ def run_after_approval(
 	user: str | None = None,
 ) -> tuple[str, int, int, int, str]:
 	import traceback
-	
+
 	approval_requests = (conversation_state or {}).get("approval_requests") or []
 	if not approval_requests:
 		return "", 0, 0
@@ -1495,7 +1536,7 @@ def run_after_approval(
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error creating approval Content objects for {session_name}",
-			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}"
+			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}",
 		)
 		raise
 
@@ -1512,7 +1553,7 @@ def run_after_approval(
 			session_state = session_data.get("state", {})
 	else:
 		session_state = session_data if isinstance(session_data, dict) else {}
-	
+
 	try:
 		# --- Tool existence validation ---
 		# Build a temporary agent to check whether the approved tool is
@@ -1530,7 +1571,8 @@ def run_after_approval(
 			logger.warning(
 				"Approved tool '%s' is not available in persona's tool set "
 				"(session=%s, persona=%s). Injecting synthetic error result.",
-				tool_name, session_name,
+				tool_name,
+				session_name,
 				getattr(frappe.get_doc("Chat Session", session_name), "persona", "N/A"),
 			)
 			frappe.log_error(
@@ -1546,13 +1588,15 @@ def run_after_approval(
 			# LLM can gracefully respond to the failure instead of crashing.
 			error_result = Content.from_function_result(
 				call_id=approval.get("call_id") or "",
-				result=json.dumps({
-					"error": True,
-					"message": (
-						f"The tool '{tool_name}' is not available for this session's persona. "
-						f"Please use one of the available tools: {', '.join(sorted(available_tools))}."
-					),
-				}),
+				result=json.dumps(
+					{
+						"error": True,
+						"message": (
+							f"The tool '{tool_name}' is not available for this session's persona. "
+							f"Please use one of the available tools: {', '.join(sorted(available_tools))}."
+						),
+					}
+				),
 			)
 			messages = [
 				Message("assistant", [approval_request_content]),
@@ -1575,7 +1619,7 @@ def run_after_approval(
 				Message("user", [approval_response]),
 			]
 			response, agent_session = _run_agent(
-				session_name, 
+				session_name,
 				messages,  # Pass both messages
 				user=user,
 				session_state=session_state,
@@ -1583,15 +1627,21 @@ def run_after_approval(
 
 		input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
 		reasoning_content = _extract_reasoning_from_response(response)
-		
+
 		# Save updated session state to Chat Session
 		_save_session_state(session_name, agent_session)
-		
-		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, reasoning_content
+
+		return (
+			_fix_agent_response_text(response.text or ""),
+			input_tokens,
+			output_tokens,
+			cache_hit_tokens,
+			reasoning_content,
+		)
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error in _run_agent for {session_name}",
-			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}"
+			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}",
 		)
 		raise
 

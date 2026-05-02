@@ -410,7 +410,8 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	cancel_key = f"ph_agent:cancel:{session}"
 
 	def release_lock():
-		frappe.cache().delete_value(lock_key)
+		from frappe.utils.background_jobs import get_redis_conn
+		get_redis_conn().delete(lock_key)
 
 	def is_cancelled():
 		return bool(frappe.cache().get_value(cancel_key))
@@ -976,18 +977,26 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 		session=session,
 	)
 
-	# Update token counts on the session
-	_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
-
-	# Credit tokens to user-level aggregate (survives temporary session cleanup)
-	_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
-
-	# Release lock and clear the status indicator immediately — before any
-	# DB reads or realtime publishes — so the "Calling AI…" text disappears
-	# as fast as possible and the user can send a new message.
+	# Release lock and clear the status indicator immediately — BEFORE any
+	# follow-up DB reads/realtime publishes — so the "Calling AI…" text
+	# disappears and the user can send a new message. This MUST come before
+	# token updates: if a token update throws, the lock must still be freed.
 	release_lock()
 	frappe.cache().delete_value(f"ph_agent:files:{session}")
 	emit_status("")
+
+	# Update token counts on the session (non-essential — failures must not
+	# re-acquire the lock or block the user)
+	try:
+		_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+		_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
+	except Exception:
+		debug_log(
+			"Token update failed after lock release",
+			f"Session: {session}",
+			session=session,
+			level="WARNING",
+		)
 
 	# Get updated token counts for realtime update
 	session_doc = frappe.get_doc("Chat Session", session)

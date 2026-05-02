@@ -157,6 +157,24 @@ def _patched_prepare_message_for_openai(self, message):
 	for msg_dict in result:
 		if "reasoning_details" in msg_dict:
 			msg_dict["reasoning_content"] = msg_dict.pop("reasoning_details")
+	# Fix reasoning_content placement: the upstream serialiser puts
+	# reasoning_details on the *last* dict (typically tool_calls-only).
+	# DeepSeek requires reasoning_content on EVERY dict for an assistant
+	# message — when a tool call is present DeepSeek checks the
+	# tool_calls-bearing dict for reasoning_content and returns 400 if
+	# it is missing.  Copy (don't move) so all dicts carry it.
+	reasoning_value = None
+	for msg_dict in result:
+		if "reasoning_content" in msg_dict and not msg_dict.get("content"):
+			reasoning_value = msg_dict["reasoning_content"]
+			break
+	if reasoning_value is not None:
+		# Ensure the content dict also has reasoning_content
+		for msg_dict in result:
+			if "content" in msg_dict and "reasoning_content" not in msg_dict:
+				msg_dict["reasoning_content"] = reasoning_value
+				break
+
 	# Belt-and-suspenders: if the message has text_reasoning Content but
 	# no output dict ended up with reasoning_content, extract it directly.
 	# This catches cases where the upstream _prepare_message_for_openai
@@ -178,7 +196,11 @@ def _patched_prepare_message_for_openai(self, message):
 					if reasoning_text:
 						break
 			if reasoning_text:
-				result[-1]["reasoning_content"] = reasoning_text
+				# Put reasoning_content on EVERY assistant message dict —
+				# DeepSeek requires it on every dict when tool calls are present.
+				for msg_dict in result:
+					if "reasoning_content" not in msg_dict:
+						msg_dict["reasoning_content"] = reasoning_text
 				logger.warning(
 					"Belt-and-suspenders: injected missing reasoning_content "
 					"(len=%d) for message role=%s — upstream serialization "
@@ -192,6 +214,49 @@ def _patched_prepare_message_for_openai(self, message):
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai = _patched_parse_response
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai = _patched_parse_update
 _openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = _patched_prepare_message_for_openai
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic patch: log DeepSeek API request when thinking mode is enabled
+# ---------------------------------------------------------------------------
+_orig_prepare_options = _openai_client_mod.RawOpenAIChatCompletionClient._prepare_options
+
+
+def _patched_prepare_options(self, messages, options):
+	"""Patched _prepare_options: logs request body for thinking-mode debugging."""
+	result = _orig_prepare_options(self, messages, options)
+
+	thinking_cfg = result.get("thinking")
+	if isinstance(thinking_cfg, dict) and thinking_cfg.get("type") == "enabled":
+		msg_summary = []
+		for i, msg in enumerate(result.get("messages", [])):
+			has_reasoning = "reasoning_content" in msg
+			role = msg.get("role", "?")
+			has_content = "content" in msg
+			has_tool_calls = "tool_calls" in msg
+			content_len = len(str(msg.get("content", ""))) if has_content else 0
+			reasoning_len = len(str(msg.get("reasoning_content", ""))) if has_reasoning else 0
+			msg_summary.append(
+				f"  [{i}] role={role} content={has_content}({content_len}c) "
+				f"tool_calls={has_tool_calls} reasoning_content={has_reasoning}({reasoning_len}r)"
+			)
+		# Also dump the full messages JSON (truncated) for deep debugging
+		messages_json = json.dumps(
+			result.get("messages", []), indent=2, default=str, ensure_ascii=False
+		)[:8000]
+		logger.warning(
+			"DeepSeek thinking-mode request: model=%s messages=%d reasoning_effort=%s\n%s\n---FULL MESSAGES---\n%s",
+			result.get("model"),
+			len(result.get("messages", [])),
+			result.get("reasoning_effort"),
+			"\n".join(msg_summary),
+			messages_json,
+		)
+
+	return result
+
+
+_openai_client_mod.RawOpenAIChatCompletionClient._prepare_options = _patched_prepare_options
 
 
 # ---------------------------------------------------------------------------

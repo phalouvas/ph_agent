@@ -240,17 +240,16 @@ def _patched_prepare_options(self, messages, options):
 				f"  [{i}] role={role} content={has_content}({content_len}c) "
 				f"tool_calls={has_tool_calls} reasoning_content={has_reasoning}({reasoning_len}r)"
 			)
-		# Also dump the full messages JSON (truncated) for deep debugging
 		messages_json = json.dumps(
 			result.get("messages", []), indent=2, default=str, ensure_ascii=False
 		)[:8000]
-		logger.warning(
-			"DeepSeek thinking-mode request: model=%s messages=%d reasoning_effort=%s\n%s\n---FULL MESSAGES---\n%s",
-			result.get("model"),
-			len(result.get("messages", [])),
-			result.get("reasoning_effort"),
-			"\n".join(msg_summary),
-			messages_json,
+		debug_log(
+			"DeepSeek thinking-mode API request",
+			f"model={result.get('model')} messages={len(result.get('messages', []))} "
+			f"reasoning_effort={result.get('reasoning_effort')}\n"
+			f"{chr(10).join(msg_summary)}\n"
+			f"---FULL MESSAGES---\n{messages_json}",
+			level="WARNING",
 		)
 
 	return result

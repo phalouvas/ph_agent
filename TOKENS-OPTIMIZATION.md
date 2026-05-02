@@ -15,10 +15,8 @@ framework_agent.py:657-668 — All historical reasoning_content is echoed back i
 
 Recommendation: After auto-summarization or after N turns, strip reasoning content from older messages. Since summaries capture the outcome of reasoning (not the process), old reasoning chains can be safely dropped. Add a configurable max_reasoning_turns threshold.
 
-3. No Prompt Caching Prefix Optimization
-framework_agent.py:929-935 — The Agent is built with instructions, tools, and context providers, but the message order isn't optimized for prompt caching. DeepSeek's API supports automatic prefix caching — cached prefixes save 90%+ on input token cost. Currently the system prompt + tool definitions (the most cacheable, static portion) may be interleaved with dynamic content.
-
-Recommendation: Structure the message list so static content (system instructions, tool schemas) always forms a contiguous prefix. The variable portion (conversation history, user message) should come after. This maximizes cache-hit rate without changing behavior. You're already tracking cache_hit_tokens — structuring for cacheability would increase those numbers.
+3. ~~No Prompt Caching Prefix Optimization~~ **COMPLETED**
+The `FrappeMemoryProvider.get_messages()` method now reorders messages so system summary messages form a contiguous prefix before user/assistant history. This maximizes DeepSeek automatic prefix cache hits (90%+ discount on static prefix tokens).
 
 4. Auxiliary API Calls Are Unbatched
 Every user turn can trigger up to 4 additional API calls:
@@ -45,39 +43,26 @@ framework_agent.py:903-914 — Four context providers (FrappeMemoryProvider, Ski
 Recommendation: Add a combined token budget for all context provider injections (e.g., max 2000 tokens total), with priority ordering. LLMMemoryProvider already caps at 15 memories; apply similar caps to skills and preferences.
 
 Architectural Improvements
-7. asyncio.run() Creates a New Event Loop Twice Per Turn
-framework_agent.py:1134,1136 — _run_agent() calls asyncio.run(_try_route_tools(...)) then asyncio.run(agent.run(...)). Each creates and destroys an event loop. In the streaming path, the producer thread also creates its own loop.
-
-Recommendation: Combine into a single async function:
-
-
-async def _run_agent_impl(session_name, messages, user, session_state):
-    agent = _build_agent(...)
-    agent_session = AgentSession(...)
-    await _try_route_tools(agent, session_name, user_text)
-    result = await agent.run(messages, session=agent_session)
-    return result, agent_session
-This halves event-loop creation overhead per turn.
+7. ~~asyncio.run() Creates a New Event Loop Twice Per Turn~~ **COMPLETED**
+`_run_agent()` now wraps both `_try_route_tools()` and `agent.run()` in a single `async def _impl()` function, called via a single `asyncio.run(_impl())`. This halves event-loop creation overhead per non-streaming turn.
 
 8. _extract_approval_data() Rebuilds the Agent Expensively — **REMOVED**
 This optimization is no longer applicable. The entire tool approval workflow (including `_extract_approval_data()`, `_build_auto_approval_messages()`, `run_after_approval()`, and the `Tool Approval Request` doctype) has been removed from the codebase. The `_build_agent()` call in `_extract_approval_data()` no longer exists.
 
-9. Cost Calculation Logic Is Triplicated
-agent_jobs.py:29-129 — _credit_user_token_usage() and _calculate_message_cost() duplicate the same pricing-resolution logic. framework_agent.py:716-770 — _credit_auxiliary_api_tokens() duplicates it again.
+9. ~~Cost Calculation Logic Is Triplicated~~ **COMPLETED**
+Extracted a single `_resolve_effective_rates(session_name) -> dict` function in `token_utils.py`, now used by `_credit_user_token_usage()` and `_calculate_message_cost()` in `agent_jobs.py`, plus `_credit_auxiliary_api_tokens()` in `framework_agent.py`. Also added `_calculate_cost_from_rates()` for the 3-tier cost formula.
 
-Recommendation: Extract a single _resolve_effective_rates(session_name) -> tuple function used by all three.
-
-10. Streaming Thread Safety
-framework_agent.py:1264-1392 — The streaming producer thread calls frappe.init() / frappe.connect() / frappe.destroy() manually. This pattern is fragile — if an exception occurs between init and destroy, the Frappe connection leaks. The finally block helps, but a nested try/finally around the asyncio.run(_consume()) call would be safer.
+10. ~~Streaming Thread Safety~~ **COMPLETED**
+Moved `initialized = True` before `frappe.connect()` so `frappe.destroy()` always runs if `frappe.init()` succeeded, even when `connect()` fails. Added defensive `try/except` around `frappe.db.commit()` in the `finally` block so a commit failure doesn't prevent `frappe.destroy()`.
 
 Summary of Impact
-Issue	Impact	Effort
-Tool router → embeddings	Saves 1 API call/turn (~500-1500 tokens)	Medium
-Strip old reasoning content	Saves 30-70% of conversation tokens	Low
-Prompt caching structure	90%+ discount on static prefix tokens	Low
-Batch auxiliary calls	Saves 1-2 API calls/turn	Medium
-Cheap model for memory extraction	Saves cost on background extraction	Low (1 line)
-Accurate token counting	Better compaction timing	Medium
-Combine asyncio.run() calls	Small latency improvement	Low
-Deduplicate cost logic	Code quality, no runtime change	Low
+Issue	Impact	Status
+Tool router → embeddings	Saves 1 API call/turn (~500-1500 tokens)	**COMPLETED**
+Strip old reasoning content	Saves 30-70% of conversation tokens	**COMPLETED**
+Prompt caching structure	90%+ discount on static prefix tokens	**COMPLETED**
+Batch auxiliary calls	Saves 1-2 API calls/turn	Not Started
+Cheap model for memory extraction	Saves cost on background extraction	Not Started
+Accurate token counting	Better compaction timing	Not Started
+Combine asyncio.run() calls	Small latency improvement	**COMPLETED**
+Deduplicate cost logic	Code quality, no runtime change	**COMPLETED**
 The highest-ROI changes are prompt cache prefix optimization and stripping old reasoning content — both are low-effort and can significantly reduce token consumption in long conversations.

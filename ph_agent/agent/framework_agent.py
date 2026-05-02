@@ -1576,6 +1576,23 @@ def run_after_approval(
 		)
 		raise
 
+	# Fetch reasoning_content from the original assistant message.
+	# DeepSeek thinking mode requires reasoning_content to be echoed back
+	# in subsequent messages within the same conversation.
+	original_reasoning = None
+	try:
+		last_msg = frappe.get_all(
+			"Chat Message",
+			filters={"chat_session": session_name, "sender_type": "Agent"},
+			fields=["reasoning_content"],
+			order_by="creation desc",
+			limit=1,
+		)
+		if last_msg:
+			original_reasoning = last_msg[0].reasoning_content or None
+	except Exception:
+		pass
+
 	# Get session state from conversation_state.
 	# This is now a full AgentSession.to_dict() output (with "type": "session").
 	# Reconstruct the AgentSession to extract the state dict with proper
@@ -1634,8 +1651,14 @@ def run_after_approval(
 					}
 				),
 			)
+			# Build assistant message with text_reasoning if available (DeepSeek requirement)
+			assistant_msg = Message("assistant", [approval_request_content])
+			if original_reasoning:
+				assistant_msg.contents.append(
+					Content.from_text_reasoning(protected_data=json.dumps(original_reasoning))
+				)
 			messages = [
-				Message("assistant", [approval_request_content]),
+				assistant_msg,
 				Message("user", [approval_response]),
 				Message("tool", [error_result]),
 			]
@@ -1650,8 +1673,14 @@ def run_after_approval(
 			# 1. The assistant message containing the original function_approval_request
 			# 2. The user message containing the function_approval_response
 			# The original user query is supplied automatically by FrappeMemoryProvider.
+			# Build assistant message with text_reasoning if available (DeepSeek requirement)
+			assistant_msg = Message("assistant", [approval_request_content])
+			if original_reasoning:
+				assistant_msg.contents.append(
+					Content.from_text_reasoning(protected_data=json.dumps(original_reasoning))
+				)
 			messages = [
-				Message("assistant", [approval_request_content]),
+				assistant_msg,
 				Message("user", [approval_response]),
 			]
 			response, agent_session, available_tools = _run_agent(

@@ -431,7 +431,8 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	
-	# Build enriched content: append extracted file text from attachments
+	# Build enriched content: substitute {{variable}} placeholders with
+	# extracted file text, then append file metadata for tools.
 	agent_content = content
 	if file_names:
 		# Store file names in cache keyed by session so tools can auto-attach
@@ -441,6 +442,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			expires_in_sec=600,
 		)
 		file_texts = []
+		failed_files = []
 		emit_status(frappe._("Extracting file contents…"))
 		for file_name in file_names:
 			if is_cancelled():
@@ -459,7 +461,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
 			extract_elapsed = time.time() - extract_start
 			if text:
-				filename = frappe.db.get_value('File', file_name, 'file_name')
+				filename = frappe.db.get_value("File", file_name, "file_name")
 				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
 				debug_log(
 					"File extraction complete",
@@ -468,7 +470,8 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					session=session,
 				)
 			else:
-				filename = frappe.db.get_value('File', file_name, 'file_name')
+				filename = frappe.db.get_value("File", file_name, "file_name")
+				failed_files.append(filename)
 				debug_log(
 					"File extraction returned no text",
 					f"Session: {session}, File: {filename}, Elapsed: {extract_elapsed:.2f}s",
@@ -476,22 +479,74 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					level="WARNING",
 				)
 		if file_texts:
+			# Substitute {{variable}} placeholders in the template with the
+			# extracted file text so the LLM sees the actual content instead
+			# of literal "{{actual_text}}" markers.
+			combined_text = "\n\n".join(file_texts)
+			import re
+			agent_content = re.sub(
+				r"\{\{\w+\}\}",
+				combined_text,
+				content,
+			)
+			# If no {{variable}} placeholders were found, append text at end
+			if agent_content == content:
+				agent_content = content + "\n\n" + combined_text
+
 			# Build a metadata block with File doc names so the agent can use
 			# attach_files_to_record to link files to created records.
-			# Placed BEFORE extracted text so the LLM sees it prominently.
+			# Placed AFTER extracted text so it doesn't interrupt the flow.
 			file_meta_lines = []
 			for file_name in file_names:
-				filename = frappe.db.get_value('File', file_name, 'file_name')
+				filename = frappe.db.get_value("File", file_name, "file_name")
 				file_meta_lines.append(f"- `{file_name}` ({filename})")
 			file_meta_block = (
-				"**Attached Files (use these names with attach_files_to_record):**\n"
+				"\n\n**Attached Files (use these names with attach_files_to_record):**\n"
 				+ "\n".join(file_meta_lines)
 			)
-			agent_content = (
-				content
-				+ "\n\n" + file_meta_block
-				+ "\n\n" + "\n\n".join(file_texts)
+			agent_content += file_meta_block
+
+			if failed_files:
+				debug_log(
+					"Some files could not be extracted",
+					f"Session: {session}, Failed: {', '.join(failed_files)}",
+					session=session,
+					level="WARNING",
+				)
+		elif failed_files:
+			# All attached files failed — create an error message in the
+			# chat so the user knows why no response was generated.
+			failed_names = ", ".join(failed_files)
+			error_content = frappe._(
+				"Could not extract text from the attached file(s): **{0}**. "
+				"The file may be image-based (scanned), password-protected, or corrupted. "
+				"Please try a different file or paste the text directly."
+			).format(failed_names)
+			error_msg = frappe.get_doc(
+				{
+					"doctype": "Chat Message",
+					"chat_session": session,
+					"sender_type": "Agent",
+					"message_type": "Agent",
+					"content": error_content,
+				}
+			).insert(ignore_permissions=False)
+			frappe.db.commit()
+			release_lock()
+			frappe.cache().delete_value(cancel_key)
+			emit_status("")
+			frappe.publish_realtime(
+				event="new_message",
+				message={
+					"session": session,
+					"name": error_msg.name,
+					"sender_type": "Agent",
+					"content": error_content,
+					"creation": str(error_msg.creation),
+				},
+				room="website",
 			)
+			return
 
 	emit_status(frappe._("Calling AI…"))
 

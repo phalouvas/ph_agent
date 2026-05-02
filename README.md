@@ -11,7 +11,6 @@ A Frappe app that integrates agentic AI chatbots into ERPNext, enabling autonomo
 - **Tool Registry** — Register built-in or custom Python tools that the agent can call; group them by category (General, ERPNext, Financial, Web, Meta)
 - **Per-persona tool filtering** — Restrict which tool groups a persona can access, dramatically reducing token overhead
 - **Per-turn tool routing** — Optional lightweight LLM router selects only the relevant tools each turn, reducing token usage further
-- **Tool approval workflow** — Tools marked as requiring approval pause execution and show an approval UI before proceeding
 - **File attachments** — Attach files to chat messages; files are stored as Frappe `File` records linked to the message
 - **File extraction** — Attach files (PDF, DOCX, PPTX, XLSX, HTML, etc.) and the agent automatically reads their content using markitdown
 - **Conversation memory** — Full message history is passed to the agent on every turn, enabling follow-up questions and contextual replies
@@ -89,7 +88,6 @@ The Tool Registry defines which tools the agent can call. Each tool entry specif
 - **Tool Name** — Unique identifier used by the agent
 - **Script Type** — `Existing Function` (import a dotted Python path) or `Custom Script` (inline Python with a `run_tool()` function)
 - **Tool Group** — Category for persona-level filtering: `General`, `ERPNext`, `Financial`, `Web`, `Meta`
-- **Requires Approval** — If checked, the agent will pause and show an approval UI before executing the tool
 
 Go to **PH Agent → Tool Registry** to enable, disable, or add tools.
 

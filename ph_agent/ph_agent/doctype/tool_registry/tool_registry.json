@@ -13,8 +13,7 @@
   "description",
   "python_function",
   "custom_script",
-  "parameters_json",
-  "requires_approval"
+  "parameters_json"
  ],
  "fields": [
   {
@@ -75,12 +74,6 @@
    "fieldtype": "Code",
    "label": "Parameters JSON",
    "options": "JSON"
-  },
-  {
-   "default": "0",
-   "fieldname": "requires_approval",
-   "fieldtype": "Check",
-   "label": "Requires Approval"
   }
  ],
  "links": [],

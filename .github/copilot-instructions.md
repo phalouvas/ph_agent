@@ -20,7 +20,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 - **Directory structure**:
   - `ph_agent/config/` – UI configuration (empty)
   - `ph_agent/patches/` – Database migrations (empty)
-  - `ph_agent/ph_agent/doctype/` – DocTypes: `Chat Session`, `Chat Message`, `LLM Provider`, `Tool Registry`, `Tool Approval Request`
+  - `ph_agent/ph_agent/doctype/` – DocTypes: `Chat Session`, `Chat Message`, `LLM Provider`, `Tool Registry`
   - `ph_agent/ph_agent/page/chat/` – Chat UI implementation (`chat.js`)
   - `ph_agent/public/` – Front‑end assets (`css/chat.css`)
   - `ph_agent/templates/` – Website pages (empty)
@@ -65,8 +65,7 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
   - `Chat Session` has two fields: `session_state` (Code/JSON, read_only) and `last_state_update` (Datetime, read_only).
   - State is serialized via `AgentSession.to_dict()` which preserves `SerializationProtocol` type info for proper round‑trip deserialization (including `InMemoryHistoryProvider` messages).
   - State is restored via `AgentSession.from_dict()` which reconstructs `SerializationProtocol` objects (e.g., `Message` instances) from the stored JSON.
-  - State is saved every turn, even when tool approval is triggered (stored in `conversation_state.session_state` for continuation).
-  - Approval workflow: `run_after_approval()` loads state from `conversation_state.session_state`, passes it to `_run_agent()`, and saves the updated state back to the Chat Session.
+  - State is saved every turn for continuity across requests.
 - **Avoid pitfalls**:
   - Do **not** add `frappe` to dependencies.
   - Always decorate API methods with `@frappe.whitelist()`.
@@ -89,15 +88,12 @@ Refer to `.editorconfig`, `.pre-commit-config.yaml`, and `pyproject.toml` for de
 | `ph_agent/ph_agent/agent/framework_agent.py` | LLM agent implementation |
 | `ph_agent/ph_agent/agent/tools/tool_manager.py` | Tool registration and caching |
 | `ph_agent/ph_agent/doctype/tool_registry/tool_registry.py` | Tool Registry DocType controller |
-| `ph_agent/ph_agent/doctype/tool_approval_request/tool_approval_request.py` | Tool approval workflow |
 | `ph_agent/ph_agent/doctype/chat_session/chat_session.py` | Chat Session DocType controller (state cleanup on close/archive) |
 | `ph_agent/ph_agent/page/chat/chat.js` | Chat UI front‑end |
 | `ph_agent/public/css/chat.css` | Chat UI styles |
 
 **Link, don’t embed**: Consult the existing documentation (README, license) and Frappe framework documentation for broader context.
 
-## Tool Management & Approval Workflow
+## Tool Management
 - **Tool Registry**: Register Python functions as AI‑callable tools via the Tool Registry DocType.
 - **Tool Manager**: The `ToolManager` class loads, caches, and injects context into tools from the registry.
-- **Approval Mechanism**: Built‑in approval workflow using `Tool Approval Request` DocType and agent‑framework's `approval_mode="always_require"`.
-- **Middleware Integration**: Custom approval middleware can extend the built‑in approval logic with Frappe permissions and role‑based access.

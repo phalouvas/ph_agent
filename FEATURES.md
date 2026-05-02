@@ -16,11 +16,10 @@ PH Agent is a Frappe app that integrates agentic AI chatbots into ERPNext, enabl
   - [Temporary Sessions](#temporary-sessions)
 - [8. File Handling](#8-file-handling)
 - [9. Token Management & Auto-Summarization](#9-token-management--auto-summarization)
-- [10. Tool Approval Workflow](#10-tool-approval-workflow)
-- [11. Saved Prompts](#11-saved-prompts)
-- [12. Real-Time Communication](#12-real-time-communication)
-- [13. Security & Permissions](#13-security--permissions)
-- [14. Configuration & Setup](#14-configuration--setup)
+- [10. Saved Prompts](#11-saved-prompts)
+- [11. Real-Time Communication](#12-real-time-communication)
+- [12. Security & Permissions](#13-security--permissions)
+- [13. Configuration & Setup](#14-configuration--setup)
 
 ---
 
@@ -32,7 +31,7 @@ A full-featured chat interface embedded in the ERPNext desk, powered by `vue-adv
 |---------|-------------|
 | **Rich Chat UI** | Modern chat interface with message bubbles, timestamps, and sender indicators |
 | **Real-Time Streaming** | Agent responses appear incrementally via WebSocket — no waiting for full responses |
-| **Message Status Indicators** | Spinners during generation, error messages on failures, approval-waiting states |
+| **Message Status Indicators** | Spinners during generation and error messages on failures |
 | **Auto-Scroll** | Automatically scrolls to new content when near the bottom; respects manual scroll-up |
 | **Shadow DOM Styling** | Custom styles injected into the chat component's shadow root for consistent theming |
 | **Stop Generation** | Cancel ongoing AI generation with a red stop button |
@@ -108,7 +107,7 @@ The agent can use tools to interact with Frappe/ERPNext data and perform computa
 | **Custom Script** | Inline Python code with mandatory `run_tool()` function; runs in a restricted safe namespace |
 | **Server Script** | Link to a Frappe Server Script — reads its script content at runtime |
 | **Parameters JSON** | JSON Schema defining tool input parameters; auto-builds typed input models |
-| **Approval Flag** | Mark tools as requiring human approval before execution |
+
 | **Enable/Disable** | Toggle tools on/off to include or exclude them from the agent |
 | **Cache Invalidation** | Tool cache automatically invalidated on create, update, or delete |
 
@@ -193,7 +192,7 @@ Full session and message management capabilities.
 | **Message Regeneration** | Regenerate agent responses with a single click — the message stays in place with a spinner |
 | **Conversation Summarization** | Manually trigger summarization of selected or all messages in a session |
 | **Session State Recovery** | Full agent state is persisted and restored, enabling seamless continuation after page reloads |
-| **Temporary Sessions** | Toggle a session as temporary with the 👻 button — it will be auto-deleted when you navigate away, switch rooms, or close the tab. An hourly scheduled job cleans up any orphaned temporary sessions. Messages, memories, and tool approvals are all cascade-deleted. |
+| **Temporary Sessions** | Toggle a session as temporary with the 👻 button — it will be auto-deleted when you navigate away, switch rooms, or close the tab. An hourly scheduled job cleans up any orphaned temporary sessions. Messages and memories are all cascade-deleted. |
 
 ### Temporary Sessions
 
@@ -205,7 +204,7 @@ Temporary sessions behave identically to normal sessions during their lifetime �
 | **Auto-Delete on Navigation** | Switching to another room or creating a new chat automatically deletes the previous temporary session |
 | **Auto-Delete on Tab Close** | Closing the browser tab fires a `sendBeacon` request to delete the active temporary session |
 | **Hourly Cleanup** | A scheduled job deletes any temporary sessions older than 1 hour (safety net for browser crashes) |
-| **Cascade Deletion** | Deleting a temporary session removes all its messages, attached files, user memories, and tool approval requests |
+| **Cascade Deletion** | Deleting a temporary session removes all its messages, attached files, and user memories |
 | **Cross-Session Context** | Temporary session summaries are excluded from cross-session context injection into new sessions |
 
 ---
@@ -245,22 +244,7 @@ Intelligent token tracking to stay within context limits.
 
 ---
 
-## 10. Tool Approval Workflow
-
-Human-in-the-loop approval for sensitive tool executions.
-
-| Feature | Description |
-|---------|-------------|
-| **Approval Requests** | When the agent wants to call a tool marked as requiring approval, a **Tool Approval Request** record is created |
-| **Approval UI** | Administrators approve or reject requests directly from the Tool Approval Request form |
-| **Conversation State** | Full agent session state is saved in the approval request for seamless continuation |
-| **Post-Approval Execution** | Approved tools are executed automatically and the conversation resumes |
-| **Rejection Handling** | Rejected tool calls are communicated back to the agent |
-| **Auto-Cancellation** | Pending approval requests are automatically cancelled when the parent session or message is deleted |
-
----
-
-## 11. Saved Prompts
+## 10. Saved Prompts
 
 Reusable prompt templates with variable substitution.
 
@@ -274,7 +258,7 @@ Reusable prompt templates with variable substitution.
 
 ---
 
-## 12. Real-Time Communication
+## 11. Real-Time Communication
 
 All real-time events are delivered via Frappe's built-in WebSocket system.
 
@@ -287,15 +271,13 @@ All real-time events are delivered via Frappe's built-in WebSocket system.
 | `token_warning` | Warning when approaching context limits |
 | `agent_status` | Status updates (e.g., "Calling AI…", "Extracting files…") |
 | `generation_cancelled` | User has cancelled ongoing generation |
-| `approval_needed` | Agent is requesting tool approval |
-| `approval_resolved` | Tool approval has been granted or denied |
 | `suggestions_ready` | Follow-up question suggestions are available |
 | `message_edited` | A message has been edited and subsequent messages deleted |
 | `session_renamed` | Session title has been auto-generated |
 
 ---
 
-## 13. Security & Permissions
+## 12. Security & Permissions
 
 | Aspect | Description |
 |--------|-------------|
@@ -309,7 +291,7 @@ All real-time events are delivered via Frappe's built-in WebSocket system.
 
 ---
 
-## 14. Configuration & Setup
+## 13. Configuration & Setup
 
 | Feature | Description |
 |---------|-------------|

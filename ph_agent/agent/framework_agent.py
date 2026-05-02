@@ -681,7 +681,7 @@ class FrappeMemoryProvider(HistoryProvider):
 		history: list[Message] = []
 		for msg in prior_messages:
 			content = msg.content or ""
-			if "⏳ Generating response" in content or "Waiting for approval" in content:
+			if "⏳ Generating response" in content:
 				continue
 			if msg.message_type == "Summary":
 				history.append(Message("system", [f"Conversation summary: {content}"]))
@@ -1073,88 +1073,6 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		)
 
 
-def _extract_approval_data(response, session_name: str | None = None, available_tools: set[str] | None = None) -> dict[str, Any] | None:
-	"""Extract approval data from an agent response.
-
-	If ``session_name`` is provided, validates that each tool being approved
-	actually exists in the current session's tool set. Tools not in the set
-	are silently skipped (the LLM hallucinated them), preventing spurious
-	approval requests for tools the persona cannot use.
-	"""
-	# Use provided tool names if available; otherwise resolve from session.
-	# Avoids an expensive _build_agent() call when tools are already known.
-	if available_tools is None and session_name:
-		try:
-			temp_agent = _build_agent(session_name=session_name)
-			available_tools = _get_available_tool_names(temp_agent)
-		except Exception:
-			available_tools = None  # Fall back to no filtering
-
-	approval_requests: list[dict[str, str]] = []
-	tool_calls: list[dict[str, str]] = []
-
-	for msg in response.messages:
-		for content in msg.contents:
-			if content.type != "function_approval_request" or not content.function_call:
-				continue
-			function_call = content.function_call
-			tool_name = function_call.name or ""
-
-			# Skip tools that don't exist in the current session's tool set
-			if available_tools is not None and tool_name and tool_name not in available_tools:
-				logger.warning(
-					"Skipping approval request for tool '%s' — not in session's tool set.",
-					tool_name,
-				)
-				continue
-
-			arguments = function_call.arguments
-
-			# Handle arguments - they could be dict, string, or string containing JSON
-			if isinstance(arguments, dict):
-				arguments_str = json.dumps(arguments)
-			elif isinstance(arguments, str):
-				# Try to parse as JSON first
-				try:
-					parsed = json.loads(arguments)
-					if isinstance(parsed, dict):
-						arguments_str = json.dumps(parsed)
-					else:
-						# Not a dict, store as string
-						arguments_str = arguments
-				except (json.JSONDecodeError, TypeError):
-					# Not valid JSON, store as string
-					arguments_str = arguments or "{}"
-			else:
-				# Convert other types to string
-				arguments_str = str(arguments) if arguments is not None else "{}"
-
-			approval_requests.append(
-				{
-					"id": content.id or "",
-					"call_id": function_call.call_id or "",
-					"name": function_call.name or "",
-					"arguments": arguments_str,
-				}
-			)
-			tool_calls.append(
-				{
-					"id": function_call.call_id or "",
-					"name": function_call.name or "",
-					"arguments": arguments_str,
-				}
-			)
-
-	if not approval_requests:
-		return None
-
-	return {
-		"approval_needed": True,
-		"tool_calls": tool_calls,
-		"conversation_state": {"approval_requests": approval_requests},
-	}
-
-
 def _run_agent(
 	session_name: str,
 	message: Message | list,
@@ -1262,7 +1180,7 @@ def _extract_reasoning_from_response(response) -> str:
 
 def get_agent_response(
 	session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False
-) -> tuple[str, int, int, int, dict | None, str]:
+) -> tuple[str, int, int, int, str]:
 	"""Get agent response (non-streaming).
 
 	Args:
@@ -1274,7 +1192,7 @@ def get_agent_response(
 			to prevent stale messages from leaking into the new context.
 
 	Returns:
-		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content)
+		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, reasoning_content)
 	"""
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
@@ -1282,7 +1200,7 @@ def get_agent_response(
 	# Load session state before running agent (skip for regeneration)
 	stored_state = None if skip_session_state else _load_session_state(session_name)
 
-	response, agent_session, available_tools = _run_agent(
+	response, agent_session, _available_tools = _run_agent(
 		session_name, Message("user", [user_message]), session_state=stored_state
 	)
 
@@ -1290,23 +1208,16 @@ def get_agent_response(
 		raise asyncio.CancelledError()
 
 	input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
-	approval_data = _extract_approval_data(response, session_name=session_name, available_tools=available_tools)
 	reasoning_content = _extract_reasoning_from_response(response)
 
-	# Always save session state, regardless of approval flow
+	# Always save session state
 	_save_session_state(session_name, agent_session)
-
-	if approval_data and agent_session.state:
-		# Also store full session dict in approval data for continuation.
-		# run_after_approval will reconstruct the AgentSession from this.
-		approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
 
 	return (
 		_fix_agent_response_text(response.text or ""),
 		input_tokens,
 		output_tokens,
 		cache_hit_tokens,
-		approval_data,
 		reasoning_content,
 	)
 
@@ -1339,7 +1250,7 @@ def get_agent_response_stream(
 				stored_state = None if skip_session_state else _load_session_state(session_name)
 
 				# Use streaming agent runner — returns (stream, AgentSession)
-				stream, agent_session, available_tools = await _run_agent_stream(
+				stream, agent_session, _available_tools = await _run_agent_stream(
 					session_name, Message("user", [user_message]), session_state=stored_state
 				)
 
@@ -1422,20 +1333,10 @@ def get_agent_response_stream(
 					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}, Cache hit tokens: {cache_hit_tokens}",
 					session=session_name,
 				)
-				approval_data = _extract_approval_data(final_response, session_name=session_name, available_tools=available_tools)
-
-				# Always save session state, regardless of approval flow
+				# Always save session state
 				_save_session_state(session_name, agent_session)
 
-				if approval_data:
-					# Also store full session dict in approval data for continuation.
-					# run_after_approval will reconstruct the AgentSession from this.
-					approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-					result_queue.put(
-						("approval", (approval_data, input_tokens, output_tokens, cache_hit_tokens))
-					)
-				else:
-					result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
+				result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
 			except Exception as exc:
 				result_queue.put(("error", exc))
 
@@ -1503,312 +1404,12 @@ def get_agent_response_stream(
 		if event_type == "chunk":
 			yield payload, False, 0, 0, 0
 			continue
-		if event_type == "approval":
-			approval_data, input_tokens, output_tokens, cache_hit_tokens = payload
-			yield approval_data, True, input_tokens, output_tokens, cache_hit_tokens
-			break
 		if event_type == "done":
 			chunk, input_tokens, output_tokens, cache_hit_tokens = payload
 			yield (chunk, full_reasoning), True, input_tokens, output_tokens, cache_hit_tokens
 			break
 		if event_type == "error":
 			raise payload
-
-
-def _build_auto_approval_messages(
-	response: Any,
-	approval_data: dict[str, Any],
-	original_reasoning: str | None,
-) -> list[Any] | None:
-	"""Build messages to auto-approve recursive tool calls.
-
-	Extracts function_approval_request items from the response messages,
-	creates matching function_approval_response (approved=True) items,
-	and returns [assistant_msg, user_msg] for the next _run_agent call.
-	"""
-	approval_requests = approval_data.get("approval_requests") or []
-	if not approval_requests:
-		return None
-
-	# Collect function_approval_request contents from the response
-	approval_request_contents: list[Any] = []
-	for msg in (response.messages or []):
-		for content in (msg.contents or []):
-			if getattr(content, "type", "") == "function_approval_request":
-				approval_request_contents.append(content)
-
-	if not approval_request_contents:
-		return None
-
-	# Build assistant message with the approval requests
-	assistant_msg = Message("assistant", list(approval_request_contents))
-	if original_reasoning:
-		try:
-			assistant_msg.contents.append(
-				Content.from_text_reasoning(
-					protected_data=json.dumps(original_reasoning)
-				)
-			)
-		except Exception:
-			pass
-
-	# Build user message with approval responses (all approved)
-	approval_responses: list[Any] = []
-	for content in approval_request_contents:
-		try:
-			fc = content.function_call
-			approval_responses.append(
-				Content.from_function_approval_response(
-					approved=True,
-					id=getattr(content, "id", "") or "",
-					function_call=fc,
-				)
-			)
-		except Exception:
-			continue
-
-	if not approval_responses:
-		return None
-
-	return [assistant_msg, Message("user", approval_responses)]
-
-
-def run_after_approval(
-	session_name: str,
-	conversation_state: dict[str, Any],
-	approved: bool,
-	user: str | None = None,
-) -> tuple[str, int, int, int, str, dict[str, Any] | None]:
-	import traceback
-
-	approval_requests = (conversation_state or {}).get("approval_requests") or []
-	if not approval_requests:
-		return "", 0, 0, 0, "", None
-
-	approval = approval_requests[0]
-	arguments_raw = approval.get("arguments") or "{}"
-	try:
-		arguments = json.loads(arguments_raw)
-	except Exception:
-		# If we can't parse as JSON, try to handle it as a string
-		# Some arguments might be simple strings
-		if isinstance(arguments_raw, str) and arguments_raw.strip():
-			# Try to parse as JSON one more time with error handling
-			try:
-				arguments = json.loads(arguments_raw)
-			except Exception:
-				# If it's not valid JSON, treat it as a string argument
-				arguments = {"input": arguments_raw}
-		else:
-			arguments = {}
-
-	# Ensure arguments is a dictionary
-	if not isinstance(arguments, dict):
-		arguments = {"input": str(arguments)}
-
-	approval_id = approval.get("id") or ""
-	tool_name = approval.get("name") or ""
-
-	try:
-		# Recreate the inner function_call Content
-		function_call = Content.from_function_call(
-			call_id=approval.get("call_id") or "",
-			name=tool_name,
-			arguments=arguments,
-		)
-		# Recreate the function_approval_request Content (what was in the original assistant message)
-		approval_request_content = Content.from_function_approval_request(
-			id=approval_id,
-			function_call=function_call,
-		)
-		# Create the approval response
-		approval_response = Content.from_function_approval_response(
-			approved=approved,
-			id=approval_id,
-			function_call=function_call,
-		)
-	except Exception as e:
-		frappe.log_error(
-			title=f"Error creating approval Content objects for {session_name}",
-			message=f"Error: {e!s}, Traceback: {traceback.format_exc()}",
-		)
-		raise
-
-	# Fetch reasoning_content from the original assistant message.
-	# DeepSeek thinking mode requires reasoning_content to be echoed back
-	# in subsequent messages within the same conversation.
-	original_reasoning = None
-	try:
-		last_msg = frappe.get_all(
-			"Chat Message",
-			filters={"chat_session": session_name, "sender_type": "Agent"},
-			fields=["reasoning_content"],
-			order_by="creation desc",
-			limit=1,
-		)
-		if last_msg:
-			original_reasoning = last_msg[0].reasoning_content or None
-	except Exception:
-		pass
-
-	# Get session state from conversation_state.
-	# This is now a full AgentSession.to_dict() output (with "type": "session").
-	# Reconstruct the AgentSession to extract the state dict with proper
-	# SerializationProtocol objects restored.
-	session_data = conversation_state.get("session_state", {})
-	if isinstance(session_data, dict) and session_data.get("type") == "session":
-		try:
-			restored_session = AgentSession.from_dict(session_data)
-			session_state = restored_session.state
-		except Exception:
-			session_state = session_data.get("state", {})
-	else:
-		session_state = session_data if isinstance(session_data, dict) else {}
-
-	try:
-		# --- Tool existence validation ---
-		# Build a temporary agent to check whether the approved tool is
-		# actually available in the current persona's tool set.  If the
-		# LLM hallucinated a tool that isn't in the persona's groups, we
-		# must NOT send the approval messages to the API — that would
-		# produce a malformed conversation (assistant message with
-		# tool_calls but no corresponding tool result), triggering a 400
-		# "insufficient tool messages" error from the LLM provider.
-		temp_agent = _build_agent(session_name=session_name, user=user)
-		available_tools = _get_available_tool_names(temp_agent)
-		tool_is_available = tool_name in available_tools
-
-		if not tool_is_available:
-			logger.warning(
-				"Approved tool '%s' is not available in persona's tool set "
-				"(session=%s, persona=%s). Injecting synthetic error result.",
-				tool_name,
-				session_name,
-				getattr(frappe.get_doc("Chat Session", session_name), "persona", "N/A"),
-			)
-			frappe.log_error(
-				title=f"Approved tool '{tool_name}' not available for session {session_name}",
-				message=(
-					f"Tool '{tool_name}' was approved but is not in the current persona's tool set.\n"
-					f"Available tools: {sorted(available_tools)}\n"
-					f"Session: {session_name}\n"
-					f"Arguments: {json.dumps(arguments, indent=2)}"
-				),
-			)
-			# Build a synthetic function_result with an error message so the
-			# LLM can gracefully respond to the failure instead of crashing.
-			error_result = Content.from_function_result(
-				call_id=approval.get("call_id") or "",
-				result=json.dumps(
-					{
-						"error": True,
-						"message": (
-							f"The tool '{tool_name}' is not available for this session's persona. "
-							f"Please use one of the available tools: {', '.join(sorted(available_tools))}."
-						),
-					}
-				),
-			)
-			# Build assistant message with text_reasoning if available (DeepSeek requirement)
-			assistant_msg = Message("assistant", [approval_request_content])
-			if original_reasoning:
-				assistant_msg.contents.append(
-					Content.from_text_reasoning(protected_data=json.dumps(original_reasoning))
-				)
-			messages = [
-				assistant_msg,
-				Message("user", [approval_response]),
-				Message("tool", [error_result]),
-			]
-			response, agent_session, available_tools = _run_agent(
-				session_name,
-				messages,
-				user=user,
-				session_state=session_state,
-			)
-		else:
-			# Per the Microsoft Agent Framework documentation, provide:
-			# 1. The assistant message containing the original function_approval_request
-			# 2. The user message containing the function_approval_response
-			# The original user query is supplied automatically by FrappeMemoryProvider.
-			# Build assistant message with text_reasoning if available (DeepSeek requirement)
-			assistant_msg = Message("assistant", [approval_request_content])
-			if original_reasoning:
-				assistant_msg.contents.append(
-					Content.from_text_reasoning(protected_data=json.dumps(original_reasoning))
-				)
-			messages = [
-				assistant_msg,
-				Message("user", [approval_response]),
-			]
-			response, agent_session, available_tools = _run_agent(
-				session_name,
-				messages,  # Pass both messages
-				user=user,
-				session_state=session_state,
-			)
-		input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
-		reasoning_content = _extract_reasoning_from_response(response)
-
-		# After the LLM receives tool results, it may request additional
-		# tools (e.g. refining a search).  If the response has no text
-		# — only new tool calls — auto-approve one round so the LLM
-		# gets a second chance to synthesise a text response from the
-		# accumulated results.  This avoids an infinite approval loop
-		# while still allowing the LLM to gather the data it needs.
-		MAX_AUTO_APPROVE_DEPTH = 1
-		for _auto_depth in range(MAX_AUTO_APPROVE_DEPTH + 1):
-			new_approval_data = _extract_approval_data(
-				response, session_name=session_name, available_tools=available_tools,
-			)
-			if not new_approval_data:
-				break
-
-			response_text = (response.text or "").strip()
-			if response_text:
-				break  # has meaningful text, let the caller show it
-
-			# Build auto-approval messages from the pending approval
-			# requests and re-invoke _run_agent with them pre-approved.
-			if _auto_depth < MAX_AUTO_APPROVE_DEPTH:
-				approval_messages = _build_auto_approval_messages(
-					response, new_approval_data, original_reasoning,
-				)
-				if approval_messages:
-					response2, agent_session2, available_tools2 = _run_agent(
-						session_name,
-						approval_messages,
-						user=user,
-						session_state=agent_session.state,
-					)
-					response = response2
-					agent_session = agent_session2
-					available_tools = available_tools2
-					usage = _get_usage_tokens(response.usage_details)
-					input_tokens += usage[0]
-					output_tokens += usage[1]
-					cache_hit_tokens += usage[2]
-					rc = _extract_reasoning_from_response(response)
-					if rc:
-						reasoning_content = (reasoning_content or "") + rc
-
-		# Save updated session state to Chat Session
-		_save_session_state(session_name, agent_session)
-
-		return (
-			_fix_agent_response_text(response.text or ""),
-			input_tokens,
-			output_tokens,
-			cache_hit_tokens,
-			reasoning_content,
-			new_approval_data,
-		)
-	except Exception as e:
-		frappe.log_error(
-			title=f"Error in _run_agent for {session_name}",
-			message=f"Error: {e!s}, Traceback: {traceback.format_exc()}",
-		)
-		raise
 
 
 def _provider_max_tokens(provider_doc) -> int:

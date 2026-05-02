@@ -59,10 +59,8 @@ async def _run_agent_impl(session_name, messages, user, session_state):
     return result, agent_session
 This halves event-loop creation overhead per turn.
 
-8. _extract_approval_data() Rebuilds the Agent Expensively
-framework_agent.py:1042-1044 — To validate tool names during approval extraction, _build_agent() is called again, which loads the LLM provider, builds skills, and instantiates all context providers — only to extract tool names.
-
-Recommendation: Cache the tool name set on the session state or pass it directly from _call_agent_background() where ToolManager.get_tools() was already called at line 165.
+8. _extract_approval_data() Rebuilds the Agent Expensively — **REMOVED**
+This optimization is no longer applicable. The entire tool approval workflow (including `_extract_approval_data()`, `_build_auto_approval_messages()`, `run_after_approval()`, and the `Tool Approval Request` doctype) has been removed from the codebase. The `_build_agent()` call in `_extract_approval_data()` no longer exists.
 
 9. Cost Calculation Logic Is Triplicated
 agent_jobs.py:29-129 — _credit_user_token_usage() and _calculate_message_cost() duplicate the same pricing-resolution logic. framework_agent.py:716-770 — _credit_auxiliary_api_tokens() duplicates it again.

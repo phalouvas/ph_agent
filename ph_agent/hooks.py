@@ -134,13 +134,6 @@ after_migrate = "ph_agent.patches.sample_skills.after_migrate"
 # Hook on document methods and events
 
 doc_events = {
-	# Cascade cancel Tool Approval Requests when session/message is deleted
-	"Chat Session": {
-		"on_trash": "ph_agent.api.agent_jobs.cancel_approvals_for_session",
-	},
-	"Chat Message": {
-		"on_trash": "ph_agent.api.agent_jobs.cancel_approvals_for_message",
-	},
 	# Cascade delete User Memory and Chat Sessions when persona is deleted
 	"Persona": {
 		"on_trash": "ph_agent.api.agent_jobs.cascade_delete_persona",

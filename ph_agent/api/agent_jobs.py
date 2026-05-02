@@ -12,7 +12,6 @@ from ph_agent.agent.framework_agent import (
 	generate_session_title,
 	get_agent_response,
 	get_agent_response_stream,
-	run_after_approval,
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
 from ph_agent.api.token_utils import (
@@ -569,7 +568,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			cache_hit_tokens = 0
 			streaming_successful = False
 			_new_message_sent = False
-			approval_data = None
 
 			debug_log(
 				"Starting streaming path",
@@ -583,11 +581,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 						raise asyncio.CancelledError()
 
 					if is_final:
-						# Check if this is an approval request (chunk is a dict with approval_data)
-						if isinstance(chunk, dict) and chunk.get("approval_needed"):
-							approval_data = chunk
-							streaming_successful = True
-						elif isinstance(chunk, tuple):
+						if isinstance(chunk, tuple):
 							# (response_text, reasoning_content) — response_text is empty
 							# because content was already streamed via chunks.
 							# Only extract reasoning and token counts.
@@ -631,20 +625,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 							},
 							room="website",
 						)
-
-				if approval_data:
-					# Credit tokens before entering approval flow (otherwise lost on early return)
-					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
-					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
-					# Persist reasoning_content before early return so
-					# run_after_approval can echo it back to DeepSeek.
-					if full_reasoning:
-						agent_msg.db_set("reasoning_content", full_reasoning)
-					# Handle approval flow
-					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
-					release_lock()
-					emit_status("")
-					return
 
 				if streaming_successful:
 					# Build content with reasoning block if reasoning exists
@@ -722,27 +702,13 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
 				try:
-					reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
+					reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 				except Exception as fallback_error:
 					frappe.log_error(
 						title=f"Non-streaming fallback also failed for session {session}",
 						message=f"{fallback_error}\n{traceback.format_exc()}"
 					)
 					raise  # Let the outer except Exception handle it
-
-				if approval_data:
-					# Credit tokens before entering approval flow (otherwise lost on early return)
-					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
-					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
-					# Persist reasoning_content before early return so
-					# run_after_approval can echo it back to DeepSeek.
-					if reasoning_content:
-						agent_msg.db_set("reasoning_content", reasoning_content)
-					# Handle approval flow
-					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
-					release_lock()
-					emit_status("")
-					return
 
 				# Build content with reasoning block if reasoning exists
 				processed_content = _fix_agent_response_text(reply)
@@ -773,21 +739,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			)
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
 			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
-			reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
-
-			if approval_data:
-				# Credit tokens before entering approval flow (otherwise lost on early return)
-				_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
-				_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
-				# Persist reasoning_content before early return so
-				# run_after_approval can echo it back to DeepSeek.
-				if reasoning_content:
-					agent_msg.db_set("reasoning_content", reasoning_content)
-				# Handle approval flow
-				_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
-				release_lock()
-				emit_status("")
-				return
+			reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 
 			# Build content with reasoning block if reasoning exists
 			processed_content = _fix_agent_response_text(reply)
@@ -1109,396 +1061,13 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 		)
 
 
-def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
-	"""
-	Handle a tool approval request from the agent.
-	Creates a Tool Approval Request document and notifies the user.
-
-	Args:
-		session: Chat Session name
-		agent_msg: The placeholder Chat Message document
-		approval_data: Dict with approval_needed, tool_calls, conversation_state
-		enqueued_by: User who enqueued the original job
-	"""
-	tool_calls = approval_data.get("tool_calls", [])
-	conversation_state = approval_data.get("conversation_state", {})
-
-	if not tool_calls:
-		return
-
-	# Use the first tool call for the approval request name/description
-	primary_tool = tool_calls[0]
-
-	# Find the tool to get its description
-	tool_description = ""
-	from ph_agent.agent.tools.tool_manager import ToolManager
-	tools = ToolManager.get_tools()
-	for tool_obj in tools:
-		if tool_obj.name == primary_tool["name"]:
-			tool_description = tool_obj.description or ""
-			break
-
-	# Update the placeholder message to show "Waiting for approval"
-	agent_msg.content = "🔐 Waiting for approval..."
-	agent_msg.message_type = "Agent"
-	agent_msg.save(ignore_permissions=True)
-	frappe.db.commit()
-
-	# Publish updated message
-	frappe.publish_realtime(
-		event="new_message",
-		message={
-			"session": session,
-			"name": agent_msg.name,
-			"sender_type": "Agent",
-			"content": "🔐 Waiting for approval...",
-			"creation": str(agent_msg.creation),
-		},
-		room="website",
-	)
-
-	# Create Tool Approval Request document
-	approval_doc = frappe.get_doc(
-		{
-			"doctype": "Tool Approval Request",
-			"tool_name": primary_tool["name"],
-			"tool_description": tool_description,
-			"tool_arguments": json.dumps(
-				{
-					tc["name"]: tc.get("arguments", "{}")
-					for tc in tool_calls
-				},
-				indent=2,
-			),
-			"chat_session": session,
-			"chat_message": agent_msg.name,
-			"status": "Pending",
-			"conversation_state": json.dumps(conversation_state, indent=2),
-			"agent_message_saved": 1,
-		}
-	).insert(ignore_permissions=True)
-	frappe.db.commit()
-
-	# Publish approval_needed event for the UI
-	frappe.publish_realtime(
-		event="approval_needed",
-		message={
-			"session": session,
-			"approval_name": approval_doc.name,
-			"tool_name": primary_tool["name"],
-			"tool_description": tool_description,
-			"tool_arguments": json.dumps(
-				{
-					tc["name"]: tc.get("arguments", "{}")
-					for tc in tool_calls
-				},
-				indent=2,
-			),
-		},
-		room="website",
-	)
-
-def _execute_approved_tool(approval_name):
-	"""
-	Background job: execute an approved tool and resume the conversation.
-	Called after an administrator approves a Tool Approval Request.
-
-	Args:
-		approval_name: Name of the Tool Approval Request document
-	"""
-	approval_doc = frappe.get_doc("Tool Approval Request", approval_name)
-
-	if approval_doc.status != "Approved":
-		return
-
-	session = approval_doc.chat_session
-	conversation_state = json.loads(approval_doc.conversation_state or "{}")
-	session_doc = frappe.get_doc("Chat Session", session)
-
-	try:
-		notify_user = approval_doc.approver or frappe.session.user
-		reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content, _new_approval_data = run_after_approval(
-			session_name=session,
-			conversation_state=conversation_state,
-			approved=True,
-			user=notify_user,
-		)
-
-		# The LLM may respond with new tool calls that also require
-		# approval (new_approval_data is not None).  Instead of
-		# creating recursive Tool Approval Requests — which can loop
-		# indefinitely when the LLM keeps requesting tools — we save
-		# whatever text reply the LLM generated and let the
-		# conversation continue.  The approved tool's results are
-		# already in the session state for the next user turn.
-		if not reply.strip():
-			reply = "The approved tool was executed. You can continue the conversation."
-
-		# Build content with reasoning block if reasoning exists
-		processed_content = _fix_agent_response_text(reply)
-		if reasoning_content:
-			reasoning_html = (
-				f'<details class="ph-reasoning-block">\n'
-				f'    <summary>\U0001f913 Thinking process</summary>\n'
-				f'{reasoning_content}\n'
-				f'</details>\n\n'
-			)
-			agent_content = reasoning_html + processed_content
-		else:
-			agent_content = processed_content
-
-		# Store the agent's response as a Chat Message
-		agent_msg = frappe.get_doc(
-			{
-				"doctype": "Chat Message",
-				"chat_session": session,
-				"sender_type": "Agent",
-				"message_type": "Agent",
-				"content": agent_content,
-				"reasoning_content": reasoning_content or None,
-				"input_tokens": input_tokens,
-				"output_tokens": output_tokens,
-				"cache_hit_tokens": cache_hit_tokens,
-			}
-		).insert(ignore_permissions=True)
-		frappe.db.commit()
-
-		# Update the placeholder message to show it was replaced
-		placeholder_msg_name = approval_doc.chat_message
-		if placeholder_msg_name and frappe.db.exists("Chat Message", placeholder_msg_name):
-			placeholder_msg = frappe.get_doc("Chat Message", placeholder_msg_name)
-			placeholder_msg.content = "✅ Tool approved and executed. See below for the response."
-			placeholder_msg.save(ignore_permissions=True)
-			frappe.db.commit()
-
-			# Publish update to placeholder
-			frappe.publish_realtime(
-				event="new_message",
-				message={
-					"session": session,
-					"name": placeholder_msg_name,
-					"sender_type": "Agent",
-					"content": "✅ Tool approved and executed. See below for the response.",
-					"creation": str(placeholder_msg.creation),
-				},
-				room="website",
-			)
-
-		# Publish the new agent message
-		frappe.publish_realtime(
-			event="new_message",
-			message={
-				"session": session,
-				"name": agent_msg.name,
-				"sender_type": "Agent",
-				"content": reply,
-				"creation": str(agent_msg.creation),
-			},
-			room="website",
-		)
-
-		# Publish approval_resolved event
-		frappe.publish_realtime(
-			event="approval_resolved",
-			message={
-				"session": session,
-				"approval_name": approval_name,
-				"status": "Approved",
-				"tool_name": approval_doc.tool_name,
-			},
-			room="website",
-		)
-
-		# Update token counts on session
-		_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
-
-		# Credit tokens to user-level aggregate
-		_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
-
-		# Post-response auto-compaction check for approved tool execution
-		session_doc = frappe.get_doc("Chat Session", session)
-		provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
-		context_length = provider_doc.context_length or 128000
-		auto_summary_threshold = provider_doc.auto_summary_threshold or 85
-		current_tokens = session_doc.estimated_conversation_tokens or 0
-		token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
-		if token_percentage > auto_summary_threshold and not _is_recently_summarized(session):
-			frappe.enqueue(
-				"ph_agent.api.agent_jobs._perform_auto_summary",
-				session=session,
-				enqueued_by=notify_user,
-				emit_status=None,
-				is_async=True,
-				queue="short",
-				timeout=120,
-			)
-
-		# Generate follow-up suggestions if enabled
-		if session_doc.enable_suggestions:
-			frappe.enqueue(
-				"ph_agent.api.agent_jobs._generate_suggestions_background",
-				session=session,
-				agent_message_id=agent_msg.name,
-				enqueued_by=notify_user,
-				queue="short",
-				timeout=120,
-			)
-
-	except Exception as e:
-		frappe.log_error(
-			title=f"Approved tool execution failed for {approval_name}",
-			message=f"{e}\n{traceback.format_exc()}",
-			reference_doctype="Tool Approval Request",
-			reference_name=approval_name,
-		)
-		# Save a user-visible error message so the user sees a graceful
-		# failure instead of a silent hang.
-		try:
-			error_msg = frappe.get_doc(
-				{
-					"doctype": "Chat Message",
-					"chat_session": session,
-					"sender_type": "Agent",
-					"message_type": "Agent",
-					"content": (
-						"⚠️ **Tool execution failed.**\n\n"
-						f"The approved tool could not be executed. This may happen when the "
-						f"tool is not available for the current persona's configuration.\n\n"
-						f"**Error details:** {str(e)[:500]}"
-					),
-				}
-			).insert(ignore_permissions=True)
-			frappe.db.commit()
-
-			# Publish the error message
-			frappe.publish_realtime(
-				event="new_message",
-				message={
-					"session": session,
-					"name": error_msg.name,
-					"sender_type": "Agent",
-					"content": error_msg.content,
-					"creation": str(error_msg.creation),
-				},
-				room="website",
-			)
-		except Exception:
-			pass  # Best-effort; the log_error above already captured the root cause
-
-		# Publish approval_resolved with error status
-		try:
-			frappe.publish_realtime(
-				event="approval_resolved",
-				message={
-					"session": session,
-					"approval_name": approval_name,
-					"status": "Error",
-					"tool_name": approval_doc.tool_name,
-				},
-				room="website",
-			)
-		except Exception:
-			pass
-
-
-def cancel_approvals_for_session(doc, method):
-	"""
-	Cascade delete all Tool Approval Requests linked to a Chat Session
-	when the session is deleted.
-
-	This runs in on_trash, which is called BEFORE Frappe's link validation,
-	so we delete the dependent records first to allow the session delete to proceed.
-
-	Uses raw DB delete to bypass link validation (the Tool Approval Request
-	references the session being deleted, so normal frappe.delete_doc would fail).
-
-	Called via doc_events hook: Chat Session > on_trash
-	"""
-	# Delete User Memory records linked to this session
-	frappe.db.delete("User Memory", {"source_session": doc.name})
-
-	linked_requests = frappe.get_all(
-		"Tool Approval Request",
-		filters={"chat_session": doc.name},
-		pluck="name",
-	)
-	for req_name in linked_requests:
-		frappe.db.delete("Tool Approval Request", {"name": req_name})
-	frappe.db.commit()
-
-
-def cancel_approvals_for_message(doc, method):
-	"""
-	Cascade delete all Tool Approval Requests linked to a Chat Message
-	when the message is deleted.
-	Also delete all File documents attached to the message.
-
-	This runs in on_trash, which is called BEFORE Frappe's link validation,
-	so we delete the dependent records first to allow the message delete to proceed.
-
-	Uses raw DB delete to bypass link validation (the Tool Approval Request
-	references the message being deleted, so normal frappe.delete_doc would fail).
-
-	Called via doc_events hook: Chat Message > on_trash
-	"""
-	# Delete User Memory records linked to this message
-	frappe.db.delete("User Memory", {"source_message": doc.name})
-
-	# If this message is referenced as the session's last_summary_message,
-	# clear that reference to avoid LinkExistsError
-	if doc.chat_session:
-		session_last_summary = frappe.db.get_value(
-			"Chat Session", doc.chat_session, "last_summary_message"
-		)
-		if session_last_summary == doc.name:
-			frappe.db.set_value(
-				"Chat Session", doc.chat_session, "last_summary_message", None
-			)
-
-	# Delete Tool Approval Requests
-	linked_requests = frappe.get_all(
-		"Tool Approval Request",
-		filters={"chat_message": doc.name},
-		pluck="name",
-	)
-	for req_name in linked_requests:
-		frappe.db.delete("Tool Approval Request", {"name": req_name})
-
-	# Delete attached File documents
-	file_names = frappe.get_all(
-		"File",
-		filters={"attached_to_doctype": "Chat Message", "attached_to_name": doc.name},
-		pluck="name",
-	)
-	for file_name in file_names:
-		try:
-			# Check if file still exists (might have been deleted already)
-			if frappe.db.exists("File", file_name):
-				# Use force=True to bypass link validation (File references Chat Message being deleted)
-				frappe.delete_doc("File", file_name, ignore_permissions=True, force=True)
-			else:
-				# File was already deleted, log for debugging
-				frappe.log_error(
-					f"File {file_name} attached to message {doc.name} was already deleted",
-					"ph_agent_file_deletion"
-				)
-		except Exception as e:
-			# Log error but continue with other files
-			frappe.log_error(
-				f"Failed to delete file {file_name} attached to message {doc.name}: {e!s}",
-				"ph_agent_file_deletion"
-			)
-
-	frappe.db.commit()
-
-
 def cascade_delete_persona(doc, method):
 	"""
 	Cascade delete all dependent records when a Persona is deleted.
 
 	Deletes:
 	- All User Memory records belonging to this persona
-	- All Chat Sessions belonging to this persona (which cascade to messages, files, approvals)
+	- All Chat Sessions belonging to this persona (which cascade to messages and files)
 
 	This runs in on_trash, which is called BEFORE Frappe's link validation,
 	so we delete the dependent records first to allow the persona delete to proceed.

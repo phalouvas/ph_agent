@@ -49,10 +49,6 @@ def create_tool_tool(
         Optional[str],
         Field(description="JSON Schema describing the tool's parameters. Required when script_type is 'Custom Script'. Format: {\"type\": \"object\", \"properties\": {...}, \"required\": [...]}. Example: {\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\", \"description\": \"The name\"}}, \"required\": [\"name\"]}"),
     ] = None,
-    requires_approval: Annotated[
-        Optional[int],
-        Field(description="Whether the tool requires human approval before execution. 0 = no approval needed (default), 1 = requires approval."),
-    ] = 0,
     ctx: FunctionInvocationContext = None,
 ) -> str:
     """
@@ -65,7 +61,6 @@ def create_tool_tool(
         python_function: Dotted path for Existing Function tools.
         custom_script: Inline Python code for Custom Script tools.
         parameters_json: JSON Schema for Custom Script tool parameters.
-        requires_approval: 0 or 1 (default 0).
         ctx: Function invocation context (injected by framework).
 
     Returns:
@@ -172,9 +167,6 @@ def create_tool_tool(
         if "properties" not in parsed_schema or not isinstance(parsed_schema["properties"], dict):
             return "Error: parameters_json must have a 'properties' field containing a JSON object."
 
-    # --- Validate requires_approval ---
-    if requires_approval not in (0, 1):
-        return "Error: requires_approval must be 0 or 1."
 
     # --- Check for duplicate ---
     if frappe.db.exists("Tool Registry", tool_name):
@@ -188,7 +180,6 @@ def create_tool_tool(
             "is_enabled": 0,  # Always disabled by default
             "description": description,
             "script_type": script_type,
-            "requires_approval": requires_approval,
         }
 
         if script_type == "Existing Function":

@@ -46,3 +46,39 @@ def _atomic_update_user_token_usage(usage_name: str, input_tokens: int, output_t
 		},
 	)
 	frappe.db.commit()
+
+
+def _resolve_effective_rates(session_name: str) -> dict:
+	"""Resolve effective pricing rates (provider base + per-user override).
+
+	Returns a dict with user, usage_name, and effective rates so callers
+	can apply the 3-tier cost formula without repeating DB lookups.
+	"""
+	session_doc = frappe.get_doc("Chat Session", session_name)
+	provider = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+
+	from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+
+	usage_name = UserTokenUsage.get_or_create_for_user(session_doc.user)
+	usage_doc = frappe.get_doc("User Token Usage", usage_name)
+
+	return {
+		"user": session_doc.user,
+		"usage_name": usage_name,
+		"eff_input": float(provider.input_cost_per_1m_tokens or 0) + float(usage_doc.input_cost_over_per_1m or 0),
+		"eff_output": float(provider.output_cost_per_1m_tokens or 0) + float(usage_doc.output_cost_over_per_1m or 0),
+		"eff_cache": float(provider.cache_hit_cost_per_1m_tokens or 0) + float(usage_doc.cache_hit_cost_over_per_1m or 0),
+	}
+
+
+def _calculate_cost_from_rates(input_tokens: int, output_tokens: int, cache_hit_tokens: int, rates: dict) -> float:
+	"""Calculate EUR cost from effective rates dict (from _resolve_effective_rates).
+
+	3-tier formula: cache_miss * eff_input + cache_hit * eff_cache + output * eff_output, all / 1_000_000.
+	"""
+	cache_miss = max(0, input_tokens - cache_hit_tokens)
+	return (
+		cache_miss * rates["eff_input"]
+		+ cache_hit_tokens * rates["eff_cache"]
+		+ output_tokens * rates["eff_output"]
+	) / 1_000_000

@@ -4,6 +4,7 @@ import time
 import traceback
 
 import frappe
+
 from ph_agent.agent.framework_agent import (
 	_fix_agent_response_text,
 	generate_conversation_summary,
@@ -14,12 +15,14 @@ from ph_agent.agent.framework_agent import (
 	run_after_approval,
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
-from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
-from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
+from ph_agent.api.token_utils import (
+	_atomic_update_chat_session_tokens,
+	_atomic_update_user_token_usage,
+	_calculate_cost_from_rates,
+	_resolve_effective_rates,
+)
 from ph_agent.utils.debug_logger import debug_log
 from ph_agent.utils.file_extractor import extract_file_text
-
-
 
 # ---------------------------------------------------------------------------
 # Token usage & cost helpers
@@ -43,40 +46,9 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 		cache_hit_tokens: Input tokens that were cache hits (charged at cache rate).
 	"""
 	try:
-		session_doc = frappe.get_doc("Chat Session", session_name)
-		user = session_doc.user
-		provider_name = session_doc.llm_provider
-
-		# Get or create the user token usage record (defense-in-depth)
-		usage_name = UserTokenUsage.get_or_create_for_user(user)
-
-		# Read provider pricing
-		provider = frappe.get_doc("LLM Provider", provider_name)
-		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
-		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
-		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
-
-		# Read user overrides (default to 0 if not set)
-		usage_doc = frappe.get_doc("User Token Usage", usage_name)
-		override_input = float(usage_doc.input_cost_over_per_1m or 0)
-		override_output = float(usage_doc.output_cost_over_per_1m or 0)
-		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
-
-		# Effective rates = provider base + user override
-		effective_input_rate = provider_input_rate + override_input
-		effective_output_rate = provider_output_rate + override_output
-		effective_cache_rate = provider_cache_rate + override_cache
-
-		# 3-tier cost calculation
-		cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
-		cost = (
-			cache_miss_tokens * effective_input_rate
-			+ cache_hit_tokens * effective_cache_rate
-			+ output_tokens * effective_output_rate
-		) / 1_000_000
-
-		# Atomic update — increment counters directly in SQL to avoid races
-		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
+		rates = _resolve_effective_rates(session_name)
+		cost = _calculate_cost_from_rates(input_tokens, output_tokens, cache_hit_tokens, rates)
+		_atomic_update_user_token_usage(rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost)
 	except Exception:
 		frappe.log_error(
 			title="Failed to credit user token usage",
@@ -100,31 +72,8 @@ def _calculate_message_cost(session_name: str, input_tokens: int, output_tokens:
 		Cost in EUR.
 	"""
 	try:
-		session_doc = frappe.get_doc("Chat Session", session_name)
-		user = session_doc.user
-		provider_name = session_doc.llm_provider
-
-		provider = frappe.get_doc("LLM Provider", provider_name)
-		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
-		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
-		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
-
-		usage_name = UserTokenUsage.get_or_create_for_user(user)
-		usage_doc = frappe.get_doc("User Token Usage", usage_name)
-		override_input = float(usage_doc.input_cost_over_per_1m or 0)
-		override_output = float(usage_doc.output_cost_over_per_1m or 0)
-		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
-
-		effective_input_rate = provider_input_rate + override_input
-		effective_output_rate = provider_output_rate + override_output
-		effective_cache_rate = provider_cache_rate + override_cache
-
-		cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
-		return (
-			cache_miss_tokens * effective_input_rate
-			+ cache_hit_tokens * effective_cache_rate
-			+ output_tokens * effective_output_rate
-		) / 1_000_000
+		rates = _resolve_effective_rates(session_name)
+		return _calculate_cost_from_rates(input_tokens, output_tokens, cache_hit_tokens, rates)
 	except Exception:
 		return 0.0
 
@@ -431,7 +380,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	# Get provider settings early for file size limits
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
-	
+
 	# Build enriched content: substitute {{variable}} placeholders with
 	# extracted file text, then append file metadata for tools.
 	agent_content = content
@@ -566,14 +515,14 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 		}
 	).insert(ignore_permissions=False)
 	frappe.db.commit()
-	
+
 	# If regenerating, delete the old agent message before creating the new one
 	if agent_msg_name and frappe.db.exists("Chat Message", agent_msg_name):
 		# Delete User Memory records linked to this message
 		frappe.db.delete("User Memory", {"source_message": agent_msg_name})
 		frappe.delete_doc("Chat Message", agent_msg_name, ignore_permissions=True)
 		frappe.db.commit()
-	
+
 	placeholder_payload = {
 		"session": session,
 		"name": agent_msg.name,
@@ -584,7 +533,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	}
 	if agent_msg_name:
 		placeholder_payload["old_message_id"] = agent_msg_name
-	
+
 	frappe.publish_realtime(
 		event="new_message",
 		message=placeholder_payload,
@@ -592,19 +541,19 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	)
 	# Track whether auto-summary ran in pre-call phase
 	_auto_summary_performed = False
-	
+
 	# Check if we need to auto-summarize before making the API call
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
-	
+
 	# Get context length and auto-summary threshold
 	context_length = provider_doc.context_length or 128000
 	auto_summary_threshold = provider_doc.auto_summary_threshold or 85
-	
+
 	# Calculate current percentage
 	current_tokens = session_doc.estimated_conversation_tokens or 0
 	token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
-	
+
 	# Auto-summarize if threshold exceeded and not recently summarized
 	if token_percentage > auto_summary_threshold and not _is_recently_summarized(session):
 		_auto_summary_performed = _perform_auto_summary(session, enqueued_by, emit_status)
@@ -621,18 +570,18 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			streaming_successful = False
 			_new_message_sent = False
 			approval_data = None
-			
+
 			debug_log(
 				"Starting streaming path",
 				f"Session: {session}, Content length: {len(agent_content)}",
 				session=session,
 			)
-			
+
 			try:
 				for chunk, is_final, chunk_input_tokens, chunk_output_tokens, chunk_cache_hit_tokens in get_agent_response_stream(session, agent_content, cancel_check=is_cancelled, status_callback=emit_status, skip_session_state=bool(agent_msg_name)):
 					if is_cancelled():
 						raise asyncio.CancelledError()
-						
+
 					if is_final:
 						# Check if this is an approval request (chunk is a dict with approval_data)
 						if isinstance(chunk, dict) and chunk.get("approval_needed"):
@@ -642,7 +591,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 							# (response_text, reasoning_content) — response_text is empty
 							# because content was already streamed via chunks.
 							# Only extract reasoning and token counts.
-							response_text, reasoning_text = chunk
+							_response_text, reasoning_text = chunk
 							full_reasoning = reasoning_text or full_reasoning
 							input_tokens = chunk_input_tokens
 							output_tokens = chunk_output_tokens
@@ -682,7 +631,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 							},
 							room="website",
 						)
-				
+
 				if approval_data:
 					# Credit tokens before entering approval flow (otherwise lost on early return)
 					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
@@ -692,7 +641,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					release_lock()
 					emit_status("")
 					return
-				
+
 				if streaming_successful:
 					# Build content with reasoning block if reasoning exists
 					processed_content = _fix_agent_response_text(full_content)
@@ -715,7 +664,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
 					_new_message_sent = True
-					
+
 					# Publish the final message HTML FIRST so the frontend
 					# has the correct content (with reasoning block and
 					# vue-chat formatting) before clearing the processing
@@ -743,7 +692,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 						},
 						room="website",
 					)
-					
+
 					# Also clear the status indicator via agent_status as a
 					# fallback for any frontend state that the chunk event
 					# might have missed.
@@ -751,7 +700,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				else:
 					# Streaming didn't complete successfully, fall back
 					raise Exception("Streaming did not complete successfully")
-				
+
 			except Exception as stream_error:
 				# If streaming fails, fall back to non-streaming
 				debug_log(
@@ -776,7 +725,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 						message=f"{fallback_error}\n{traceback.format_exc()}"
 					)
 					raise  # Let the outer except Exception handle it
-				
+
 				if approval_data:
 					# Credit tokens before entering approval flow (otherwise lost on early return)
 					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
@@ -786,7 +735,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					release_lock()
 					emit_status("")
 					return
-				
+
 				# Build content with reasoning block if reasoning exists
 				processed_content = _fix_agent_response_text(reply)
 				if reasoning_content:
@@ -817,7 +766,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			# Reload agent_msg to avoid TimestampMismatchError (placeholder was committed)
 			agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 			reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
-			
+
 			if approval_data:
 				# Credit tokens before entering approval flow (otherwise lost on early return)
 				_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
@@ -827,7 +776,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				release_lock()
 				emit_status("")
 				return
-			
+
 			# Build content with reasoning block if reasoning exists
 			processed_content = _fix_agent_response_text(reply)
 			if reasoning_content:
@@ -848,13 +797,13 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
 			emit_status("")
-			
+
 	except asyncio.CancelledError:
 		# Clean up placeholder message
 		if agent_msg and frappe.db.exists("Chat Message", agent_msg.name):
 			frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
 			frappe.db.commit()
-			
+
 		release_lock()
 		frappe.cache().delete_value(cancel_key)
 		emit_status("")
@@ -870,7 +819,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			agent_msg.content = "⚠️ " + str(e)
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
-			
+
 			release_lock()
 			emit_status("")
 			error_payload = {
@@ -1001,14 +950,14 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	# Get updated token counts for realtime update
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
-	
+
 	# Get context length from provider, default to 128000 if not set
 	context_length = provider_doc.context_length or 128000
-	
+
 	# Calculate current percentage
 	current_tokens = frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens")
 	token_percentage = (current_tokens / context_length) * 100 if context_length > 0 else 0
-	
+
 	# Publish token update event
 	frappe.publish_realtime(
 		event="token_update",
@@ -1020,7 +969,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 		},
 		room="website",
 	)
-	
+
 	# Publish the final message to the frontend (streaming path
 	# already published new_message above; non-streaming paths
 	# rely on this one).
@@ -1046,9 +995,9 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			queue="short",
 			timeout=120,
 		)
-	
+
 	# --- Non-essential post-processing (runs after response is delivered) ---
-	
+
 	# Send warning if over 75% and warning hasn't been sent yet
 	if token_percentage > 75 and not frappe.db.get_value("Chat Session", session, "token_warning_sent"):
 		# Publish warning event
@@ -1063,7 +1012,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			},
 			room="website",
 		)
-		
+
 		# Mark warning as sent
 		frappe.db.set_value("Chat Session", session, "token_warning_sent", 1)
 		frappe.db.commit()
@@ -1152,7 +1101,7 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 	"""
 	Handle a tool approval request from the agent.
 	Creates a Tool Approval Request document and notifies the user.
-	
+
 	Args:
 		session: Chat Session name
 		agent_msg: The placeholder Chat Message document
@@ -1161,13 +1110,13 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 	"""
 	tool_calls = approval_data.get("tool_calls", [])
 	conversation_state = approval_data.get("conversation_state", {})
-	
+
 	if not tool_calls:
 		return
-	
+
 	# Use the first tool call for the approval request name/description
 	primary_tool = tool_calls[0]
-	
+
 	# Find the tool to get its description
 	tool_description = ""
 	from ph_agent.agent.tools.tool_manager import ToolManager
@@ -1176,13 +1125,13 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 		if tool_obj.name == primary_tool["name"]:
 			tool_description = tool_obj.description or ""
 			break
-	
+
 	# Update the placeholder message to show "Waiting for approval"
 	agent_msg.content = "🔐 Waiting for approval..."
 	agent_msg.message_type = "Agent"
 	agent_msg.save(ignore_permissions=True)
 	frappe.db.commit()
-	
+
 	# Publish updated message
 	frappe.publish_realtime(
 		event="new_message",
@@ -1195,7 +1144,7 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 		},
 		room="website",
 	)
-	
+
 	# Create Tool Approval Request document
 	approval_doc = frappe.get_doc(
 		{
@@ -1217,7 +1166,7 @@ def _handle_tool_approval(session, agent_msg, approval_data, enqueued_by):
 		}
 	).insert(ignore_permissions=True)
 	frappe.db.commit()
-	
+
 	# Publish approval_needed event for the UI
 	frappe.publish_realtime(
 		event="approval_needed",
@@ -1241,19 +1190,19 @@ def _execute_approved_tool(approval_name):
 	"""
 	Background job: execute an approved tool and resume the conversation.
 	Called after an administrator approves a Tool Approval Request.
-	
+
 	Args:
 		approval_name: Name of the Tool Approval Request document
 	"""
 	approval_doc = frappe.get_doc("Tool Approval Request", approval_name)
-	
+
 	if approval_doc.status != "Approved":
 		return
-	
+
 	session = approval_doc.chat_session
 	conversation_state = json.loads(approval_doc.conversation_state or "{}")
 	session_doc = frappe.get_doc("Chat Session", session)
-	
+
 	try:
 		notify_user = approval_doc.approver or frappe.session.user
 		reply, input_tokens, output_tokens, cache_hit_tokens, reasoning_content = run_after_approval(
@@ -1262,7 +1211,7 @@ def _execute_approved_tool(approval_name):
 			approved=True,
 			user=notify_user,
 		)
-		
+
 		# Build content with reasoning block if reasoning exists
 		processed_content = _fix_agent_response_text(reply)
 		if reasoning_content:
@@ -1291,7 +1240,7 @@ def _execute_approved_tool(approval_name):
 			}
 		).insert(ignore_permissions=True)
 		frappe.db.commit()
-		
+
 		# Update the placeholder message to show it was replaced
 		placeholder_msg_name = approval_doc.chat_message
 		if placeholder_msg_name and frappe.db.exists("Chat Message", placeholder_msg_name):
@@ -1299,7 +1248,7 @@ def _execute_approved_tool(approval_name):
 			placeholder_msg.content = "✅ Tool approved and executed. See below for the response."
 			placeholder_msg.save(ignore_permissions=True)
 			frappe.db.commit()
-			
+
 			# Publish update to placeholder
 			frappe.publish_realtime(
 				event="new_message",
@@ -1312,7 +1261,7 @@ def _execute_approved_tool(approval_name):
 				},
 				room="website",
 			)
-		
+
 		# Publish the new agent message
 		frappe.publish_realtime(
 			event="new_message",
@@ -1325,7 +1274,7 @@ def _execute_approved_tool(approval_name):
 			},
 			room="website",
 		)
-		
+
 		# Publish approval_resolved event
 		frappe.publish_realtime(
 			event="approval_resolved",
@@ -1337,7 +1286,7 @@ def _execute_approved_tool(approval_name):
 			},
 			room="website",
 		)
-		
+
 		# Update token counts on session
 		_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
 
@@ -1361,7 +1310,7 @@ def _execute_approved_tool(approval_name):
 				queue="short",
 				timeout=120,
 			)
-		
+
 		# Generate follow-up suggestions if enabled
 		if session_doc.enable_suggestions:
 			frappe.enqueue(
@@ -1372,7 +1321,7 @@ def _execute_approved_tool(approval_name):
 				queue="short",
 				timeout=120,
 			)
-			
+
 	except Exception as e:
 		frappe.log_error(
 			title=f"Approved tool execution failed for {approval_name}",
@@ -1434,18 +1383,18 @@ def cancel_approvals_for_session(doc, method):
 	"""
 	Cascade delete all Tool Approval Requests linked to a Chat Session
 	when the session is deleted.
-	
+
 	This runs in on_trash, which is called BEFORE Frappe's link validation,
 	so we delete the dependent records first to allow the session delete to proceed.
-	
+
 	Uses raw DB delete to bypass link validation (the Tool Approval Request
 	references the session being deleted, so normal frappe.delete_doc would fail).
-	
+
 	Called via doc_events hook: Chat Session > on_trash
 	"""
 	# Delete User Memory records linked to this session
 	frappe.db.delete("User Memory", {"source_session": doc.name})
-	
+
 	linked_requests = frappe.get_all(
 		"Tool Approval Request",
 		filters={"chat_session": doc.name},
@@ -1461,18 +1410,18 @@ def cancel_approvals_for_message(doc, method):
 	Cascade delete all Tool Approval Requests linked to a Chat Message
 	when the message is deleted.
 	Also delete all File documents attached to the message.
-	
+
 	This runs in on_trash, which is called BEFORE Frappe's link validation,
 	so we delete the dependent records first to allow the message delete to proceed.
-	
+
 	Uses raw DB delete to bypass link validation (the Tool Approval Request
 	references the message being deleted, so normal frappe.delete_doc would fail).
-	
+
 	Called via doc_events hook: Chat Message > on_trash
 	"""
 	# Delete User Memory records linked to this message
 	frappe.db.delete("User Memory", {"source_message": doc.name})
-	
+
 	# If this message is referenced as the session's last_summary_message,
 	# clear that reference to avoid LinkExistsError
 	if doc.chat_session:
@@ -1483,7 +1432,7 @@ def cancel_approvals_for_message(doc, method):
 			frappe.db.set_value(
 				"Chat Session", doc.chat_session, "last_summary_message", None
 			)
-	
+
 	# Delete Tool Approval Requests
 	linked_requests = frappe.get_all(
 		"Tool Approval Request",
@@ -1492,7 +1441,7 @@ def cancel_approvals_for_message(doc, method):
 	)
 	for req_name in linked_requests:
 		frappe.db.delete("Tool Approval Request", {"name": req_name})
-	
+
 	# Delete attached File documents
 	file_names = frappe.get_all(
 		"File",
@@ -1514,10 +1463,10 @@ def cancel_approvals_for_message(doc, method):
 		except Exception as e:
 			# Log error but continue with other files
 			frappe.log_error(
-				f"Failed to delete file {file_name} attached to message {doc.name}: {str(e)}",
+				f"Failed to delete file {file_name} attached to message {doc.name}: {e!s}",
 				"ph_agent_file_deletion"
 			)
-	
+
 	frappe.db.commit()
 
 
@@ -1548,7 +1497,7 @@ def cascade_delete_persona(doc, method):
 			frappe.delete_doc("Chat Session", session_name, ignore_permissions=True, force=True)
 		except Exception as e:
 			frappe.log_error(
-				f"Failed to delete session {session_name} during persona cascade: {str(e)}",
+				f"Failed to delete session {session_name} during persona cascade: {e!s}",
 				"ph_agent_persona_cascade"
 			)
 

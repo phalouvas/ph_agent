@@ -9,28 +9,31 @@ from pathlib import Path
 from typing import Any
 
 import frappe
-
-from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMemoryHistoryProvider, Message
+from agent_framework import (
+	Agent,
+	AgentSession,
+	Content,
+	HistoryProvider,
+	InMemoryHistoryProvider,
+	Message,
+	SkillsProvider,
+)
 from agent_framework_openai import OpenAIChatCompletionClient
-from agent_framework import SkillsProvider
 from openai import AsyncOpenAI
+
 from ph_agent.agent.context.llm_memory_provider import LLMMemoryProvider
 from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider
 from ph_agent.agent.skills import get_code_skills
 from ph_agent.agent.skills.script_runner import run_file_script
-from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
 from ph_agent.agent.tools.tool_manager import ToolManager
+from ph_agent.api.token_utils import (
+	_atomic_update_chat_session_tokens,
+	_atomic_update_user_token_usage,
+	_calculate_cost_from_rates,
+	_resolve_effective_rates,
+)
 
 logger = logging.getLogger(__name__)
-from ph_agent.agent.tools.tool_router_provider import (
-	_ROUTER_SYSTEM_PROMPT,
-	_ROUTING_THRESHOLD,
-	_ROUTER_MAX_TOKENS,
-)
-from ph_agent.agent.tools.embedding_router import route_tools_by_embedding
-from ph_agent.utils.debug_logger import debug_log
-
-
 # ---------------------------------------------------------------------------
 # Patch agent_framework_openai to handle DeepSeek's reasoning_content
 # ---------------------------------------------------------------------------
@@ -40,8 +43,15 @@ from ph_agent.utils.debug_logger import debug_log
 # ``model_extra`` dict rather than as a named attribute.
 #
 # We patch the two parsing methods to also extract reasoning from model_extra.
-
 import agent_framework_openai._chat_completion_client as _openai_client_mod
+
+from ph_agent.agent.tools.embedding_router import route_tools_by_embedding
+from ph_agent.agent.tools.tool_router_provider import (
+	_ROUTER_MAX_TOKENS,
+	_ROUTER_SYSTEM_PROMPT,
+	_ROUTING_THRESHOLD,
+)
+from ph_agent.utils.debug_logger import debug_log
 
 
 def _extract_reasoning_from_message(msg) -> str | None:
@@ -736,7 +746,13 @@ class FrappeMemoryProvider(HistoryProvider):
 				# Drop assistant messages with no text or reasoning content (e.g. tool-only turns)
 			else:
 				filtered.append(msg)
-		return filtered
+
+		# Reorder so system summary messages precede user/assistant history.
+		# This keeps the system prompt + summary prefix contiguous, maximizing
+		# DeepSeek automatic prefix-cache hits (90%+ discount on cached tokens).
+		system_msgs = [m for m in filtered if m.role == "system"]
+		non_system_msgs = [m for m in filtered if m.role != "system"]
+		return system_msgs + non_system_msgs
 
 	async def save_messages(
 		self,
@@ -785,38 +801,9 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 		if not input_tokens and not output_tokens:
 			return
 
-		session_doc = frappe.get_doc("Chat Session", session_name)
-		user = session_doc.user
-		provider_name = session_doc.llm_provider
-		provider = frappe.get_doc("LLM Provider", provider_name)
-
-		# Pricing
-		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
-		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
-		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
-
-		# User token usage record (get or create)
-		from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
-
-		usage_name = UserTokenUsage.get_or_create_for_user(user)
-		usage_doc = frappe.get_doc("User Token Usage", usage_name)
-		override_input = float(usage_doc.input_cost_over_per_1m or 0)
-		override_output = float(usage_doc.output_cost_over_per_1m or 0)
-		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
-
-		# Effective rates
-		eff_input = provider_input_rate + override_input
-		eff_output = provider_output_rate + override_output
-		eff_cache = provider_cache_rate + override_cache
-
-		# 3-tier cost
-		cache_miss = max(0, input_tokens - cache_hit_tokens)
-		cost = (
-			cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output
-		) / 1_000_000
-
-		# Atomic updates — increment counters directly in SQL to avoid races
-		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
+		rates = _resolve_effective_rates(session_name)
+		cost = _calculate_cost_from_rates(input_tokens, output_tokens, cache_hit_tokens, rates)
+		_atomic_update_user_token_usage(rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost)
 		_atomic_update_chat_session_tokens(session_name, input_tokens, output_tokens, cache_hit_tokens)
 	except Exception:
 		frappe.log_error(
@@ -1086,7 +1073,7 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		)
 
 
-def _extract_approval_data(response, session_name: str | None = None) -> dict[str, Any] | None:
+def _extract_approval_data(response, session_name: str | None = None, available_tools: set[str] | None = None) -> dict[str, Any] | None:
 	"""Extract approval data from an agent response.
 
 	If ``session_name`` is provided, validates that each tool being approved
@@ -1094,9 +1081,9 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 	are silently skipped (the LLM hallucinated them), preventing spurious
 	approval requests for tools the persona cannot use.
 	"""
-	# Pre-resolve available tool names if session_name is given
-	available_tools: set[str] | None = None
-	if session_name:
+	# Use provided tool names if available; otherwise resolve from session.
+	# Avoids an expensive _build_agent() call when tools are already known.
+	if available_tools is None and session_name:
 		try:
 			temp_agent = _build_agent(session_name=session_name)
 			available_tools = _get_available_tool_names(temp_agent)
@@ -1173,8 +1160,8 @@ def _run_agent(
 	message: Message | list,
 	user: str | None = None,
 	session_state: dict[str, Any] | None = None,
-) -> tuple[Any, AgentSession]:
-	"""Run agent (non-streaming) and return (response, agent_session).
+) -> tuple[Any, AgentSession, set[str]]:
+	"""Run agent (non-streaming) and return (response, agent_session, available_tools).
 
 	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
 	so that provider state (including ``InMemoryHistoryProvider`` messages)
@@ -1187,16 +1174,20 @@ def _run_agent(
 		session=session_name,
 	)
 	agent = _build_agent(session_name=session_name, user=user)
+	available_tools = _get_available_tool_names(agent)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
 		agent_session.state.update(session_state)
 	messages = message if isinstance(message, list) else [message]
 
-	# Per-turn tool routing — filter before API call
+	# Per-turn tool routing + agent run in a single event loop.
 	user_text = _extract_text_from_messages(messages)
-	asyncio.run(_try_route_tools(agent, session_name, user_text))
 
-	result = asyncio.run(agent.run(messages, session=agent_session))
+	async def _impl():
+		await _try_route_tools(agent, session_name, user_text)
+		return await agent.run(messages, session=agent_session)
+
+	result = asyncio.run(_impl())
 	debug_log(
 		"_run_agent complete",
 		f"Session: {session_name}, Tokens: {_get_usage_tokens(result.usage_details)}",
@@ -1209,7 +1200,7 @@ def _run_agent(
 			f"Session: {session_name}, Keys: {list(result.usage_details.keys())}",
 			session=session_name,
 		)
-	return result, agent_session
+	return result, agent_session, available_tools
 
 
 async def _run_agent_stream(
@@ -1217,8 +1208,8 @@ async def _run_agent_stream(
 	message: Message | list,
 	user: str | None = None,
 	session_state: dict[str, Any] | None = None,
-) -> tuple[Any, AgentSession]:
-	"""Run agent with streaming support and return (stream, agent_session).
+) -> tuple[Any, AgentSession, set[str]]:
+	"""Run agent with streaming support and return (stream, agent_session, available_tools).
 
 	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
 	so that provider state (including ``InMemoryHistoryProvider`` messages)
@@ -1231,6 +1222,7 @@ async def _run_agent_stream(
 		session=session_name,
 	)
 	agent = _build_agent(session_name=session_name, user=user)
+	available_tools = _get_available_tool_names(agent)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
 		agent_session.state.update(session_state)
@@ -1248,7 +1240,7 @@ async def _run_agent_stream(
 		f"Session: {session_name}, Stream obtained",
 		session=session_name,
 	)
-	return stream, agent_session
+	return stream, agent_session, available_tools
 
 
 def _extract_reasoning_from_response(response) -> str:
@@ -1290,7 +1282,7 @@ def get_agent_response(
 	# Load session state before running agent (skip for regeneration)
 	stored_state = None if skip_session_state else _load_session_state(session_name)
 
-	response, agent_session = _run_agent(
+	response, agent_session, available_tools = _run_agent(
 		session_name, Message("user", [user_message]), session_state=stored_state
 	)
 
@@ -1298,7 +1290,7 @@ def get_agent_response(
 		raise asyncio.CancelledError()
 
 	input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
-	approval_data = _extract_approval_data(response, session_name=session_name)
+	approval_data = _extract_approval_data(response, session_name=session_name, available_tools=available_tools)
 	reasoning_content = _extract_reasoning_from_response(response)
 
 	# Always save session state, regardless of approval flow
@@ -1325,7 +1317,7 @@ def get_agent_response_stream(
 	cancel_check=None,
 	status_callback=None,
 	skip_session_state: bool = False,
-) -> Generator[tuple[Any, bool, int, int, int], None, None]:
+) -> Generator[tuple[Any, bool, int, int, int]]:
 	"""Stream agent response.
 
 	Yields:
@@ -1347,7 +1339,7 @@ def get_agent_response_stream(
 				stored_state = None if skip_session_state else _load_session_state(session_name)
 
 				# Use streaming agent runner — returns (stream, AgentSession)
-				stream, agent_session = await _run_agent_stream(
+				stream, agent_session, available_tools = await _run_agent_stream(
 					session_name, Message("user", [user_message]), session_state=stored_state
 				)
 
@@ -1430,7 +1422,7 @@ def get_agent_response_stream(
 					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}, Cache hit tokens: {cache_hit_tokens}",
 					session=session_name,
 				)
-				approval_data = _extract_approval_data(final_response, session_name=session_name)
+				approval_data = _extract_approval_data(final_response, session_name=session_name, available_tools=available_tools)
 
 				# Always save session state, regardless of approval flow
 				_save_session_state(session_name, agent_session)
@@ -1451,8 +1443,8 @@ def get_agent_response_stream(
 		try:
 			if site_name:
 				frappe.init(site=site_name)
+				initialized = True  # before connect so destroy always runs if init succeeded
 				frappe.connect()
-				initialized = True
 				if active_user:
 					frappe.set_user(active_user)
 			asyncio.run(_consume())
@@ -1469,8 +1461,10 @@ def get_agent_response_stream(
 			result_queue.put(("error", exc))
 		finally:
 			if initialized:
-				# Commit any pending DB operations (e.g., UserPreferenceProvider saves)
-				frappe.db.commit()
+				try:
+					frappe.db.commit()
+				except Exception:
+					pass  # commit failure must not prevent destroy
 				frappe.destroy()
 
 	thread = threading.Thread(target=_producer, daemon=True)
@@ -1537,7 +1531,7 @@ def run_after_approval(
 	arguments_raw = approval.get("arguments") or "{}"
 	try:
 		arguments = json.loads(arguments_raw)
-	except Exception as e:
+	except Exception:
 		# If we can't parse as JSON, try to handle it as a string
 		# Some arguments might be simple strings
 		if isinstance(arguments_raw, str) and arguments_raw.strip():
@@ -1578,7 +1572,7 @@ def run_after_approval(
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error creating approval Content objects for {session_name}",
-			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}",
+			message=f"Error: {e!s}, Traceback: {traceback.format_exc()}",
 		)
 		raise
 
@@ -1645,7 +1639,7 @@ def run_after_approval(
 				Message("user", [approval_response]),
 				Message("tool", [error_result]),
 			]
-			response, agent_session = _run_agent(
+			response, agent_session, available_tools = _run_agent(
 				session_name,
 				messages,
 				user=user,
@@ -1660,7 +1654,7 @@ def run_after_approval(
 				Message("assistant", [approval_request_content]),
 				Message("user", [approval_response]),
 			]
-			response, agent_session = _run_agent(
+			response, agent_session, available_tools = _run_agent(
 				session_name,
 				messages,  # Pass both messages
 				user=user,
@@ -1683,7 +1677,7 @@ def run_after_approval(
 	except Exception as e:
 		frappe.log_error(
 			title=f"Error in _run_agent for {session_name}",
-			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}",
+			message=f"Error: {e!s}, Traceback: {traceback.format_exc()}",
 		)
 		raise
 

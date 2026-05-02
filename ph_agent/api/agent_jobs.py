@@ -15,6 +15,7 @@ from ph_agent.agent.framework_agent import (
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
 from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
+from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
 from ph_agent.utils.debug_logger import debug_log
 from ph_agent.utils.file_extractor import extract_file_text
 
@@ -74,20 +75,8 @@ def _credit_user_token_usage(session_name: str, input_tokens: int, output_tokens
 			+ output_tokens * effective_output_rate
 		) / 1_000_000
 
-		# Atomic update — read current values and add
-		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
-		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
-		current_cache_hit = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
-		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
-
-		frappe.db.set_value("User Token Usage", usage_name, {
-			"total_input_tokens": current_input + input_tokens,
-			"total_output_tokens": current_output + output_tokens,
-			"total_cache_hit_tokens": current_cache_hit + cache_hit_tokens,
-			"total_cost": current_cost + cost,
-			"last_updated": frappe.utils.now_datetime(),
-		})
-		frappe.db.commit()
+		# Atomic update — increment counters directly in SQL to avoid races
+		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
 	except Exception:
 		frappe.log_error(
 			title="Failed to credit user token usage",
@@ -397,7 +386,7 @@ def _perform_auto_summary(session: str, enqueued_by: str | None = None,
 	return True
 
 
-def _call_agent_background(session, user_msg_name, content, file_names, enqueued_by, agent_msg_name=None):
+def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_name=None):
 	"""
 	Background job: optionally extract PDFs, call the LLM agent, store the reply,
 	and push realtime events back to the user who enqueued the job.
@@ -421,7 +410,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	cancel_key = f"ph_agent:cancel:{session}"
 
 	def release_lock():
-		frappe.cache().delete_value(lock_key)
+		from frappe.utils.background_jobs import get_redis_conn
+		get_redis_conn().delete(lock_key)
 
 	def is_cancelled():
 		return bool(frappe.cache().get_value(cancel_key))
@@ -442,7 +432,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	session_doc = frappe.get_doc("Chat Session", session)
 	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	
-	# Build enriched content: append extracted file text from attachments
+	# Build enriched content: substitute {{variable}} placeholders with
+	# extracted file text, then append file metadata for tools.
 	agent_content = content
 	if file_names:
 		# Store file names in cache keyed by session so tools can auto-attach
@@ -452,6 +443,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			expires_in_sec=600,
 		)
 		file_texts = []
+		failed_files = []
 		emit_status(frappe._("Extracting file contents…"))
 		for file_name in file_names:
 			if is_cancelled():
@@ -470,7 +462,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			text, file_type_label = extract_file_text(file_name, max_size_mb=max_size_mb)
 			extract_elapsed = time.time() - extract_start
 			if text:
-				filename = frappe.db.get_value('File', file_name, 'file_name')
+				filename = frappe.db.get_value("File", file_name, "file_name")
 				file_texts.append(f"[{file_type_label}: {filename}]\n{text}")
 				debug_log(
 					"File extraction complete",
@@ -479,7 +471,8 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					session=session,
 				)
 			else:
-				filename = frappe.db.get_value('File', file_name, 'file_name')
+				filename = frappe.db.get_value("File", file_name, "file_name")
+				failed_files.append(filename)
 				debug_log(
 					"File extraction returned no text",
 					f"Session: {session}, File: {filename}, Elapsed: {extract_elapsed:.2f}s",
@@ -487,22 +480,74 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					level="WARNING",
 				)
 		if file_texts:
+			# Substitute {{variable}} placeholders in the template with the
+			# extracted file text so the LLM sees the actual content instead
+			# of literal "{{actual_text}}" markers.
+			combined_text = "\n\n".join(file_texts)
+			import re
+			agent_content = re.sub(
+				r"\{\{\w+\}\}",
+				combined_text,
+				content,
+			)
+			# If no {{variable}} placeholders were found, append text at end
+			if agent_content == content:
+				agent_content = content + "\n\n" + combined_text
+
 			# Build a metadata block with File doc names so the agent can use
 			# attach_files_to_record to link files to created records.
-			# Placed BEFORE extracted text so the LLM sees it prominently.
+			# Placed AFTER extracted text so it doesn't interrupt the flow.
 			file_meta_lines = []
 			for file_name in file_names:
-				filename = frappe.db.get_value('File', file_name, 'file_name')
+				filename = frappe.db.get_value("File", file_name, "file_name")
 				file_meta_lines.append(f"- `{file_name}` ({filename})")
 			file_meta_block = (
-				"**Attached Files (use these names with attach_files_to_record):**\n"
+				"\n\n**Attached Files (use these names with attach_files_to_record):**\n"
 				+ "\n".join(file_meta_lines)
 			)
-			agent_content = (
-				content
-				+ "\n\n" + file_meta_block
-				+ "\n\n" + "\n\n".join(file_texts)
+			agent_content += file_meta_block
+
+			if failed_files:
+				debug_log(
+					"Some files could not be extracted",
+					f"Session: {session}, Failed: {', '.join(failed_files)}",
+					session=session,
+					level="WARNING",
+				)
+		elif failed_files:
+			# All attached files failed — create an error message in the
+			# chat so the user knows why no response was generated.
+			failed_names = ", ".join(failed_files)
+			error_content = frappe._(
+				"Could not extract text from the attached file(s): **{0}**. "
+				"The file may be image-based (scanned), password-protected, or corrupted. "
+				"Please try a different file or paste the text directly."
+			).format(failed_names)
+			error_msg = frappe.get_doc(
+				{
+					"doctype": "Chat Message",
+					"chat_session": session,
+					"sender_type": "Agent",
+					"message_type": "Agent",
+					"content": error_content,
+				}
+			).insert(ignore_permissions=False)
+			frappe.db.commit()
+			release_lock()
+			frappe.cache().delete_value(cancel_key)
+			emit_status("")
+			frappe.publish_realtime(
+				event="new_message",
+				message={
+					"session": session,
+					"name": error_msg.name,
+					"sender_type": "Agent",
+					"content": error_content,
+					"creation": str(error_msg.creation),
+				},
+				room="website",
 			)
+			return
 
 	emit_status(frappe._("Calling AI…"))
 
@@ -574,6 +619,7 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			output_tokens = 0
 			cache_hit_tokens = 0
 			streaming_successful = False
+			_new_message_sent = False
 			approval_data = None
 			
 			debug_log(
@@ -638,6 +684,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 						)
 				
 				if approval_data:
+					# Credit tokens before entering approval flow (otherwise lost on early return)
+					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -665,10 +714,25 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					agent_msg.message_type = "Agent"
 					agent_msg.save(ignore_permissions=True)
 					frappe.db.commit()
+					_new_message_sent = True
 					
-					# Publish a final message_chunk so the frontend clears the
-					# indicator immediately (handleMessageChunk with is_final=true
-					# calls setIsProcessing(false) and setStatus("")).
+					# Publish the final message HTML FIRST so the frontend
+					# has the correct content (with reasoning block and
+					# vue-chat formatting) before clearing the processing
+					# state. Order matters: new_message delivers the
+					# authoritative content; message_chunk(is_final) only
+					# clears the spinner and typing indicator.
+					frappe.publish_realtime(
+						event="new_message",
+						message={
+							"session": session,
+							"name": agent_msg.name,
+							"sender_type": "Agent",
+							"content": agent_msg.content,
+							"creation": str(agent_msg.creation),
+						},
+						room="website",
+					)
 					frappe.publish_realtime(
 						event="message_chunk",
 						message={
@@ -714,6 +778,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 					raise  # Let the outer except Exception handle it
 				
 				if approval_data:
+					# Credit tokens before entering approval flow (otherwise lost on early return)
+					_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+					_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 					# Handle approval flow
 					_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 					release_lock()
@@ -752,6 +819,9 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 			reply, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content = get_agent_response(session, agent_content, cancel_check=is_cancelled, skip_session_state=bool(agent_msg_name))
 			
 			if approval_data:
+				# Credit tokens before entering approval flow (otherwise lost on early return)
+				_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+				_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
 				# Handle approval flow
 				_handle_tool_approval(session, agent_msg, approval_data, enqueued_by)
 				release_lock()
@@ -907,28 +977,26 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		session=session,
 	)
 
-	# Update token counts on the session
-	frappe.db.set_value(
-		"Chat Session",
-		session,
-		{
-			"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
-			"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
-			"cache_hit_tokens": frappe.db.get_value("Chat Session", session, "cache_hit_tokens") + cache_hit_tokens,
-			"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
-		},
-	)
-	frappe.db.commit()
-
-	# Credit tokens to user-level aggregate (survives temporary session cleanup)
-	_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
-
-	# Release lock and clear the status indicator immediately — before any
-	# DB reads or realtime publishes — so the "Calling AI…" text disappears
-	# as fast as possible and the user can send a new message.
+	# Release lock and clear the status indicator immediately — BEFORE any
+	# follow-up DB reads/realtime publishes — so the "Calling AI…" text
+	# disappears and the user can send a new message. This MUST come before
+	# token updates: if a token update throws, the lock must still be freed.
 	release_lock()
 	frappe.cache().delete_value(f"ph_agent:files:{session}")
 	emit_status("")
+
+	# Update token counts on the session (non-essential — failures must not
+	# re-acquire the lock or block the user)
+	try:
+		_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
+		_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)
+	except Exception:
+		debug_log(
+			"Token update failed after lock release",
+			f"Session: {session}",
+			session=session,
+			level="WARNING",
+		)
 
 	# Get updated token counts for realtime update
 	session_doc = frappe.get_doc("Chat Session", session)
@@ -953,18 +1021,21 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 		room="website",
 	)
 	
-	# Publish the final message content (with reasoning block if applicable)
-	frappe.publish_realtime(
-		event="new_message",
-		message={
-			"session": session,
-			"name": agent_msg.name,
-			"sender_type": "Agent",
-			"content": agent_msg.content,
-			"creation": str(agent_msg.creation),
-		},
-		room="website",
-	)
+	# Publish the final message to the frontend (streaming path
+	# already published new_message above; non-streaming paths
+	# rely on this one).
+	if not _new_message_sent:
+		frappe.publish_realtime(
+			event="new_message",
+			message={
+				"session": session,
+				"name": agent_msg.name,
+				"sender_type": "Agent",
+				"content": agent_msg.content,
+				"creation": str(agent_msg.creation),
+			},
+			room="website",
+		)
 	session_doc = frappe.get_doc("Chat Session", session)
 	if session_doc.enable_suggestions:
 		frappe.enqueue(
@@ -1018,8 +1089,14 @@ def _call_agent_background(session, user_msg_name, content, file_names, enqueued
 	if current_title == "New Chat":
 		msg_count = frappe.db.count("Chat Message", {"chat_session": session})
 		if msg_count == 2:  # exactly 1 user msg + 1 agent msg
-			# Use agent_msg.content which contains either streaming or non-streaming content
-			agent_reply = agent_msg.content
+			# Strip reasoning HTML before title generation to avoid polluting the title
+			import re
+			agent_reply = re.sub(
+				r'<details class="ph-reasoning-block">.*?</details>\s*',
+				"",
+				agent_msg.content,
+				flags=re.DOTALL,
+			)
 			new_title = generate_session_title(session, agent_content, agent_reply)
 			if new_title:
 				frappe.db.set_value("Chat Session", session, "title", new_title)
@@ -1262,17 +1339,7 @@ def _execute_approved_tool(approval_name):
 		)
 		
 		# Update token counts on session
-		frappe.db.set_value(
-			"Chat Session",
-			session,
-			{
-				"input_tokens": frappe.db.get_value("Chat Session", session, "input_tokens") + input_tokens,
-				"output_tokens": frappe.db.get_value("Chat Session", session, "output_tokens") + output_tokens,
-				"cache_hit_tokens": frappe.db.get_value("Chat Session", session, "cache_hit_tokens") + cache_hit_tokens,
-				"estimated_conversation_tokens": frappe.db.get_value("Chat Session", session, "estimated_conversation_tokens") + input_tokens + output_tokens,
-			},
-		)
-		frappe.db.commit()
+		_atomic_update_chat_session_tokens(session, input_tokens, output_tokens, cache_hit_tokens)
 
 		# Credit tokens to user-level aggregate
 		_credit_user_token_usage(session, input_tokens, output_tokens, cache_hit_tokens)

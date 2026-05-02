@@ -16,8 +16,9 @@ from agent_framework import SkillsProvider
 from openai import AsyncOpenAI
 from ph_agent.agent.context.llm_memory_provider import LLMMemoryProvider
 from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider
-from ph_agent.agent.skills import get_code_skills, invalidate_skill_cache
+from ph_agent.agent.skills import get_code_skills
 from ph_agent.agent.skills.script_runner import run_file_script
+from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
 from ph_agent.agent.tools.tool_manager import ToolManager
 
 logger = logging.getLogger(__name__)
@@ -156,34 +157,46 @@ def _patched_prepare_message_for_openai(self, message):
 	for msg_dict in result:
 		if "reasoning_details" in msg_dict:
 			msg_dict["reasoning_content"] = msg_dict.pop("reasoning_details")
-	# Belt-and-suspenders: if the message has text_reasoning Content but
-	# no output dict ended up with reasoning_content, extract it directly.
-	# This catches cases where the upstream _prepare_message_for_openai
-	# fails to serialize text_reasoning (e.g. protected_data is None,
-	# or content ordering causes the pending buffer to be dropped).
+	# DeepSeek requires reasoning_content on EVERY dict for an assistant
+	# message — when a tool call is present DeepSeek checks the
+	# tool_calls-bearing dict for reasoning_content and returns 400 if
+	# it is missing.  The upstream serialiser puts reasoning_details on
+	# only ONE dict (whichever happens last in content order).  Gather
+	# it and copy it to EVERY dict so we satisfy DeepSeek.
 	if message.role == "assistant" and result:
-		if not any("reasoning_content" in md for md in result):
-			reasoning_text = None
+		# Find reasoning_content from any dict that has it.
+		reasoning_value = None
+		for msg_dict in result:
+			if "reasoning_content" in msg_dict:
+				reasoning_value = msg_dict["reasoning_content"]
+				break
+		# If not found via serialisation, extract directly from
+		# text_reasoning Content on the message.
+		if reasoning_value is None:
 			for c in getattr(message, "contents", []) or []:
 				if getattr(c, "type", None) == "text_reasoning":
 					protected = getattr(c, "protected_data", None)
 					if protected is not None:
 						try:
-							reasoning_text = json.loads(protected)
+							reasoning_value = json.loads(protected)
 						except (json.JSONDecodeError, TypeError):
-							reasoning_text = protected
+							reasoning_value = protected
 					else:
-						reasoning_text = getattr(c, "text", None)
-					if reasoning_text:
+						reasoning_value = getattr(c, "text", None)
+					if reasoning_value:
+						logger.warning(
+							"Belt-and-suspenders: extracted missing reasoning_content "
+							"(len=%d) from text_reasoning Content for message role=%s",
+							len(str(reasoning_value)), message.role,
+						)
 						break
-			if reasoning_text:
-				result[-1]["reasoning_content"] = reasoning_text
-				logger.warning(
-					"Belt-and-suspenders: injected missing reasoning_content "
-					"(len=%d) for message role=%s — upstream serialization "
-					"did not produce reasoning_details",
-					len(reasoning_text), message.role,
-				)
+		# Copy the found reasoning_content onto EVERY assistant dict.
+		if reasoning_value is not None:
+			needs_copy = any("reasoning_content" not in md for md in result)
+			if needs_copy:
+				for msg_dict in result:
+					if "reasoning_content" not in msg_dict:
+						msg_dict["reasoning_content"] = reasoning_value
 	return result
 
 
@@ -191,6 +204,49 @@ def _patched_prepare_message_for_openai(self, message):
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai = _patched_parse_response
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai = _patched_parse_update
 _openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = _patched_prepare_message_for_openai
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic patch: log DeepSeek API request when thinking mode is enabled
+# ---------------------------------------------------------------------------
+_orig_prepare_options = _openai_client_mod.OpenAIChatCompletionClient._prepare_options
+
+
+def _patched_prepare_options(self, messages, options):
+	"""Patched _prepare_options: logs request body for thinking-mode debugging."""
+	result = _orig_prepare_options(self, messages, options)
+
+	extra_body = result.get("extra_body", {})
+	thinking_cfg = extra_body.get("thinking") if isinstance(extra_body, dict) else None
+	if isinstance(thinking_cfg, dict) and thinking_cfg.get("type") == "enabled":
+		msg_summary = []
+		for i, msg in enumerate(result.get("messages", [])):
+			has_reasoning = "reasoning_content" in msg
+			role = msg.get("role", "?")
+			has_content = "content" in msg
+			has_tool_calls = "tool_calls" in msg
+			content_len = len(str(msg.get("content", ""))) if has_content else 0
+			reasoning_len = len(str(msg.get("reasoning_content", ""))) if has_reasoning else 0
+			msg_summary.append(
+				f"  [{i}] role={role} content={has_content}({content_len}c) "
+				f"tool_calls={has_tool_calls} reasoning_content={has_reasoning}({reasoning_len}r)"
+			)
+		messages_json = json.dumps(
+			result.get("messages", []), indent=2, default=str, ensure_ascii=False
+		)[:8000]
+		debug_log(
+			"DeepSeek thinking-mode API request",
+			f"model={result.get('model')} messages={len(result.get('messages', []))} "
+			f"reasoning_effort={result.get('reasoning_effort')}\n"
+			f"{chr(10).join(msg_summary)}\n"
+			f"---FULL MESSAGES---\n{messages_json}",
+			level="WARNING",
+		)
+
+	return result
+
+
+_openai_client_mod.OpenAIChatCompletionClient._prepare_options = _patched_prepare_options
 
 
 # ---------------------------------------------------------------------------
@@ -704,31 +760,9 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 		cache_miss = max(0, input_tokens - cache_hit_tokens)
 		cost = (cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output) / 1_000_000
 
-		# Atomic update — User Token Usage
-		current_input = frappe.db.get_value("User Token Usage", usage_name, "total_input_tokens") or 0
-		current_output = frappe.db.get_value("User Token Usage", usage_name, "total_output_tokens") or 0
-		current_cache = frappe.db.get_value("User Token Usage", usage_name, "total_cache_hit_tokens") or 0
-		current_cost = frappe.db.get_value("User Token Usage", usage_name, "total_cost") or 0
-		frappe.db.set_value("User Token Usage", usage_name, {
-			"total_input_tokens": current_input + input_tokens,
-			"total_output_tokens": current_output + output_tokens,
-			"total_cache_hit_tokens": current_cache + cache_hit_tokens,
-			"total_cost": current_cost + cost,
-			"last_updated": frappe.utils.now_datetime(),
-		})
-
-		# Update Chat Session counters
-		session_input = frappe.db.get_value("Chat Session", session_name, "input_tokens") or 0
-		session_output = frappe.db.get_value("Chat Session", session_name, "output_tokens") or 0
-		session_cache = frappe.db.get_value("Chat Session", session_name, "cache_hit_tokens") or 0
-		session_est = frappe.db.get_value("Chat Session", session_name, "estimated_conversation_tokens") or 0
-		frappe.db.set_value("Chat Session", session_name, {
-			"input_tokens": session_input + input_tokens,
-			"output_tokens": session_output + output_tokens,
-			"cache_hit_tokens": session_cache + cache_hit_tokens,
-			"estimated_conversation_tokens": session_est + input_tokens + output_tokens,
-		})
-		frappe.db.commit()
+		# Atomic updates — increment counters directly in SQL to avoid races
+		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
+		_atomic_update_chat_session_tokens(session_name, input_tokens, output_tokens, cache_hit_tokens)
 	except Exception:
 		frappe.log_error(
 			title=f"Failed to credit auxiliary API tokens ({label})",
@@ -936,6 +970,23 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		return {}
 
 
+
+class LoggingEncoder(json.JSONEncoder):
+	"""JSON encoder that logs warnings for non-standard types instead of silently stringifying."""
+
+	def default(self, obj):
+		if isinstance(obj, (str, int, float, bool, type(None), list, dict)):
+			return super().default(obj)
+		logger.warning(
+			"_save_session_state: non-standard type %s encountered during JSON serialization",
+			type(obj).__name__,
+		)
+		try:
+			return super().default(obj)
+		except TypeError:
+			return str(obj)
+
+
 def _save_session_state(session_name: str, session: AgentSession) -> None:
 	"""Save session state to Chat Session DocType.
 
@@ -954,7 +1005,7 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		if not serialized:
 			return
 
-		state_json = json.dumps(serialized, indent=2, default=str)
+		state_json = json.dumps(serialized, indent=2, cls=LoggingEncoder)
 		debug_log(
 			"_save_session_state",
 			f"Session: {session_name}, State size: {len(state_json)} bytes",
@@ -1049,8 +1100,8 @@ def _extract_approval_data(response, session_name: str | None = None) -> dict[st
 				}
 			)
 
-			if not approval_requests:
-				return None
+	if not approval_requests:
+		return None
 
 	return {
 		"approval_needed": True,

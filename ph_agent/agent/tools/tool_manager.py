@@ -84,33 +84,22 @@ SAFE_NAMESPACE = {
 class ToolManager:
     """Manager for loading and registering tools from the Tool Registry."""
     
-    # Cache key for storing loaded tools
-    CACHE_KEY = "ph_agent:tools:registered"
-    
     @classmethod
     def get_tools(cls, session_name: Optional[str] = None, user: Optional[str] = None, persona: Optional[str] = None) -> List:
         """
         Get all enabled tools from the Tool Registry.
-        
+
         Args:
             session_name: Optional chat session name for context injection
             user: Optional user name for context injection
             persona: Optional persona name; if the persona has tool_groups configured,
                      only tools matching those groups are returned.
-            
+
         Returns:
             List of tool objects ready to be passed to Agent constructor
         """
-        # Try to get from cache first
-        cached_tools = cls._get_cached_tools()
-        if cached_tools is not None:
-            logger.debug("Returning %d tools from cache", len(cached_tools))
-            tools = cached_tools
-        else:
-            # Load from database
-            tools = cls._load_tools_from_db()
-            # Cache the tools
-            cls._cache_tools(tools)
+        # Load tools from database
+        tools = cls._load_tools_from_db()
 
         # Filter by session-level tool settings first, then persona
         tools = cls._filter_by_session(tools, session_name, persona)
@@ -498,41 +487,6 @@ class ToolManager:
         return wrapped
     
     @classmethod
-    def _get_cached_tools(cls) -> Optional[List]:
-        """Get tools from cache if available.
-        
-        Note: Only metadata is cached; actual FunctionTool objects can't be pickled.
-        Returns None to force fresh load from DB each time.
-        """
-        return None
-    
-    @classmethod
-    def _cache_tools(cls, tools: List):
-        """Cache the loaded tools (metadata only, not callable objects)."""
-        try:
-            # Store only serializable metadata — FunctionTool objects can't be pickled
-            tool_meta = []
-            for t in tools:
-                tool_meta.append({
-                    "name": t.name,
-                    "description": t.description,
-                    "approval_mode": getattr(t, "approval_mode", "never_require"),
-                })
-            frappe.cache().set_value(cls.CACHE_KEY, tool_meta, expires_in_sec=3600)  # 1 hour
-            logger.debug("Cached metadata for %d tools", len(tools))
-        except Exception as e:
-            logger.warning("Failed to cache tools: %s", str(e))
-    
-    @classmethod
-    def invalidate_cache(cls):
-        """Invalidate the tool cache."""
-        try:
-            frappe.cache().delete_value(cls.CACHE_KEY)
-            logger.info("Invalidated tool cache")
-        except Exception as e:
-            logger.warning("Failed to invalidate cache: %s", str(e))
-    
-    @classmethod
     def tool_requires_approval(cls, tool_name: str) -> bool:
         """
         Check if a tool requires human approval before execution.
@@ -566,24 +520,5 @@ class ToolManager:
                 return tool_obj
         return None
     
-    @classmethod
-    def reload_tools(cls):
-        """Force reload tools from database and update cache."""
-        cls.invalidate_cache()
-        return cls.get_tools()
-
-
-def invalidate_tool_cache(doc, method):
-    """
-    Function to invalidate tool cache.
-    This is used by Frappe's doc_events hook system.
-    
-    Args:
-        doc: The document instance
-        method: The method being called (e.g., 'on_update', 'after_insert', 'on_trash')
-    """
-    ToolManager.invalidate_cache()
-
-
 # Singleton instance for convenience
 tool_manager = ToolManager()

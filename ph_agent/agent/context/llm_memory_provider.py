@@ -13,8 +13,10 @@ response style), this provider captures freeform facts via LLM inference.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import re
 import time
 from typing import Any
@@ -33,6 +35,112 @@ _INJECTION_CONFIDENCE_THRESHOLD = 0.6
 
 # Maximum number of memories to inject as system instructions per turn
 _MAX_INJECTED_MEMORIES = 15
+
+# Common English stop-words filtered out during word-overlap relevance scoring.
+# These words carry little semantic meaning and would otherwise dominate overlap counts.
+_STOP_WORDS: frozenset[str] = frozenset(
+	{
+		"a",
+		"an",
+		"the",
+		"and",
+		"or",
+		"but",
+		"in",
+		"on",
+		"at",
+		"to",
+		"for",
+		"of",
+		"with",
+		"by",
+		"from",
+		"is",
+		"are",
+		"was",
+		"were",
+		"be",
+		"been",
+		"being",
+		"have",
+		"has",
+		"had",
+		"do",
+		"does",
+		"did",
+		"will",
+		"would",
+		"could",
+		"should",
+		"may",
+		"might",
+		"can",
+		"shall",
+		"i",
+		"me",
+		"my",
+		"we",
+		"our",
+		"you",
+		"your",
+		"he",
+		"she",
+		"it",
+		"they",
+		"them",
+		"this",
+		"that",
+		"these",
+		"those",
+		"not",
+		"no",
+		"nor",
+		"so",
+		"if",
+		"then",
+		"than",
+		"too",
+		"very",
+		"just",
+		"about",
+		"also",
+		"as",
+		"into",
+		"up",
+		"out",
+		"all",
+		"each",
+		"every",
+		"both",
+		"few",
+		"more",
+		"most",
+		"other",
+		"some",
+		"such",
+		"only",
+		"own",
+		"same",
+		"what",
+		"which",
+		"who",
+		"whom",
+		"when",
+		"where",
+		"how",
+		"here",
+		"there",
+	}
+)
+
+# Cache key prefix for memory embeddings in Redis.
+_MEMORY_EMBEDDING_CACHE_KEY_PREFIX = "ph_agent:memory_embeddings:v1"
+
+# Version counter suffix — bumped when memories change so cached embeddings invalidate.
+_MEMORY_EMBEDDING_CACHE_VERSION_SUFFIX = ":cache_version"
+
+# TTL for cached memory embeddings (seconds).
+_MEMORY_EMBEDDING_CACHE_TTL = 3600
 
 # Default model to use for extraction if the provider doesn't specify one
 _DEFAULT_EXTRACTION_MODEL = "gpt-4o-mini"
@@ -120,8 +228,8 @@ class LLMMemoryProvider(ContextProvider):
 		# Extract the current user query for relevance filtering
 		user_message = self._get_latest_user_message(context) or ""
 
-		memories = self._load_memories(
-			user, persona=persona, query=user_message, top_k=_MAX_INJECTED_MEMORIES
+		memories = await self._load_memories(
+			user, persona=persona, query=user_message, top_k=_MAX_INJECTED_MEMORIES, session=session
 		)
 
 		# Cache in session state for same-turn access
@@ -209,7 +317,7 @@ class LLMMemoryProvider(ContextProvider):
 		frappe.db.commit()
 
 		# Update state cache
-		state[self.MEMORIES_KEY] = self._load_memories(user, persona=persona)
+		state[self.MEMORIES_KEY] = await self._load_memories(user, persona=persona, session=session)
 		state[self.LAST_EXTRACTION_KEY] = time.time()
 
 	# ------------------------------------------------------------------
@@ -317,6 +425,139 @@ class LLMMemoryProvider(ContextProvider):
 		return _DEFAULT_EXTRACTION_MODEL
 
 	# ------------------------------------------------------------------
+	# Embedding-based relevance scoring
+	# ------------------------------------------------------------------
+
+	@staticmethod
+	def _get_embedding_config(session: Any) -> tuple[str | None, str | None, str | None]:
+		"""Resolve embedding model, API key, and base URL from the session's LLM Provider.
+
+		Returns ``(model, api_key, api_url)`` — each may be None if not configured.
+		"""
+		session_id = getattr(session, "session_id", None)
+		if not session_id:
+			return None, None, None
+		try:
+			provider_name = frappe.db.get_value("Chat Session", session_id, "llm_provider")
+			if not provider_name:
+				return None, None, None
+			provider_doc = frappe.get_doc("LLM Provider", provider_name)
+			embedding_model = provider_doc.get("embedding_model")
+			if not embedding_model:
+				return None, None, None
+			api_key = provider_doc.get_password("api_key")
+			if not api_key:
+				return None, None, None
+			api_url = (
+				provider_doc.get("embedding_api_url") or provider_doc.api_url or "https://api.openai.com/v1"
+			)
+			if not api_url.endswith("/"):
+				api_url += "/"
+			return embedding_model, api_key, api_url
+		except Exception:
+			return None, None, None
+
+	@staticmethod
+	async def _get_memory_embeddings(
+		memories: list[dict[str, Any]],
+		api_key: str,
+		api_url: str,
+		model: str,
+		user: str,
+		persona: str | None = None,
+	) -> dict[int, list[float]] | None:
+		"""Get embeddings for a list of memory facts, from cache or freshly computed.
+
+		Uses a content hash of all memory facts combined with a version counter
+		so the cache auto-invalidates when any fact changes.
+
+		Returns ``{index: embedding_vector}`` keyed by position in the input list,
+		or None on failure.
+		"""
+		if not memories:
+			return None
+
+		persona_slug = persona or "_nopersona"
+
+		# Read the current cache version
+		version_key = (
+			f"{_MEMORY_EMBEDDING_CACHE_KEY_PREFIX}:{user}:{persona_slug}"
+			f"{_MEMORY_EMBEDDING_CACHE_VERSION_SUFFIX}"
+		)
+		version = frappe.cache().get_value(version_key) or 0
+
+		fact_texts = [mem["fact"] for mem in memories]
+		content_hash = hashlib.md5("||".join(fact_texts).encode("utf-8")).hexdigest()
+		cache_key = (
+			f"{_MEMORY_EMBEDDING_CACHE_KEY_PREFIX}:{user}:{persona_slug}:{model}:{content_hash}:v{version}"
+		)
+
+		# Try Redis cache
+		try:
+			cached = frappe.cache().get_value(cache_key)
+			if cached is not None:
+				logger.debug(
+					"LLMMemoryProvider: embedding cache hit for %s (%d memories)",
+					cache_key,
+					len(memories),
+				)
+				if isinstance(cached, str):
+					cached = json.loads(cached)
+				# Convert string keys back to int
+				return {int(k): v for k, v in cached.items()}
+		except Exception:
+			pass
+
+		logger.debug("LLMMemoryProvider: computing embeddings for %d memories", len(memories))
+
+		# Batch compute embeddings
+		try:
+			client = AsyncOpenAI(api_key=api_key, base_url=api_url)
+			response = await client.embeddings.create(model=model, input=fact_texts)
+			indexed: dict[int, list[float]] = {item.index: item.embedding for item in response.data}
+		except Exception as e:
+			logger.warning("LLMMemoryProvider: embedding API call failed: %s", e)
+			return None
+
+		# Cache in Redis (best-effort)
+		try:
+			# Convert int keys to str for JSON serialization
+			frappe.cache().set_value(
+				cache_key,
+				{k: v for k, v in indexed.items()},
+				expires_in_sec=_MEMORY_EMBEDDING_CACHE_TTL,
+			)
+		except Exception:
+			pass
+
+		return indexed
+
+	@staticmethod
+	def _clear_memory_embedding_cache(user: str, persona: str | None = None) -> None:
+		"""Invalidate cached memory embeddings by bumping the version counter.
+
+		Called after memories are inserted or updated so the next relevance
+		scoring round picks up the changes. Uses the same version-counter
+		pattern as ``clear_tool_embedding_cache`` in embedding_router.py.
+		"""
+		persona_slug = persona or "_nopersona"
+		version_key = (
+			f"{_MEMORY_EMBEDDING_CACHE_KEY_PREFIX}:{user}:{persona_slug}"
+			f"{_MEMORY_EMBEDDING_CACHE_VERSION_SUFFIX}"
+		)
+		try:
+			version = frappe.cache().get_value(version_key) or 0
+			frappe.cache().set_value(version_key, version + 1)
+			logger.debug(
+				"LLMMemoryProvider: bumped embedding cache version for %s/%s to %d",
+				user,
+				persona_slug,
+				version + 1,
+			)
+		except Exception as e:
+			logger.warning("LLMMemoryProvider: failed to bump embedding cache version: %s", e)
+
+	# ------------------------------------------------------------------
 	# Memory extraction via LLM
 	# ------------------------------------------------------------------
 
@@ -391,13 +632,13 @@ class LLMMemoryProvider(ContextProvider):
 
 		try:
 			data = json.loads(cleaned)
-		except json.JSONDecodeError, TypeError:
+		except (json.JSONDecodeError, TypeError):
 			# Try to find a JSON array in the response
 			try:
 				start_idx = cleaned.index("[")
 				end_idx = cleaned.rindex("]")
 				data = json.loads(cleaned[start_idx : end_idx + 1])
-			except ValueError, json.JSONDecodeError, TypeError:
+			except (ValueError, json.JSONDecodeError, TypeError):
 				logger.warning("Failed to parse LLM extraction response: %s", content[:200])
 				return []
 
@@ -427,22 +668,31 @@ class LLMMemoryProvider(ContextProvider):
 	# ------------------------------------------------------------------
 
 	@staticmethod
-	def _load_memories(
-		user: str, persona: str | None = None, query: str = "", top_k: int = 15
+	async def _load_memories(
+		user: str,
+		persona: str | None = None,
+		query: str = "",
+		top_k: int = 15,
+		session: Any = None,
 	) -> list[dict[str, Any]]:
 		"""Load memories for a user and persona, filtered by relevance to the current query.
 
-		When ``query`` is non-empty, memories are scored by word overlap with
-		the query and only the top-K most relevant are returned. This prevents
-		context dilution as the memory store grows over time.
+		When ``query`` is non-empty and an embedding model is configured on the
+		session's LLM Provider, memories are scored by **cosine similarity**
+		between the query embedding and each memory's fact embedding. This
+		captures semantic meaning rather than just keyword overlap.
 
-		When ``query`` is empty, falls back to top-K by confidence.
+		When no embedding model is available, falls back to word-overlap scoring
+		with stop-word removal — a meaningful improvement over the naive approach.
+
+		When ``query`` is empty, returns top-K by confidence.
 
 		Args:
 			user: The Frappe user to load memories for.
 			persona: The persona to scope memories to.
 			query: The current user message text for relevance scoring.
 			top_k: Maximum number of memories to return.
+			session: The agent session (needed for embedding config resolution).
 
 		Returns:
 			List of dicts with keys ``fact``, ``category``, ``confidence``.
@@ -475,30 +725,24 @@ class LLMMemoryProvider(ContextProvider):
 			for r in records
 		]
 
-		# If no query, return top-K by confidence (existing behavior with cap)
+		# If no query, return top-K by confidence
 		query = (query or "").strip()
 		if not query:
 			return all_memories[:top_k]
 
-		# Relevance scoring: count overlapping words between query and fact
-		query_words = set(re.findall(r"\b\w+\b", query.lower()))
-		if not query_words:
-			return all_memories[:top_k]
+		# Try embedding-based semantic scoring first
+		if session is not None:
+			result = await LLMMemoryProvider._score_by_embedding(
+				all_memories, query, top_k, user, persona, session
+			)
+			if result is not None:
+				return result
 
-		scored: list[tuple[int, dict[str, Any]]] = []
-		for mem in all_memories:
-			fact_words = set(re.findall(r"\b\w+\b", mem["fact"].lower()))
-			overlap = len(query_words & fact_words)
-			if overlap > 0:
-				scored.append((overlap, mem))
-
-		# Sort by overlap score DESC, then confidence DESC
-		scored.sort(key=lambda x: (x[0], x[1].get("confidence", 0)), reverse=True)
-
-		result = [mem for _, mem in scored[:top_k]]
+		# Fall back to word-overlap scoring (with stop-word removal)
+		result = LLMMemoryProvider._score_by_word_overlap(all_memories, query, top_k)
 
 		logger.debug(
-			"LLMMemoryProvider: relevance-filtered %d/%d memories for user %s (query=%s)",
+			"LLMMemoryProvider: word-overlap filtered %d/%d memories for user %s (query=%s)",
 			len(result),
 			len(all_memories),
 			user,
@@ -506,6 +750,108 @@ class LLMMemoryProvider(ContextProvider):
 		)
 
 		return result
+
+	@staticmethod
+	async def _score_by_embedding(
+		all_memories: list[dict[str, Any]],
+		query: str,
+		top_k: int,
+		user: str,
+		persona: str | None,
+		session: Any,
+	) -> list[dict[str, Any]] | None:
+		"""Score memories by cosine similarity between query and memory embeddings.
+
+		Returns the top-K memories sorted by similarity score (descending), with
+		confidence as tiebreaker. Returns None if embedding config is unavailable
+		or any API call fails — callers should fall back to word-overlap.
+		"""
+		embedding_model, api_key, api_url = LLMMemoryProvider._get_embedding_config(session)
+		if not embedding_model or not api_key:
+			return None
+
+		# Get or compute memory embeddings (cached by content hash)
+		memory_embs = await LLMMemoryProvider._get_memory_embeddings(
+			all_memories, api_key, api_url, embedding_model, user, persona
+		)
+		if memory_embs is None:
+			return None
+
+		# Compute query embedding
+		try:
+			client = AsyncOpenAI(api_key=api_key, base_url=api_url)
+			response = await client.embeddings.create(model=embedding_model, input=query)
+			query_emb = response.data[0].embedding
+		except Exception as e:
+			logger.warning("LLMMemoryProvider: query embedding API call failed: %s", e)
+			return None
+
+		# Compute cosine similarity for each memory that has an embedding
+		q_norm = math.sqrt(sum(v * v for v in query_emb))
+		if q_norm == 0.0:
+			return None
+
+		scored: list[tuple[float, dict[str, Any]]] = []
+		for i, mem in enumerate(all_memories):
+			emb = memory_embs.get(i)
+			if emb is None:
+				continue
+			t_norm = math.sqrt(sum(v * v for v in emb))
+			if t_norm == 0.0:
+				continue
+			similarity = sum(
+				a * b
+				for a, b in zip(
+					[v / q_norm for v in query_emb],
+					[v / t_norm for v in emb],
+					strict=True,
+				)
+			)
+			scored.append((similarity, mem))
+
+		if not scored:
+			return None
+
+		# Sort by similarity DESC, then confidence DESC as tiebreaker
+		scored.sort(key=lambda x: (x[0], x[1].get("confidence", 0)), reverse=True)
+
+		result = [mem for _, mem in scored[:top_k]]
+
+		logger.debug(
+			"LLMMemoryProvider: embedding-filtered %d/%d memories (query=%s)",
+			len(result),
+			len(all_memories),
+			query[:60],
+		)
+
+		return result
+
+	@staticmethod
+	def _score_by_word_overlap(
+		all_memories: list[dict[str, Any]],
+		query: str,
+		top_k: int,
+	) -> list[dict[str, Any]]:
+		"""Score memories by word overlap with stop-word removal.
+
+		Filters out common English stop-words before computing overlap so that
+		semantically meaningful words drive the score rather than "the", "is", etc.
+		"""
+		query_words = set(re.findall(r"\b\w+\b", query.lower())) - _STOP_WORDS
+		if not query_words:
+			return all_memories[:top_k]
+
+		scored: list[tuple[int, dict[str, Any]]] = []
+		for mem in all_memories:
+			fact_words = set(re.findall(r"\b\w+\b", mem["fact"].lower())) - _STOP_WORDS
+			overlap = len(query_words & fact_words)
+			if overlap > 0:
+				scored.append((overlap, mem))
+
+		# Sort by overlap score DESC, then confidence DESC
+		scored.sort(key=lambda x: (x[0], x[1].get("confidence", 0)), reverse=True)
+
+		return [mem for _, mem in scored[:top_k]]
 
 	@staticmethod
 	def _deduplicate_and_merge(
@@ -601,6 +947,10 @@ class LLMMemoryProvider(ContextProvider):
 						pass
 				except Exception as e:
 					logger.warning("Failed to insert User Memory for user %s: %s", user, e)
+
+		# Clear embedding cache so the next relevance scoring round
+		# picks up the new or updated memories.
+		LLMMemoryProvider._clear_memory_embedding_cache(user, persona)
 
 	# ------------------------------------------------------------------
 	# Message extraction from context

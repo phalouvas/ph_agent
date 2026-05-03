@@ -250,28 +250,8 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
             // Create optimistic user message
             const tempId = "temp_" + Date.now();
             
-            // Common MIME type to extension mapping (shared with handleOpenFile)
-            const mimeTypeToExtension = {
-                'application/pdf': 'pdf',
-                'application/msword': 'doc',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-                'application/vnd.ms-excel': 'xls',
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-                'application/vnd.ms-powerpoint': 'ppt',
-                'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
-                'text/plain': 'txt',
-                'text/csv': 'csv',
-                'text/html': 'html',
-                'application/json': 'json',
-                'application/xml': 'xml',
-                'application/epub+zip': 'epub',
-                'image/jpeg': 'jpg',
-                'image/jpg': 'jpg',
-                'image/png': 'png',
-                'image/gif': 'gif',
-                'image/svg+xml': 'svg'
-            };
-            
+            const mimeToExt = window.phAgent.utils.MIME_TYPE_TO_EXTENSION;
+
             const localFiles = (files || []).map((f) => {
                 // Try to get URL from different possible properties
                 // Vue Advanced Chat might provide file objects with different structures
@@ -286,9 +266,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 // Extract extension from MIME type or filename
                 let extension = "";
                 if (mimeType && mimeType.includes('/')) {
-                    // Check MIME type mapping first
-                    if (mimeTypeToExtension[mimeType]) {
-                        extension = mimeTypeToExtension[mimeType];
+                    const mimeLower = mimeType.toLowerCase();
+                    if (mimeToExt[mimeLower]) {
+                        extension = mimeToExt[mimeLower];
                     } else {
                         // Extract from MIME type (e.g., "application/pdf" -> "pdf")
                         extension = mimeType.split('/').pop();
@@ -394,34 +374,14 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                                             }
                                         }
                                         
-                                        // Common MIME type to extension mapping (shared)
-                                        const mimeTypeToExtension = {
-                                            'application/pdf': 'pdf',
-                                            'application/msword': 'doc',
-                                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-                                            'application/vnd.ms-excel': 'xls',
-                                            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-                                            'application/vnd.ms-powerpoint': 'ppt',
-                                            'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
-                                            'text/plain': 'txt',
-                                            'text/csv': 'csv',
-                                            'text/html': 'html',
-                                            'application/json': 'json',
-                                            'application/xml': 'xml',
-                                            'application/epub+zip': 'epub',
-                                            'image/jpeg': 'jpg',
-                                            'image/jpg': 'jpg',
-                                            'image/png': 'png',
-                                            'image/gif': 'gif',
-                                            'image/svg+xml': 'svg'
-                                        };
-                                        
+                                        const mimeToExt = window.phAgent.utils.MIME_TYPE_TO_EXTENSION;
+
                                         // Get extension from MIME type or filename
                                         let extension = "";
                                         if (uploadedFile.file_type) {
-                                            // Check MIME type mapping first
-                                            if (mimeTypeToExtension[uploadedFile.file_type]) {
-                                                extension = mimeTypeToExtension[uploadedFile.file_type];
+                                            const mimeLower = uploadedFile.file_type.toLowerCase();
+                                            if (mimeToExt[mimeLower]) {
+                                                extension = mimeToExt[mimeLower];
                                             } else {
                                                 extension = uploadedFile.file_type.split('/').pop().toLowerCase();
                                             }
@@ -1124,37 +1084,16 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                 
 
                 
-                // Common MIME type to extension mapping
-                const mimeTypeToExtension = {
-                    'application/pdf': 'pdf',
-                    'application/msword': 'doc',
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-                    'application/vnd.ms-excel': 'xls',
-                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-                    'application/vnd.ms-powerpoint': 'ppt',
-                    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
-                    'text/plain': 'txt',
-                    'text/csv': 'csv',
-                    'text/html': 'html',
-                    'application/json': 'json',
-                    'application/xml': 'xml',
-                    'application/epub+zip': 'epub',
-                    'image/jpeg': 'jpg',
-                    'image/jpg': 'jpg',
-                    'image/png': 'png',
-                    'image/gif': 'gif',
-                    'image/svg+xml': 'svg'
-                };
-                
+                const mimeToExt = window.phAgent.utils.MIME_TYPE_TO_EXTENSION;
+
                 // If fileName doesn't have extension but we have fileExtension, add it
                 if (fileName && fileExtension && !fileName.includes('.')) {
                     // Remove any leading dot from extension and convert to lowercase
                     fileExtension = fileExtension.replace(/^\./, '').toLowerCase();
-                    
+
                     // Check if fileExtension is a MIME type (contains '/')
                     if (fileExtension.includes('/')) {
-                        // It's a MIME type, look up extension
-                        const mappedExtension = mimeTypeToExtension[fileExtension];
+                        const mappedExtension = mimeToExt[fileExtension];
                         if (mappedExtension) {
                             fileExtension = mappedExtension;
                         } else {

@@ -548,7 +548,6 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             if (!detailsEl) {
                 detailsEl = document.createElement('details');
                 detailsEl.className = 'ph-reasoning-block';
-                detailsEl.setAttribute('open', '');
                 detailsEl.setAttribute('data-frontend', 'true');
                 
                 const summary = document.createElement('summary');

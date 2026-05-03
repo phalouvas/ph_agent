@@ -81,6 +81,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.on("reasoning_chunk", this.handleReasoningChunk.bind(this));
             frappe.realtime.on("token_update", this.handleTokenUpdate.bind(this));
             frappe.realtime.on("token_warning", this.handleTokenWarning.bind(this));
+            frappe.realtime.on("messages_pruned", this.handleMessagesPruned.bind(this));
         },
         
         /**
@@ -148,8 +149,9 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             frappe.realtime.off("suggestions_ready");
             frappe.realtime.off("message_chunk");
             frappe.realtime.off("reasoning_chunk");
+            frappe.realtime.off("messages_pruned");
         },
-        
+
         // --- Stop Button Handler ---
         
         /**
@@ -656,7 +658,20 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             // Also update token counter
             this.handleTokenUpdate(data);
         },
-        
+
+        /**
+         * Handle messages_pruned event
+         * @param {Object} data - Event data with session, count, percentage, message
+         */
+        handleMessagesPruned: function(data) {
+            if (data.session !== _activeRoomId) return;
+
+            frappe.show_alert({
+                message: data.message || `${data.count} old messages were removed to free context space.`,
+                indicator: "orange"
+            }, 10);
+        },
+
         // --- Utility Methods ---
         
         /**

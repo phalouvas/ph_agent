@@ -15,8 +15,8 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
     let _activeRoomId = null;
     let _agentId = null;
     let _responseCompleted = false;  // Tracks whether the current response has finished
-    let _chunkBuffer = new Map();    // messageId → accumulated chunk string (rAF-batched)
-    let _rafScheduled = false;       // Prevents duplicate rAF scheduling
+    let _chunkBuffer = new Map();    // messageId → accumulated chunk string (setTimeout-batched)
+    let _rafScheduled = false;       // Prevents duplicate flush scheduling
     let _finalizedMessages = new Set(); // messageIds that have received final content
     
     // Public API
@@ -98,8 +98,8 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
         
         /**
          * Flush the chunk buffer — applies all accumulated chunks to the message
-         * state in a single batch, then schedules a second rAF for scroll.
-         * Called from rAF callback or synchronously on stream completion.
+         * state in a single batch, then schedules a scroll update.
+         * Called from setTimeout callback or synchronously on stream completion.
          */
         _flushChunkBuffer: function() {
             _rafScheduled = false;
@@ -133,14 +133,15 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             // Single Vue re-render for all buffered updates
             _chat.messages = state.getMessages();
             
-            // Schedule scroll in the NEXT frame — Vue needs one frame to update DOM
-            requestAnimationFrame(function() {
+            // Schedule scroll after Vue renders the DOM update.
+            // setTimeout(0) works in background tabs where rAF would pause.
+            setTimeout(function() {
                 const uiHelpers = window.phAgent.uiHelpers;
                 const scrolled = uiHelpers.scrollToBottomIfNear(80);
                 if (!scrolled) {
                     uiHelpers.triggerScrollDetection();
                 }
-            });
+            }, 0);
         },
         
         /**
@@ -542,10 +543,12 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 const existing = _chunkBuffer.get(data.message_id) || "";
                 _chunkBuffer.set(data.message_id, existing + data.chunk);
                 
-                // Schedule a single rAF flush if not already scheduled
+                // Schedule a single flush if not already scheduled.
+                // Use setTimeout instead of requestAnimationFrame — rAF pauses
+                // when the tab is backgrounded, causing chunks to pile up.
                 if (!_rafScheduled) {
                     _rafScheduled = true;
-                    requestAnimationFrame(() => this._flushChunkBuffer());
+                    setTimeout(() => this._flushChunkBuffer(), 0);
                 }
             }
         },

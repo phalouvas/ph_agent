@@ -34,6 +34,23 @@ def _delete_files_attached_to_message(message_id):
 			)
 
 
+def _get_ordered_session_messages(session_id, fields=None):
+	"""Return all Chat Messages for a session in deterministic order.
+
+	Orders by (creation ASC, name ASC) so that messages sharing the same
+	creation second have a stable, reproducible ordering. This avoids
+	non-determinism from second-precision DATETIME comparisons.
+	"""
+	if fields is None:
+		fields = ["name", "sender_type", "creation"]
+	return frappe.get_all(
+		"Chat Message",
+		filters={"chat_session": session_id},
+		fields=fields,
+		order_by="creation asc, name asc",
+	)
+
+
 def _get_recent_session_context(user: str, persona: str | None = None, limit: int = 3) -> str | None:
 	"""Build a grounding context string from the user's recent sessions in the same persona.
 
@@ -93,7 +110,7 @@ def _get_recent_session_context(user: str, persona: str | None = None, limit: in
 					"Chat Message",
 					filters={"chat_session": session_doc.name, "sender_type": "User"},
 					fields=["content"],
-					order_by="creation asc",
+					order_by="creation asc, name asc",
 					limit_page_length=1,
 				)
 				if first_msg and first_msg[0].content:
@@ -432,7 +449,7 @@ def get_history(session):
 		"Chat Message",
 		filters={"chat_session": session},
 		fields=["name", "sender_type", "content", "creation", "is_edited", "reasoning_content"],
-		order_by="creation asc",
+		order_by="creation asc, name asc",
 	)
 	for msg in messages:
 		msg["files"] = frappe.get_all(
@@ -652,20 +669,29 @@ def edit_message(message_id, content):
 	msg.edited_by = frappe.session.user
 	msg.save(ignore_permissions=True)
 
-	# Delete ALL messages that came after this one
-	subsequent = frappe.get_all(
-		"Chat Message",
-		filters={"chat_session": session, "creation": [">", msg.creation]},
-		fields=["name"],
-		order_by="creation asc",
-	)
+	# Delete ALL messages that came after this one.
+	# Uses deterministic ordering (creation ASC, name ASC) so that
+	# messages with the same creation second are ordered by insertion.
+	all_messages = _get_ordered_session_messages(session, fields=["name"])
 	deleted_ids = []
-	for subsequent_msg in subsequent:
-		deleted_ids.append(subsequent_msg.name)
-		# Delete User Memory records linked to this message
-		frappe.db.delete("User Memory", {"source_message": subsequent_msg.name})
-		# Delete the chat message (on_trash hook will delete attached files)
-		frappe.delete_doc("Chat Message", subsequent_msg.name, ignore_permissions=True)
+	found = False
+	for i, m in enumerate(all_messages):
+		if m.name == msg.name:
+			# Everything after position i is subsequent
+			subsequent = all_messages[i + 1:]
+			found = True
+			for subsequent_msg in subsequent:
+				deleted_ids.append(subsequent_msg.name)
+				# Delete User Memory records linked to this message
+				frappe.db.delete("User Memory", {"source_message": subsequent_msg.name})
+				# Delete the chat message (on_trash hook will delete attached files)
+				frappe.delete_doc("Chat Message", subsequent_msg.name, ignore_permissions=True)
+			break
+	if not found:
+		frappe.throw(
+			frappe._("Message not found in session."),
+			frappe.exceptions.ValidationError,
+		)
 
 	frappe.db.commit()
 
@@ -737,7 +763,7 @@ def summarize_conversation(session, message_ids=None):
 			"Chat Message",
 			filters={"name": ["in", message_ids], "chat_session": session},
 			fields=["name", "sender_type", "content", "creation"],
-			order_by="creation asc",
+			order_by="creation asc, name asc",
 		)
 	else:
 		# Summarize all messages since last summary
@@ -749,11 +775,11 @@ def summarize_conversation(session, message_ids=None):
 				"Chat Message",
 				filters={
 					"chat_session": session,
-					"creation": [">", last_summary_doc.creation],
+					"creation": [">=", last_summary_doc.creation],
 					"message_type": ["!=", "Summary"]  # Don't include other summaries
 				},
 				fields=["name", "sender_type", "content", "creation"],
-				order_by="creation asc",
+				order_by="creation asc, name asc",
 			)
 		else:
 			# No previous summary, get all non-summary messages
@@ -764,7 +790,7 @@ def summarize_conversation(session, message_ids=None):
 					"message_type": ["!=", "Summary"]
 				},
 				fields=["name", "sender_type", "content", "creation"],
-				order_by="creation asc",
+				order_by="creation asc, name asc",
 			)
 	
 	if not messages:
@@ -934,18 +960,26 @@ def regenerate_message(message_id):
 			frappe.exceptions.ValidationError,
 		)
 
-	# Find the preceding user message
-	preceding = frappe.get_all(
-		"Chat Message",
-		filters={"chat_session": session, "creation": ["<", msg.creation], "sender_type": "User"},
-		fields=["name", "content", "creation"],
-		order_by="creation desc",
-		limit=1,
+	# Find the preceding user message using deterministic ordering.
+	# Iterates over all session messages ordered by (creation ASC, name ASC)
+	# to avoid non-determinism from second-precision timestamps.
+	all_messages = _get_ordered_session_messages(
+		session,
+		fields=["name", "content", "sender_type", "creation"],
 	)
+	preceding = None
+	for i, m in enumerate(all_messages):
+		if m.name == msg.name:
+			# Walk backward from position i-1 to find the nearest User message
+			for j in range(i - 1, -1, -1):
+				if all_messages[j].sender_type == "User":
+					preceding = all_messages[j]
+					break
+			break
 	if not preceding:
 		frappe.throw(frappe._("No preceding user message found to regenerate from."))
 
-	user_msg = preceding[0]
+	user_msg = preceding
 	file_names = frappe.get_all(
 		"File",
 		filters={"attached_to_doctype": "Chat Message", "attached_to_name": user_msg.name},

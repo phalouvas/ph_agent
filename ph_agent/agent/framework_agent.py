@@ -680,14 +680,14 @@ class FrappeMemoryProvider(HistoryProvider):
 				"Chat Message",
 				filters={"chat_session": session_id, "creation": [">=", last_summary_doc.creation]},
 				fields=["sender_type", "content", "message_type", "reasoning_content"],
-				order_by="creation asc",
+				order_by="creation asc, name asc",
 			)
 		else:
 			prior_messages = frappe.get_all(
 				"Chat Message",
 				filters={"chat_session": session_id},
 				fields=["sender_type", "content", "message_type", "reasoning_content"],
-				order_by="creation asc",
+				order_by="creation asc, name asc",
 			)
 
 		history: list[Message] = []

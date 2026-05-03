@@ -250,7 +250,7 @@ class LLMMemoryProvider(ContextProvider):
 				"Chat Message",
 				filters={"chat_session": session_id},
 				fields=["name"],
-				order_by="creation desc",
+				order_by="creation desc, name desc",
 				limit_page_length=1,
 			)
 			return last_msg[0].name if last_msg else None

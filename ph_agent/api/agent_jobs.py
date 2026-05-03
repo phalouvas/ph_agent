@@ -175,13 +175,13 @@ def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
 		filters = {"chat_session": session, "message_type": ["!=", "Summary"]}
 		if last_summary:
 			last_summary_doc = frappe.get_doc("Chat Message", last_summary)
-			filters["creation"] = [">", last_summary_doc.creation]
+			filters["creation"] = [">=", last_summary_doc.creation]
 
 		remaining = frappe.get_all(
 			"Chat Message",
 			filters=filters,
 			fields=["name", "content"],
-			order_by="creation asc",
+			order_by="creation asc, name asc",
 		)
 
 		# Keep at least 2 turns (4 messages) to preserve conversation quality
@@ -247,11 +247,11 @@ def _perform_auto_summary(
 			"Chat Message",
 			filters={
 				"chat_session": session,
-				"creation": [">", last_summary_doc.creation],
+				"creation": [">=", last_summary_doc.creation],
 				"message_type": ["!=", "Summary"],
 			},
 			fields=["name", "sender_type", "content", "creation"],
-			order_by="creation asc",
+			order_by="creation asc, name asc",
 		)
 	else:
 		messages = frappe.get_all(
@@ -261,7 +261,7 @@ def _perform_auto_summary(
 				"message_type": ["!=", "Summary"],
 			},
 			fields=["name", "sender_type", "content", "creation"],
-			order_by="creation asc",
+			order_by="creation asc, name asc",
 		)
 
 	if not messages:
@@ -1009,7 +1009,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				"Chat Message",
 				filters={"chat_session": session},
 				fields=["sender_type", "content"],
-				order_by="creation asc",
+				order_by="creation asc, name asc",
 			)
 			history = [
 				{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}
@@ -1112,7 +1112,7 @@ def _generate_suggestions_background(session, agent_message_id, enqueued_by):
 			"Chat Message",
 			filters={"chat_session": session},
 			fields=["sender_type", "content"],
-			order_by="creation asc",
+			order_by="creation asc, name asc",
 		)
 		history = [
 			{"role": "user" if m.sender_type == "User" else "assistant", "content": m.content or ""}

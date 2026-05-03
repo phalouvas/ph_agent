@@ -26,6 +26,7 @@ from ph_agent.agent.context.user_preference_provider import UserPreferenceProvid
 from ph_agent.agent.skills import get_code_skills
 from ph_agent.agent.skills.script_runner import run_file_script
 from ph_agent.agent.tools.tool_manager import ToolManager
+from ph_agent.api.token_counter import init_context_budget
 from ph_agent.api.token_utils import (
 	_atomic_update_chat_session_tokens,
 	_atomic_update_user_token_usage,
@@ -601,7 +602,13 @@ def _build_skills_provider() -> SkillsProvider:
 	When a DocType skill has the same name as a file-based skill, DocType
 	takes precedence — the file-based skill directory with the matching name
 	is excluded.
+
+	Skill counts are capped to prevent dilution of the system prompt
+	(see TOKENS-OPTIMIZATION.md #6).
 	"""
+	_MAX_CODE_SKILLS = 30
+	_MAX_FILE_SKILLS = 20
+
 	# Get enabled DocType skill names
 	code_skills = get_code_skills()
 	doctype_skill_names = set(s.name for s in code_skills)
@@ -618,6 +625,11 @@ def _build_skills_provider() -> SkillsProvider:
 		all_dirs = [str(d) for d in skills_dir.iterdir() if d.is_dir()]
 		filtered_dirs = [d for d in all_dirs if Path(d).name not in doctype_skill_names]
 		skill_paths = filtered_dirs if filtered_dirs else None
+
+	# Cap to prevent context dilution
+	code_skills = code_skills[:_MAX_CODE_SKILLS]
+	if skill_paths:
+		skill_paths = skill_paths[:_MAX_FILE_SKILLS]
 
 	debug_log(
 		"_build_skills_provider",
@@ -1100,6 +1112,7 @@ def _run_agent(
 
 	async def _impl():
 		await _try_route_tools(agent, session_name, user_text)
+		init_context_budget(agent_session.state)
 		return await agent.run(messages, session=agent_session)
 
 	result = asyncio.run(_impl())
@@ -1147,6 +1160,7 @@ async def _run_agent_stream(
 	user_text = _extract_text_from_messages(messages)
 	await _try_route_tools(agent, session_name, user_text)
 
+	init_context_budget(agent_session.state)
 	stream = agent.run(messages, session=agent_session, stream=True)
 	if inspect.isawaitable(stream):
 		stream = await stream

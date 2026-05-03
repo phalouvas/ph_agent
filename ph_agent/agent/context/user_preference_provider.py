@@ -66,66 +66,66 @@ def _infer_language(match: re.Match) -> str:
 # Each entry defines: key name, regex patterns to detect, and how to
 # extract the value from a match.
 _PREFERENCE_PATTERNS: list[dict[str, Any]] = [
-    {
-        "key": "user_name",
-        "patterns": [
-            r"(?:my name is|I'm|c?all me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-            r"(?:I am|I'm)\s+called\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-        ],
-        "group": 1,
-        "confidence": 0.8,
-    },
-    {
-        "key": "date_format",
-        "patterns": [
-            r"(\d{4}[-/]\d{1,2}[-/]\d{1,2})",  # YYYY-MM-DD or YYYY/MM/DD
-            r"(\d{1,2}[-/]\d{1,2}[-/]\d{4})",  # MM/DD/YYYY or DD/MM/YYYY
-            r"(\d{1,2}\.\d{1,2}\.\d{4})",       # DD.MM.YYYY
-        ],
-        "group": 1,
-        "confidence": 0.6,
-        "transform": _infer_date_format,
-    },
-    {
-        "key": "language",
-        "patterns": [
-            r"\b(hablo español|spanish|habla|español)\b",
-            r"\b(je parle français|french|français)\b",
-            r"\b(ich spreche deutsch|german|deutsch)\b",
-        ],
-        "group": 1,
-        "confidence": 0.7,
-        "transform": _infer_language,
-    },
-    {
-        "key": "response_style",
-        "patterns": [
-            r"(?:please )?(?:be\s+)?(concise|brief|short)\b",
-            r"(?:in\s+)?(detail|detailed|comprehensive|thorough)\b",
-            r"(?:explain\s+)?(simply|simple|basic|easy)\b",
-            r"(?:keep it\s+)?(professional|formal|casual|informal)\b",
-        ],
-        "group": 1,
-        "confidence": 0.7,
-    },
-    {
-        "key": "common_doctypes",
-        "patterns": [
-            r"(?:show|list|get|find|fetch|query)\s+(\w+(?:\s+\w+)?)\s+(?:for|in|from)",
-            r"(?:in|of|for)\s+the\s+(\w+(?:\s+\w+)?)\s+(?:doctype|document|record)",
-        ],
-        "group": 1,
-        "confidence": 0.4,  # Lower confidence — could be false positive
-    },
-    {
-        "key": "timezone",
-        "patterns": [
-            r"(?:time zone|timezone|tz)\s+(?:is\s+)?([A-Za-z]+/[A-Za-z_]+)",
-            r"(?:I(?:'m| am)\s+in\s+)([A-Za-z]+/[A-Za-z_]+)\s+(?:time zone|timezone|tz)",
-        ],
-        "group": 1,
-        "confidence": 0.8,
-    },
+	{
+		"key": "user_name",
+		"patterns": [
+			r"(?:my name is|I'm|c?all me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+			r"(?:I am|I'm)\s+called\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+		],
+		"group": 1,
+		"confidence": 0.8,
+	},
+	{
+		"key": "date_format",
+		"patterns": [
+			r"(\d{4}[-/]\d{1,2}[-/]\d{1,2})",  # YYYY-MM-DD or YYYY/MM/DD
+			r"(\d{1,2}[-/]\d{1,2}[-/]\d{4})",  # MM/DD/YYYY or DD/MM/YYYY
+			r"(\d{1,2}\.\d{1,2}\.\d{4})",  # DD.MM.YYYY
+		],
+		"group": 1,
+		"confidence": 0.6,
+		"transform": _infer_date_format,
+	},
+	{
+		"key": "language",
+		"patterns": [
+			r"\b(hablo español|spanish|habla|español)\b",
+			r"\b(je parle français|french|français)\b",
+			r"\b(ich spreche deutsch|german|deutsch)\b",
+		],
+		"group": 1,
+		"confidence": 0.7,
+		"transform": _infer_language,
+	},
+	{
+		"key": "response_style",
+		"patterns": [
+			r"(?:please )?(?:be\s+)?(concise|brief|short)\b",
+			r"(?:in\s+)?(detail|detailed|comprehensive|thorough)\b",
+			r"(?:explain\s+)?(simply|simple|basic|easy)\b",
+			r"(?:keep it\s+)?(professional|formal|casual|informal)\b",
+		],
+		"group": 1,
+		"confidence": 0.7,
+	},
+	{
+		"key": "common_doctypes",
+		"patterns": [
+			r"(?:show|list|get|find|fetch|query)\s+(\w+(?:\s+\w+)?)\s+(?:for|in|from)",
+			r"(?:in|of|for)\s+the\s+(\w+(?:\s+\w+)?)\s+(?:doctype|document|record)",
+		],
+		"group": 1,
+		"confidence": 0.4,  # Lower confidence — could be false positive
+	},
+	{
+		"key": "timezone",
+		"patterns": [
+			r"(?:time zone|timezone|tz)\s+(?:is\s+)?([A-Za-z]+/[A-Za-z_]+)",
+			r"(?:I(?:'m| am)\s+in\s+)([A-Za-z]+/[A-Za-z_]+)\s+(?:time zone|timezone|tz)",
+		],
+		"group": 1,
+		"confidence": 0.8,
+	},
 ]
 
 
@@ -178,7 +178,12 @@ class UserPreferenceProvider(ContextProvider):
 
 		instructions_text = self._format_preferences(prefs)
 		if instructions_text:
-			context.extend_instructions(self.source_id, instructions_text)
+			# Apply token budget — preferences are second priority after memories
+			from ph_agent.api.token_counter import consume_context_budget
+
+			instructions_text = consume_context_budget(state, "preferences", instructions_text)
+			if instructions_text:
+				context.extend_instructions(self.source_id, instructions_text)
 
 	async def after_run(
 		self,
@@ -194,15 +199,12 @@ class UserPreferenceProvider(ContextProvider):
 			return
 
 		# Collect user messages from this turn
-		user_messages = [
-			msg for msg in context.input_messages
-			if msg.role == "user"
-		]
+		user_messages = [msg for msg in context.input_messages if msg.role == "user"]
 
 		if user_messages:
 			msg_text = " | ".join(
-				c.text if hasattr(c, "text") and c.text
-				else str(c) for msg in user_messages
+				c.text if hasattr(c, "text") and c.text else str(c)
+				for msg in user_messages
 				for c in (msg.contents or [])
 			)
 
@@ -258,7 +260,7 @@ class UserPreferenceProvider(ContextProvider):
 					return json.loads(doc.preferences)
 				return dict(doc.preferences)
 			return {}
-		except (frappe.DoesNotExistError, Exception):
+		except frappe.DoesNotExistError, Exception:
 			pass
 		return {}
 
@@ -325,10 +327,7 @@ class UserPreferenceProvider(ContextProvider):
 		signals: dict[str, dict[str, Any]] = {}
 
 		for msg in messages:
-			text = " ".join(
-				c.text if hasattr(c, "text") and c.text
-				else str(c) for c in (msg.contents or [])
-			)
+			text = " ".join(c.text if hasattr(c, "text") and c.text else str(c) for c in (msg.contents or []))
 			if not text:
 				continue
 

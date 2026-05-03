@@ -15,6 +15,7 @@ from ph_agent.agent.framework_agent import (
 	get_agent_response_stream,
 )
 from ph_agent.agent.tools.tool_manager import ToolManager
+from ph_agent.api.token_counter import count_tokens, get_model_for_session
 from ph_agent.api.token_utils import (
 	_atomic_update_chat_session_tokens,
 	_atomic_update_user_token_usage,
@@ -104,32 +105,34 @@ def _is_recently_summarized(session: str, min_interval_seconds: int = 60) -> boo
 def _estimate_system_overhead(session_name: str) -> int:
 	"""Estimate token overhead from system prompt + tool definitions.
 
-	Returns the estimated token count for static overhead that is not
-	accounted for by ``estimated_conversation_tokens`` (which only tracks
-	user+assistant API tokens).
+	Uses tiktoken for accurate counting when available, falling back to
+	character-count heuristics. Unlike the previous implementation, no
+	20 % buffer is added — the tiktoken count is accurate, and for
+	fallback the buffer just amplifies imprecision.
+
+	Returns the estimated token count for static overhead.
 	"""
 	session_doc = frappe.get_doc("Chat Session", session_name)
+	model = get_model_for_session(session_name)
 	system_prompt = session_doc.system_prompt or ""
 	overhead = 0
 
-	# System prompt: ~4 chars per token for English text
+	# System prompt — use tiktoken when available
 	if system_prompt:
-		overhead += len(system_prompt) // 4
+		overhead += count_tokens(system_prompt, model=model)
 
-	# Tool definitions: ~2 chars per token for JSON schemas
+	# Tool definitions — serialize schemas and count accurately
 	try:
 		tools = ToolManager.get_tools(session_name=session_name, persona=session_doc.persona)
 		for tool_obj in tools:
 			if hasattr(tool_obj, "schema") and tool_obj.schema:
 				schema_str = json.dumps(tool_obj.schema, separators=(",", ":"))
-				overhead += len(schema_str) // 2
+				overhead += count_tokens(schema_str, model=model)
 			elif hasattr(tool_obj, "description") and tool_obj.description:
-				overhead += len(tool_obj.description) // 4
+				overhead += count_tokens(tool_obj.description, model=model)
 	except Exception:
 		pass  # Best-effort; overhead is a soft estimate
 
-	# Conversation structure overhead (~20 % buffer)
-	overhead = int(overhead * 1.2)
 	return overhead
 
 

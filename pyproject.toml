@@ -17,6 +17,7 @@ dependencies = [
     "requests",                        # HTTP client used by 6 tools (sec_edgar, stack_exchange, hacker_news, reddit, exchange_rate, wikipedia)
     "ddgs>=9.0.0",                     # Web search (web_search_tool)
     "openai>=1.99.0",                  # Direct usage in framework_agent & llm_memory_provider (also transitive via agent-framework-openai)
+    "tiktoken>=0.5.0",                 # Accurate token counting for auto-summary threshold (TOKENS-OPTIMIZATION #5)
     "pydantic>=2.0",                   # Direct usage in all tools & tool_manager (also transitive via agent-framework-core)
 ]
 

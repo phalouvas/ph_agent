@@ -129,7 +129,12 @@ class LLMMemoryProvider(ContextProvider):
 
 		instructions_text = self._format_memories(memories)
 		if instructions_text:
-			context.extend_instructions(self.source_id, instructions_text)
+			# Apply token budget — memories have highest priority
+			from ph_agent.api.token_counter import consume_context_budget
+
+			instructions_text = consume_context_budget(state, "memories", instructions_text)
+			if instructions_text:
+				context.extend_instructions(self.source_id, instructions_text)
 
 	async def after_run(
 		self,
@@ -282,11 +287,33 @@ class LLMMemoryProvider(ContextProvider):
 
 	@staticmethod
 	def _get_extraction_model(session: Any) -> str:
-		"""Always use the default cheap extraction model.
+		"""Return a cheap model appropriate for the session's provider.
 
-		Memory extraction is a background task that doesn't need the
-		session's primary (potentially expensive) model.
+		Uses a provider-aware cheap model so extraction works across
+		different LLM backends (OpenAI, DeepSeek, etc.).
 		"""
+		session_id = getattr(session, "session_id", None)
+		if session_id:
+			try:
+				provider_name = frappe.db.get_value("Chat Session", session_id, "llm_provider")
+				if provider_name:
+					provider_doc = frappe.get_doc("LLM Provider", provider_name)
+					api_url = (provider_doc.api_url or "").lower()
+
+					# DeepSeek — use their chat model
+					if "deepseek" in api_url:
+						return "deepseek-chat"
+					# Anthropic — Mesa optimization; can't use OpenAI models
+					if "anthropic" in api_url:
+						return provider_doc.default_model or _DEFAULT_EXTRACTION_MODEL
+					# OpenAI-compatible — use the cheap model
+					if "openai" in api_url or not api_url:
+						return _DEFAULT_EXTRACTION_MODEL
+
+					# Unknown provider — fall back to the provider's own model
+					return provider_doc.default_model or _DEFAULT_EXTRACTION_MODEL
+			except Exception:
+				pass
 		return _DEFAULT_EXTRACTION_MODEL
 
 	# ------------------------------------------------------------------

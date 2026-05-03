@@ -680,7 +680,9 @@ window.phAgent.eventHandlers = window.phAgent.eventHandlers || (function() {
                     break;
                     
                 case "copyMessage":
-                    utils.copyTextToClipboard(message.content);
+                    utils.copyTextToClipboard(
+                        utils.stripReasoningFromContent(message.content)
+                    );
                     break;
                     
                 case "regenerateMessage":

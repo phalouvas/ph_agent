@@ -16,6 +16,8 @@ class PHAgentSettings(Document):
 
 		debug_log_level: DF.Literal["DEBUG", "INFO", "WARNING"]
 		enable_debug_logging: DF.Check
+		max_session_state_size_kb: DF.Int
+		session_state_compaction_enabled: DF.Check
 	# end: auto-generated types
 
 	pass

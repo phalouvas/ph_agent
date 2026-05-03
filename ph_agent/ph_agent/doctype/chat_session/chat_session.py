@@ -76,6 +76,7 @@ class ChatSession(Document):
 			if self.status in ["Closed", "Archived"]:
 				# Clear session state when closing or archiving
 				self.session_state = None
+				self.session_state_size = None
 				self.last_state_update = None
 			elif self.status == "Open" and self._doc_before_save:
 				# If reopening a previously closed/archived session, keep state cleared

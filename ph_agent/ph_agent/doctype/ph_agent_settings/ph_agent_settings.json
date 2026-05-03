@@ -6,7 +6,9 @@
  "engine": "InnoDB",
  "field_order": [
   "enable_debug_logging",
-  "debug_log_level"
+  "debug_log_level",
+  "max_session_state_size_kb",
+  "session_state_compaction_enabled"
  ],
  "fields": [
   {
@@ -21,6 +23,18 @@
    "fieldtype": "Select",
    "label": "Debug Log Level",
    "options": "DEBUG\nINFO\nWARNING"
+  },
+  {
+   "default": "500",
+   "fieldname": "max_session_state_size_kb",
+   "fieldtype": "Int",
+   "label": "Max Session State Size (KB)"
+  },
+  {
+   "default": "1",
+   "fieldname": "session_state_compaction_enabled",
+   "fieldtype": "Check",
+   "label": "Enable Session State Compaction"
   }
  ],
  "issingle": 1,

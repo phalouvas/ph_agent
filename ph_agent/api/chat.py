@@ -553,6 +553,7 @@ def close_session(session):
 	frappe.db.set_value("Chat Session", session, {
 		"status": "Closed",
 		"session_state": None,
+		"session_state_size": None,
 		"last_state_update": None,
 	})
 	frappe.db.commit()
@@ -627,6 +628,7 @@ def archive_session(session):
 	frappe.db.set_value("Chat Session", session, {
 		"status": "Archived",
 		"session_state": None,
+		"session_state_size": None,
 		"last_state_update": None,
 	})
 	frappe.db.commit()

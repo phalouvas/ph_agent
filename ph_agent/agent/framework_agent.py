@@ -1557,9 +1557,12 @@ def generate_session_title_and_suggestions(
 						"content": (
 							"You are a helpful assistant. Based on the conversation, do two things:\n"
 							"1. Generate a concise 5-8 word title that summarizes the conversation.\n"
-							"2. Suggest exactly 3-5 follow-up questions the user might ask next.\n"
+							"2. Suggest exactly 3-5 follow-up prompts the user can click to continue the conversation. "
+							"These should be actionable requests or commands, not questions. "
+							"Write them as direct instructions the user would give to the assistant "
+							"(e.g., imperative statements or task requests).\n"
 							'Return a JSON object with "title" (string) and "suggestions" (array of strings).\n'
-							'Example: {"title": "Discussing Project Timeline", "suggestions": ["What about budget?", "Timeline for phase 2?", "Who are the stakeholders?"]}'
+							'Example: {"title": "Discussing Project Timeline", "suggestions": ["Break down the budget by phase", "Show me the phase 2 timeline", "List the key stakeholders and their roles"]}'
 						),
 					},
 					{
@@ -1672,7 +1675,7 @@ def generate_followup_suggestions(session_name: str, conversation_history: list)
 				messages=[
 					{
 						"role": "system",
-						"content": 'You are a helpful assistant that suggests relevant follow-up questions based on the conversation. Provide exactly 3 to 5 concise questions that the user might want to ask next. Return only a JSON array of strings - no explanation, no markdown, no extra text. Example: ["Question one?", "Question two?", "Question three?"]',
+						"content": 'You are a helpful assistant that suggests relevant follow-up prompts based on the conversation. Provide exactly 3 to 5 concise, actionable prompts the user can click to continue. These should be direct instructions or commands (imperative statements, task requests), not questions. Return only a JSON array of strings - no explanation, no markdown, no extra text. Example: ["Summarize the key points", "Show me the next steps", "Generate a detailed report"]',
 					},
 					{"role": "user", "content": "\\n".join(context_parts)},
 				],

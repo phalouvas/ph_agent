@@ -163,6 +163,7 @@ def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
 
 	last_summary = session_doc.last_summary_message
 	deleted_count = 0
+	deleted_ids = []
 
 	while True:
 		total_tokens, _ = _get_total_estimated_tokens(session)
@@ -192,6 +193,7 @@ def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
 		oldest = remaining[0]
 		try:
 			frappe.delete_doc("Chat Message", oldest["name"], ignore_permissions=True)
+			deleted_ids.append(oldest["name"])
 			deleted_count += 1
 		except Exception:
 			# If one fails, skip it
@@ -199,7 +201,27 @@ def _emergency_prune_messages(session: str, target_percentage: int = 80) -> int:
 
 	if deleted_count:
 		frappe.db.commit()
-		# Recompute and publish a token update
+
+		# Remove pruned messages from the frontend chat UI
+		frappe.publish_realtime(
+			event="messages_deleted",
+			message={"session": session, "message_ids": deleted_ids},
+			room="website",
+		)
+
+		# Notify the user that messages were pruned
+		frappe.publish_realtime(
+			event="messages_pruned",
+			message={
+				"session": session,
+				"count": deleted_count,
+				"percentage": round(token_percentage),
+				"message": f"To prevent context overload, {deleted_count} old message{'s' if deleted_count != 1 else ''} {'were' if deleted_count != 1 else 'was'} removed from the conversation. Consider summarizing to avoid losing messages in the future.",
+			},
+			room="website",
+		)
+
+		# Reset token display
 		frappe.publish_realtime(
 			event="token_update",
 			message={

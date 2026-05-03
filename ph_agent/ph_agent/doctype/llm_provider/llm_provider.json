@@ -16,6 +16,7 @@
   "api_url",
   "embedding_model",
   "embedding_api_url",
+  "embedding_api_key",
   "default_model",
   "temperature",
   "section_thinking",
@@ -101,6 +102,12 @@
    "fieldname": "embedding_api_url",
    "fieldtype": "Data",
    "label": "Embedding API URL"
+  },
+  {
+   "description": "Separate API key for the embeddings provider. Leave empty to use the main API key. Required when the primary provider (e.g., DeepSeek) does not support embeddings and a different provider (e.g., OpenAI) is used via Embedding API URL.",
+   "fieldname": "embedding_api_key",
+   "fieldtype": "Password",
+   "label": "Embedding API Key"
   },
   {
    "default": "deepseek-v4-flash",

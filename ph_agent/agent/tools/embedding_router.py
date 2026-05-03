@@ -220,7 +220,7 @@ async def route_tools_by_embedding(agent, session_name: str, user_query: str) ->
 		logger.debug("[embedding_router] No embedding_model configured on provider")
 		return False
 
-	api_key = provider_doc.get_password("api_key")
+	api_key = provider_doc.get_password("embedding_api_key") or provider_doc.get_password("api_key")
 	if not api_key:
 		return False
 

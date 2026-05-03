@@ -445,7 +445,7 @@ class LLMMemoryProvider(ContextProvider):
 			embedding_model = provider_doc.get("embedding_model")
 			if not embedding_model:
 				return None, None, None
-			api_key = provider_doc.get_password("api_key")
+			api_key = provider_doc.get_password("embedding_api_key") or provider_doc.get_password("api_key")
 			if not api_key:
 				return None, None, None
 			api_url = (

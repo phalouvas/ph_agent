@@ -659,6 +659,7 @@ class FrappeMemoryProvider(HistoryProvider):
 
 	def __init__(self) -> None:
 		super().__init__("frappe_history")
+		self._cache: dict[str, list[Message]] = {}
 
 	async def get_messages(
 		self,
@@ -669,6 +670,9 @@ class FrappeMemoryProvider(HistoryProvider):
 	) -> list[Message]:
 		if not session_id:
 			return []
+
+		if session_id in self._cache:
+			return self._cache[session_id]
 
 		last_summary_message = frappe.db.get_value("Chat Session", session_id, "last_summary_message")
 
@@ -768,7 +772,9 @@ class FrappeMemoryProvider(HistoryProvider):
 		# DeepSeek automatic prefix-cache hits (90%+ discount on cached tokens).
 		system_msgs = [m for m in filtered if m.role == "system"]
 		non_system_msgs = [m for m in filtered if m.role != "system"]
-		return system_msgs + non_system_msgs
+		result = system_msgs + non_system_msgs
+		self._cache[session_id] = result
+		return result
 
 	async def save_messages(
 		self,

@@ -472,7 +472,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 
 			agent_content = re.sub(
 				r"\{\{\w+\}\}",
-				combined_text,
+				lambda m: combined_text,
 				content,
 			)
 			# If no {{variable}} placeholders were found, append text at end

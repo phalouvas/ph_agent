@@ -29,6 +29,7 @@
   "cache_hit_tokens",
   "session_state",
   "last_state_update",
+  "session_state_size",
   "section_token_tracking",
   "estimated_conversation_tokens",
   "last_summary_message",
@@ -203,9 +204,8 @@
   {
    "description": "Persistent state for agent session (memory, skills, RAG context)",
    "fieldname": "session_state",
-   "fieldtype": "Code",
+   "fieldtype": "Long Text",
    "label": "Session State",
-   "options": "JSON",
    "read_only": 1
   },
   {
@@ -213,6 +213,13 @@
    "fieldname": "last_state_update",
    "fieldtype": "Datetime",
    "label": "Last State Update",
+   "read_only": 1
+  },
+  {
+   "description": "Current byte size of the session_state JSON. Updated after each agent turn.",
+   "fieldname": "session_state_size",
+   "fieldtype": "Int",
+   "label": "Session State Size (bytes)",
    "read_only": 1
   },
   {

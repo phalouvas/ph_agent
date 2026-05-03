@@ -25,6 +25,15 @@ from ph_agent.agent.context.llm_memory_provider import LLMMemoryProvider
 from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider
 from ph_agent.agent.skills import get_code_skills
 from ph_agent.agent.skills.script_runner import run_file_script
+from ph_agent.agent.state_compaction import (
+	LoggingEncoder,
+	cleanup_state_on_load,
+	compact_json_dumps,
+	compact_state,
+	emergency_truncate,
+	get_max_state_bytes,
+	is_compaction_enabled,
+)
 from ph_agent.agent.tools.tool_manager import ToolManager
 from ph_agent.api.token_counter import init_context_budget
 from ph_agent.api.token_utils import (
@@ -994,6 +1003,9 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 	Uses ``AgentSession.from_dict()`` to properly restore ``SerializationProtocol``
 	objects (e.g. ``Message`` instances from ``InMemoryHistoryProvider``) so that
 	provider state survives server restarts.
+
+	Strips known-legacy keys (e.g. ``in_memory``) and empty provider dicts on load
+	to prevent stale bloat from round-tripping back to the DB.
 	"""
 	try:
 		session_doc = frappe.get_doc("Chat Session", session_name)
@@ -1007,6 +1019,8 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 			)
 			# Restore full AgentSession with proper object deserialization
 			restored = AgentSession.from_dict(data)
+			# Clean up legacy/empty keys on load
+			restored.state = cleanup_state_on_load(restored.state)
 			return restored.state
 		debug_log(
 			"_load_session_state",
@@ -1024,28 +1038,16 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		return {}
 
 
-class LoggingEncoder(json.JSONEncoder):
-	"""JSON encoder that logs warnings for non-standard types instead of silently stringifying."""
-
-	def default(self, obj):
-		if isinstance(obj, (str, int, float, bool, type(None), list, dict)):
-			return super().default(obj)
-		logger.warning(
-			"_save_session_state: non-standard type %s encountered during JSON serialization",
-			type(obj).__name__,
-		)
-		try:
-			return super().default(obj)
-		except TypeError:
-			return str(obj)
-
-
 def _save_session_state(session_name: str, session: AgentSession) -> None:
-	"""Save session state to Chat Session DocType.
+	"""Save session state to Chat Session DocType with size enforcement.
 
-	Uses ``AgentSession.to_dict()`` for proper round-trip serialization of all
-	provider state (including ``InMemoryHistoryProvider`` messages), then stores
-	as JSON in the ``session_state`` field.
+	Uses ``AgentSession.to_dict()`` for proper round-trip serialization, then
+	stores as compact JSON (no indent) in the ``session_state`` field.
+
+	When the serialized size exceeds the configured maximum (default 500KB),
+	escalating compaction is applied: strip empty/legacy keys, then truncate
+	string values in the largest provider sub-state, and as a last resort
+	keep only the first 2 sub-keys of oversized provider dicts.
 
 	Uses ``frappe.db.set_value`` to avoid TimestampMismatchError from concurrent
 	saves (e.g. streaming producer thread vs. main thread updating token counts).
@@ -1058,10 +1060,57 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		if not serialized:
 			return
 
-		state_json = json.dumps(serialized, indent=2, cls=LoggingEncoder)
+		state = serialized.get("state", {})
+		if not state:
+			frappe.db.set_value(
+				"Chat Session",
+				session_name,
+				{
+					"session_state": "{}",
+					"session_state_size": 2,
+					"last_state_update": frappe.utils.now(),
+				},
+			)
+			return
+
+		# Serialize to compact JSON (no indent, no ASCII escaping)
+		raw_json = compact_json_dumps(serialized)
+		raw_size = len(raw_json)
+
+		max_bytes = get_max_state_bytes()
+
+		if raw_size > max_bytes and is_compaction_enabled():
+			frappe.log_error(
+				title="Session state exceeds size limit — compacting",
+				message=f"Session {session_name}: {raw_size} bytes exceeds limit of {max_bytes} bytes. Compacting.",
+				reference_doctype="Chat Session",
+				reference_name=session_name,
+			)
+			state = cleanup_state_on_load(state)
+			state = compact_state(state, raw_size, max_bytes)
+			serialized["state"] = state
+			state_json = compact_json_dumps(serialized)
+
+			if len(state_json) > max_bytes:
+				frappe.log_error(
+					title="Session state still exceeds limit after compaction — emergency truncation",
+					message=f"Session {session_name}: {len(state_json)} bytes still exceeds limit of {max_bytes} bytes after compaction. Applying emergency truncation.",
+					reference_doctype="Chat Session",
+					reference_name=session_name,
+				)
+				state = emergency_truncate(state, max_bytes)
+				serialized["state"] = state
+				state_json = compact_json_dumps(serialized)
+
+			final_size = len(state_json)
+		else:
+			state_json = raw_json
+			final_size = raw_size
+
 		debug_log(
 			"_save_session_state",
-			f"Session: {session_name}, State size: {len(state_json)} bytes",
+			f"Session: {session_name}, State size: {final_size} bytes"
+			f" (raw was {raw_size} bytes, limit={max_bytes} bytes)",
 			session=session_name,
 		)
 
@@ -1070,6 +1119,7 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 			session_name,
 			{
 				"session_state": state_json,
+				"session_state_size": final_size,
 				"last_state_update": frappe.utils.now(),
 			},
 		)

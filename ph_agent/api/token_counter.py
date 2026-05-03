@@ -218,7 +218,7 @@ def consume_context_budget(
 	"""
 	# If budget was never initialized, seed it with the default so
 	# injection still works (defense against missing init_context_budget calls).
-	if _BUDGET_STATE_KEY not in state:
+	if _BUDGET_STATE_KEY not in state or _BUDGET_CONSUMED_KEY not in state:
 		state[_BUDGET_STATE_KEY] = MAX_CONTEXT_PROVIDER_TOKENS
 		state[_BUDGET_CONSUMED_KEY] = {}
 

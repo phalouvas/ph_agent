@@ -263,8 +263,12 @@ window.phAgent.uiHelpers = window.phAgent.uiHelpers || (function() {
 
             // Fallback: mark rendered summary cards by visible title text
             // (handles cases where message_type is missing in frontend payload).
+            // Skip the reasoning block when looking for the title — the reasoning
+            // text often contains the word "summary" (e.g. "The user is asking for
+            // a summary..."), which would falsely match.
             root.querySelectorAll(".vac-message-wrapper").forEach((wrapper) => {
-                const titleEl = wrapper.querySelector(".vac-format-container:first-child");
+                const containers = wrapper.querySelectorAll(".vac-format-container");
+                const titleEl = [...containers].find(el => !el.querySelector(".ph-reasoning-block"));
                 const titleText = (titleEl?.textContent || "").trim().toLowerCase();
                 if (titleText.includes("summary")) {
                     wrapper.classList.add("ph-summary-message");

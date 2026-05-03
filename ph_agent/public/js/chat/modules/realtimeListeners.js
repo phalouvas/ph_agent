@@ -17,6 +17,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
     let _responseCompleted = false;  // Tracks whether the current response has finished
     let _chunkBuffer = new Map();    // messageId → accumulated chunk string (rAF-batched)
     let _rafScheduled = false;       // Prevents duplicate rAF scheduling
+    let _finalizedMessages = new Set(); // messageIds that have received final content
     
     // Public API
     return {
@@ -91,6 +92,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
         resetResponseState: function() {
             _responseCompleted = false;
             _chunkBuffer.clear();
+            _finalizedMessages.clear();
             _rafScheduled = false;
         },
         
@@ -107,6 +109,12 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             
             // Apply all buffered chunks — one state update per message
             for (const [messageId, accumulatedContent] of _chunkBuffer.entries()) {
+                // Skip if this message has already been finalized by new_message
+                if (_finalizedMessages.has(messageId)) {
+                    _chunkBuffer.delete(messageId);
+                    continue;
+                }
+
                 const message = state.getMessageById(messageId);
                 if (!message) continue;
                 
@@ -445,18 +453,27 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                     // Remove suggestions for the old (regenerated) message
                     state.removeMessageSuggestions(data.old_message_id);
                     uiHelpers.removeSuggestionsForMessage(data.old_message_id);
-                    
+
                     // Replace the regenerating message in place
                     const messages = state.getMessages().map((message) =>
                         message._id === data.old_message_id ? newMsg : message
                     );
                     state.setMessages(messages);
+
+                    // Track the new message as finalized, clean up old entry
+                    _finalizedMessages.add(data.name);
+                    _finalizedMessages.delete(data.old_message_id);
+                    _chunkBuffer.delete(data.old_message_id);
                 } else {
                     // Check if message already exists (e.g., placeholder was sent)
                     const existingIndex = state.getMessages().findIndex(m => m._id === data.name);
                     if (existingIndex !== -1) {
                         // Update existing message
                         state.updateMessage(data.name, { content: data.content });
+                        // Mark as finalized so late-arriving streaming chunks
+                        // don't append raw text to the processed HTML content.
+                        _finalizedMessages.add(data.name);
+                        _chunkBuffer.delete(data.name);
                     } else {
                         // Add new message
                         state.addMessage(newMsg);
@@ -515,7 +532,12 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
             } else {
                 // Content chunk - accumulate in buffer, flush once per animation frame
                 if (!data.chunk) return;
-                
+
+                // If the message has already received its final content from
+                // new_message, ignore late-arriving streaming chunks — they
+                // would append raw Markdown after the processed HTML.
+                if (_finalizedMessages.has(data.message_id)) return;
+
                 // Accumulate chunk in buffer (keyed by messageId)
                 const existing = _chunkBuffer.get(data.message_id) || "";
                 _chunkBuffer.set(data.message_id, existing + data.chunk);

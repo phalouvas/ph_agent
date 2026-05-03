@@ -379,7 +379,7 @@ window.phAgent.utils = window.phAgent.utils || (function() {
             if (reasoningBlock) {
                 reasoningBlock.remove();
             }
-            return div.textContent || div.innerText || "";
+            return (div.textContent || div.innerText || "").trim();
         },
 
         copyTextToClipboard: function(text) {

@@ -516,6 +516,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 
 	# Check if streaming should be used
 	use_streaming = provider_doc.supports_streaming and session_doc.enable_streaming
+	_new_message_sent = False
 
 	# Create placeholder message for both streaming and non-streaming
 	# This ensures the frontend shows a spinner immediately
@@ -800,7 +801,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			agent_msg.cost = _calculate_message_cost(session, input_tokens, output_tokens, cache_hit_tokens)
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
-			emit_status("")
 
 	except asyncio.CancelledError:
 		# Clean up placeholder message
@@ -986,6 +986,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			},
 			room="website",
 		)
+	emit_status("")
 	session_doc = frappe.get_doc("Chat Session", session)
 
 	# --- Title and suggestions (batched on first turn) ---

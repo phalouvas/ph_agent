@@ -433,7 +433,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 const root = uiHelpers.getRoot();
                 const msgEl = root.querySelector(`[id="${data.name}"]`);
                 if (msgEl) {
-                    const frontendReasoning = msgEl.querySelector('.ph-reasoning-block');
+                    const frontendReasoning = msgEl.querySelector('.ph-reasoning-block[data-frontend="true"]');
                     if (frontendReasoning) {
                         frontendReasoning.remove();
                     }
@@ -501,12 +501,12 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 const root = uiHelpers.getRoot();
                 const msgEl = root.querySelector(`[id="${data.message_id}"]`);
                 if (msgEl) {
-                    const detailsEl = msgEl.querySelector('.ph-reasoning-block');
+                    const detailsEl = msgEl.querySelector('.ph-reasoning-block[data-frontend="true"]');
                     if (detailsEl) {
                         detailsEl.remove();
                     }
                 }
-                
+
                 // Update chat component with final message
                 const newMessages = state.getMessages();
                 _chat.messages = newMessages;
@@ -547,6 +547,7 @@ window.phAgent.realtimeListeners = window.phAgent.realtimeListeners || (function
                 detailsEl = document.createElement('details');
                 detailsEl.className = 'ph-reasoning-block';
                 detailsEl.setAttribute('open', '');
+                detailsEl.setAttribute('data-frontend', 'true');
                 
                 const summary = document.createElement('summary');
                 summary.textContent = '\u{1F913} Thinking process';

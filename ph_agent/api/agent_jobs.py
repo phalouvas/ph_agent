@@ -542,6 +542,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 
 	# Create placeholder message for both streaming and non-streaming
 	# This ensures the frontend shows a spinner immediately
+	agent_msg = None  # initialized for finally safety
 	agent_msg = frappe.get_doc(
 		{
 			"doctype": "Chat Message",
@@ -750,6 +751,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 					message=f"{stream_error}\n{traceback.format_exc()}",
 				)
 				# Reload agent_msg to avoid TimestampMismatchError (it was committed earlier)
+				agent_msg = None  # initialized for finally safety
 				agent_msg = frappe.get_doc("Chat Message", agent_msg.name)
 				# Fall back to non-streaming - update the existing placeholder
 				use_streaming = False
@@ -830,9 +832,7 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			frappe.delete_doc("Chat Message", agent_msg.name, ignore_permissions=True)
 			frappe.db.commit()
 
-		release_lock()
 		frappe.cache().delete_value(cancel_key)
-		emit_status("")
 		frappe.publish_realtime(
 			event="generation_cancelled",
 			message={"session": session},
@@ -846,8 +846,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			agent_msg.save(ignore_permissions=True)
 			frappe.db.commit()
 
-			release_lock()
-			emit_status("")
 			error_payload = {
 				"session": session,
 				"name": agent_msg.name,
@@ -874,8 +872,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 				}
 			).insert(ignore_permissions=False)
 			frappe.db.commit()
-			release_lock()
-			emit_status("")
 			error_payload = {
 				"session": session,
 				"name": failed_msg.name,
@@ -937,10 +933,13 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			except Exception:
 				pass  # Last-resort: logging already happened above
 
-		release_lock()
 		frappe.cache().delete_value(cancel_key)
-		emit_status("")
 		return
+
+	finally:
+		release_lock()
+		frappe.cache().delete_value(f"ph_agent:files:{session}")
+		emit_status("")
 
 	job_elapsed = time.time() - job_start
 	debug_log(
@@ -949,13 +948,9 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 		session=session,
 	)
 
-	# Release lock and clear the status indicator immediately — BEFORE any
-	# follow-up DB reads/realtime publishes — so the "Calling AI…" text
-	# disappears and the user can send a new message. This MUST come before
-	# token updates: if a token update throws, the lock must still be freed.
-	release_lock()
-	frappe.cache().delete_value(f"ph_agent:files:{session}")
-	emit_status("")
+	# Token updates and realtime events follow the finally block above,
+	# which has already released the lock, cleared the file cache, and
+	# cleared the status indicator.
 
 	# Update token counts on the session (non-essential — failures must not
 	# re-acquire the lock or block the user)

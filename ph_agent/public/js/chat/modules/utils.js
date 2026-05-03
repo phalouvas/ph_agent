@@ -367,9 +367,21 @@ window.phAgent.utils = window.phAgent.utils || (function() {
         // --- General Utilities ---
         
         /**
-         * Copy text to clipboard using modern API with fallback
-         * @param {string} text - Text to copy
+         * Strip reasoning block from HTML content and return plain text
+         * @param {string} htmlContent - Raw HTML content that may include reasoning
+         * @returns {string} Plain text without reasoning content
          */
+        stripReasoningFromContent: function(htmlContent) {
+            if (!htmlContent) return "";
+            const div = document.createElement("div");
+            div.innerHTML = htmlContent;
+            const reasoningBlock = div.querySelector(".ph-reasoning-block");
+            if (reasoningBlock) {
+                reasoningBlock.remove();
+            }
+            return (div.textContent || div.innerText || "").trim();
+        },
+
         copyTextToClipboard: function(text) {
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(text).catch(

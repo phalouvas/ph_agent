@@ -9,27 +9,32 @@ from pathlib import Path
 from typing import Any
 
 import frappe
-
-from agent_framework import Agent, AgentSession, Content, HistoryProvider, InMemoryHistoryProvider, Message
+from agent_framework import (
+	Agent,
+	AgentSession,
+	Content,
+	HistoryProvider,
+	InMemoryHistoryProvider,
+	Message,
+	SkillsProvider,
+)
 from agent_framework_openai import OpenAIChatCompletionClient
-from agent_framework import SkillsProvider
 from openai import AsyncOpenAI
+
 from ph_agent.agent.context.llm_memory_provider import LLMMemoryProvider
 from ph_agent.agent.context.user_preference_provider import UserPreferenceProvider
 from ph_agent.agent.skills import get_code_skills
 from ph_agent.agent.skills.script_runner import run_file_script
-from ph_agent.api.token_utils import _atomic_update_chat_session_tokens, _atomic_update_user_token_usage
 from ph_agent.agent.tools.tool_manager import ToolManager
+from ph_agent.api.token_counter import init_context_budget
+from ph_agent.api.token_utils import (
+	_atomic_update_chat_session_tokens,
+	_atomic_update_user_token_usage,
+	_calculate_cost_from_rates,
+	_resolve_effective_rates,
+)
 
 logger = logging.getLogger(__name__)
-from ph_agent.agent.tools.tool_router_provider import (
-    _ROUTER_SYSTEM_PROMPT,
-    _ROUTING_THRESHOLD,
-    _ROUTER_MAX_TOKENS,
-)
-from ph_agent.utils.debug_logger import debug_log
-
-
 # ---------------------------------------------------------------------------
 # Patch agent_framework_openai to handle DeepSeek's reasoning_content
 # ---------------------------------------------------------------------------
@@ -39,13 +44,20 @@ from ph_agent.utils.debug_logger import debug_log
 # ``model_extra`` dict rather than as a named attribute.
 #
 # We patch the two parsing methods to also extract reasoning from model_extra.
-
 import agent_framework_openai._chat_completion_client as _openai_client_mod
+
+from ph_agent.agent.tools.embedding_router import route_tools_by_embedding
+from ph_agent.agent.tools.tool_router_provider import (
+	_ROUTER_MAX_TOKENS,
+	_ROUTER_SYSTEM_PROMPT,
+	_ROUTING_THRESHOLD,
+)
+from ph_agent.utils.debug_logger import debug_log
 
 
 def _extract_reasoning_from_message(msg) -> str | None:
 	"""Extract reasoning_content text from an OpenAI message/delta object.
-	
+
 	Checks both direct attribute (``reasoning_details``) and Pydantic
 	``model_extra`` (``reasoning_content`` from DeepSeek).
 	Returns the raw reasoning text string, or None.
@@ -85,16 +97,13 @@ def _patched_parse_response(self, response, options):
 				if m.role == "assistant":
 					# Only add if not already present (avoid duplicates)
 					has_reasoning = any(
-						getattr(c, 'type', None) == "text_reasoning"
-						for c in getattr(m, 'contents', []) or []
+						getattr(c, "type", None) == "text_reasoning" for c in getattr(m, "contents", []) or []
 					)
 					if not has_reasoning:
 						# Use protected_data to match how the library serializes
 						# text_reasoning Content for the API (see _prepare_message_for_openai).
 						m.contents.append(
-							Content.from_text_reasoning(
-								protected_data=json.dumps(reasoning_text)
-							)
+							Content.from_text_reasoning(protected_data=json.dumps(reasoning_text))
 						)
 					break
 	return result
@@ -115,17 +124,12 @@ def _patched_parse_update(self, chunk):
 		if reasoning_text:
 			# Only add if not already present
 			has_reasoning = any(
-				getattr(c, 'type', None) == "text_reasoning"
-				for c in getattr(update, 'contents', []) or []
+				getattr(c, "type", None) == "text_reasoning" for c in getattr(update, "contents", []) or []
 			)
 			if not has_reasoning:
 				# Use protected_data to match how the library serializes
 				# text_reasoning Content for the API (see _prepare_message_for_openai).
-				update.contents.append(
-					Content.from_text_reasoning(
-						protected_data=json.dumps(reasoning_text)
-					)
-				)
+				update.contents.append(Content.from_text_reasoning(protected_data=json.dumps(reasoning_text)))
 			else:
 				# Update existing text_reasoning content's protected_data
 				# so the latest cumulative reasoning is preserved.
@@ -179,7 +183,7 @@ def _patched_prepare_message_for_openai(self, message):
 					if protected is not None:
 						try:
 							reasoning_value = json.loads(protected)
-						except (json.JSONDecodeError, TypeError):
+						except json.JSONDecodeError, TypeError:
 							reasoning_value = protected
 					else:
 						reasoning_value = getattr(c, "text", None)
@@ -187,7 +191,8 @@ def _patched_prepare_message_for_openai(self, message):
 						logger.warning(
 							"Belt-and-suspenders: extracted missing reasoning_content "
 							"(len=%d) from text_reasoning Content for message role=%s",
-							len(str(reasoning_value)), message.role,
+							len(str(reasoning_value)),
+							message.role,
 						)
 						break
 		# Copy the found reasoning_content onto EVERY assistant dict.
@@ -203,7 +208,9 @@ def _patched_prepare_message_for_openai(self, message):
 # Apply patches
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_from_openai = _patched_parse_response
 _openai_client_mod.OpenAIChatCompletionClient._parse_response_update_from_openai = _patched_parse_update
-_openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = _patched_prepare_message_for_openai
+_openai_client_mod.OpenAIChatCompletionClient._prepare_message_for_openai = (
+	_patched_prepare_message_for_openai
+)
 
 
 # ---------------------------------------------------------------------------
@@ -231,9 +238,9 @@ def _patched_prepare_options(self, messages, options):
 				f"  [{i}] role={role} content={has_content}({content_len}c) "
 				f"tool_calls={has_tool_calls} reasoning_content={has_reasoning}({reasoning_len}r)"
 			)
-		messages_json = json.dumps(
-			result.get("messages", []), indent=2, default=str, ensure_ascii=False
-		)[:8000]
+		messages_json = json.dumps(result.get("messages", []), indent=2, default=str, ensure_ascii=False)[
+			:8000
+		]
 		debug_log(
 			"DeepSeek thinking-mode API request",
 			f"model={result.get('model')} messages={len(result.get('messages', []))} "
@@ -277,7 +284,7 @@ def _fix_missing_sentence_spaces(text: str) -> str:
 			r'([.!?])([A-Z"\'\(]|l(?:et|ook)|n(?:ow|o)|t(?:he|his|hat)|i[tf]|w(?:e|hen|hile|ith)|y(?:ou|es)|s(?:o|ee|ince)|h(?:e|ere|ow|owever)|a(?:fter|nd|s)|b(?:ut|y)|f(?:or|rom)|o(?:n|r)|in|at|that)'
 		)
 
-	return _SENTENCE_GAP_RE.sub(r'\1 \2', text)
+	return _SENTENCE_GAP_RE.sub(r"\1 \2", text)
 
 
 # ---------------------------------------------------------------------------
@@ -289,17 +296,17 @@ def _fix_missing_sentence_spaces(text: str) -> str:
 # close-bold (*), leaving a stray "*" that corrupts adjacent characters.
 #
 # Compiled at module level; lazy-initialised on first call.
-_CODE_SEGMENT_RE = None   # matches fenced blocks and inline code spans
-_BOLD_ITALIC_RE = None    # ***text***
-_BOLD_RE = None           # **text**
-_ITALIC_RE = None         # *text*  (not list bullets, not **bold**)
-_HEADING_RE = None        # # heading
-_LINK_RE = None           # [text](url)
-_IMAGE_RE = None          # ![alt](url)
-_BLOCKQUOTE_RE = None     # > quote
-_HR_RE = None             # ---, ***, ___
-_STRIKE_RE = None         # ~~text~~
-_UNDERLINE_RE = None      # °text°
+_CODE_SEGMENT_RE = None  # matches fenced blocks and inline code spans
+_BOLD_ITALIC_RE = None  # ***text***
+_BOLD_RE = None  # **text**
+_ITALIC_RE = None  # *text*  (not list bullets, not **bold**)
+_HEADING_RE = None  # # heading
+_LINK_RE = None  # [text](url)
+_IMAGE_RE = None  # ![alt](url)
+_BLOCKQUOTE_RE = None  # > quote
+_HR_RE = None  # ---, ***, ___
+_STRIKE_RE = None  # ~~text~~
+_UNDERLINE_RE = None  # °text°
 
 
 def _convert_formatting_for_vue_chat(text: str) -> str:
@@ -347,28 +354,28 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 	if _CODE_SEGMENT_RE is None:
 		# Fenced code blocks (``` ... ```) or inline code (`code`).
 		# Use [\s\S] for fenced blocks so newlines are included.
-		_CODE_SEGMENT_RE = re.compile(r'(```[\s\S]*?```|`[^`\n]+`)')
+		_CODE_SEGMENT_RE = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
 		# ***bold-italic***: three asterisks on each side
-		_BOLD_ITALIC_RE = re.compile(r'\*\*\*(.+?)\*\*\*')
+		_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")
 		# **bold**: two asterisks on each side
-		_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+		_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 		# *italic*: single asterisk, not adjacent to another *, not followed
 		# by whitespace (excludes list bullets like "* item").
-		_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)')
+		_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)")
 		# ~~strikethrough~~
-		_STRIKE_RE = re.compile(r'~~(.+?)~~')
+		_STRIKE_RE = re.compile(r"~~(.+?)~~")
 		# °underline° (vue-chat native format, passthrough)
-		_UNDERLINE_RE = re.compile(r'°(.+?)°')
+		_UNDERLINE_RE = re.compile(r"°(.+?)°")
 		# # Heading (1-6 # characters, must be at start of line)
-		_HEADING_RE = re.compile(r'^#{1,6}\s+(.+?)(?:\s*#+\s*)?$', re.MULTILINE)
+		_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)(?:\s*#+\s*)?$", re.MULTILINE)
 		# [text](url) — not inside a < or > to avoid false matches
-		_LINK_RE = re.compile(r'(?<![<\[!])\[([^\]]+)\]\(([^)]+)\)')
+		_LINK_RE = re.compile(r"(?<![<\[!])\[([^\]]+)\]\(([^)]+)\)")
 		# ![alt](url)
-		_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+		_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 		# > blockquote (at start of line, optional leading spaces)
-		_BLOCKQUOTE_RE = re.compile(r'^>\s?(.+)$', re.MULTILINE)
+		_BLOCKQUOTE_RE = re.compile(r"^>\s?(.+)$", re.MULTILINE)
 		# Horizontal rules: ---, ***, ___ (3+ chars, optionally with spaces, on own line)
-		_HR_RE = re.compile(r'^[ \t]*([-*_])[ \t]*\1[ \t]*\1[ \t]*\1*[ \t]*$', re.MULTILINE)
+		_HR_RE = re.compile(r"^[ \t]*([-*_])[ \t]*\1[ \t]*\1[ \t]*\1*[ \t]*$", re.MULTILINE)
 
 	parts = _CODE_SEGMENT_RE.split(text)
 	result = []
@@ -380,26 +387,26 @@ def _convert_formatting_for_vue_chat(text: str) -> str:
 			# 1. Italic first: convert *italic* → _italic_
 			#    The italic regex skips ** and *** patterns so they remain
 			#    intact for the next steps.
-			part = _ITALIC_RE.sub(r'_\1_', part)
+			part = _ITALIC_RE.sub(r"_\1_", part)
 			# 2. Bold-italic: ***text*** → *_text_*
-			part = _BOLD_ITALIC_RE.sub(r'*_\1_*', part)
+			part = _BOLD_ITALIC_RE.sub(r"*_\1_*", part)
 			# 3. Bold: **text** → *text*
-			part = _BOLD_RE.sub(r'*\1*', part)
+			part = _BOLD_RE.sub(r"*\1*", part)
 			# 4. Strikethrough: ~~text~~ → ~text~
-			part = _STRIKE_RE.sub(r'~\1~', part)
+			part = _STRIKE_RE.sub(r"~\1~", part)
 			# 5. Underline: °text° → °text° (passthrough, already correct)
 			# 6. Headings: # Title → *Title*
-			part = _HEADING_RE.sub(r'*\1*', part)
+			part = _HEADING_RE.sub(r"*\1*", part)
 			# 7. Links: [text](url) → text (url)
-			part = _LINK_RE.sub(r'\1 (\2)', part)
+			part = _LINK_RE.sub(r"\1 (\2)", part)
 			# 8. Images: ![alt](url) → [Image: alt] (url)
-			part = _IMAGE_RE.sub(r'[Image: \1] (\2)', part)
+			part = _IMAGE_RE.sub(r"[Image: \1] (\2)", part)
 			# 9. Blockquotes: > text → _text_
-			part = _BLOCKQUOTE_RE.sub(r'_\1_', part)
+			part = _BLOCKQUOTE_RE.sub(r"_\1_", part)
 			# 10. Horizontal rules: --- → separator line
-			part = _HR_RE.sub(r'⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯', part)
+			part = _HR_RE.sub(r"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯", part)
 			result.append(part)
-	return ''.join(result)
+	return "".join(result)
 
 
 def _fix_agent_response_text(text: str) -> str:
@@ -419,8 +426,8 @@ def _extract_text_from_messages(messages) -> str:
 	"""Extract the first user text from a Message or list of Messages."""
 	msg_list = messages if isinstance(messages, list) else [messages]
 	for msg in msg_list:
-		for c in (getattr(msg, 'contents', None) or []):
-			text = getattr(c, 'text', None)
+		for c in getattr(msg, "contents", None) or []:
+			text = getattr(c, "text", None)
 			if text:
 				return str(text)
 	return ""
@@ -442,10 +449,13 @@ def _get_available_tool_names(agent: Agent) -> set[str]:
 
 
 async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
-	"""Filter ``agent.default_options['tools']`` using a cheap router LLM call.
+	"""Filter ``agent.default_options['tools']`` using embedding similarity
+	or a cheap router LLM call as fallback.
 
-	All tools are treated equally — the router decides per-tool which ones
-	are relevant to the current query. No group-based exemptions.
+	Two-phase strategy:
+	  1. If the LLM Provider has ``embedding_model`` configured, use embedding-based
+	     cosine-similarity routing (eliminates the second API call).
+	  2. Otherwise, fall back to the LLM-based router.
 
 	Only activates when:
 	  1. Persona has ``enable_tool_routing=1`` and not ``disable_tools``.
@@ -469,6 +479,23 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	if len(tools) <= _ROUTING_THRESHOLD:
 		return
 
+	# --- Phase 1: Try embedding-based routing ---
+	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
+	if provider_doc.get("embedding_model"):
+		try:
+			done = await route_tools_by_embedding(agent, session_name, user_query)
+			if done:
+				return
+		except Exception:
+			debug_log(
+				"_try_route_tools embedding failed",
+				f"Session: {session_name} — falling back to LLM router",
+				session=session_name,
+				level="WARNING",
+			)
+	# Fall through to LLM router if embedding routing was skipped or failed.
+
+	# --- Phase 2: Fallback LLM-based routing ---
 	# Build compact tool menu for ALL tools
 	lines = []
 	for t in tools:
@@ -478,7 +505,6 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	tool_menu = "\n".join(lines)
 
 	# Call router LLM
-	provider_doc = frappe.get_doc("LLM Provider", session_doc.llm_provider)
 	api_key = provider_doc.get_password("api_key")
 	if not api_key:
 		return
@@ -489,6 +515,7 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	)
 
 	import time
+
 	route_start = time.time()
 	try:
 		user_content = (
@@ -540,7 +567,6 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 		pass  # Safety-first: keep all tools on failure
 
 
-
 # ---------------------------------------------------------------------------
 
 
@@ -576,7 +602,13 @@ def _build_skills_provider() -> SkillsProvider:
 	When a DocType skill has the same name as a file-based skill, DocType
 	takes precedence — the file-based skill directory with the matching name
 	is excluded.
+
+	Skill counts are capped to prevent dilution of the system prompt
+	(see TOKENS-OPTIMIZATION.md #6).
 	"""
+	_MAX_CODE_SKILLS = 30
+	_MAX_FILE_SKILLS = 20
+
 	# Get enabled DocType skill names
 	code_skills = get_code_skills()
 	doctype_skill_names = set(s.name for s in code_skills)
@@ -591,11 +623,13 @@ def _build_skills_provider() -> SkillsProvider:
 	skill_paths = None
 	if skills_dir.exists():
 		all_dirs = [str(d) for d in skills_dir.iterdir() if d.is_dir()]
-		filtered_dirs = [
-			d for d in all_dirs
-			if Path(d).name not in doctype_skill_names
-		]
+		filtered_dirs = [d for d in all_dirs if Path(d).name not in doctype_skill_names]
 		skill_paths = filtered_dirs if filtered_dirs else None
+
+	# Cap to prevent context dilution
+	code_skills = code_skills[:_MAX_CODE_SKILLS]
+	if skill_paths:
+		skill_paths = skill_paths[:_MAX_FILE_SKILLS]
 
 	debug_log(
 		"_build_skills_provider",
@@ -628,6 +662,18 @@ class FrappeMemoryProvider(HistoryProvider):
 			return []
 
 		last_summary_message = frappe.db.get_value("Chat Session", session_id, "last_summary_message")
+
+		# Look up max_reasoning_turns from the LLM Provider configuration.
+		max_reasoning_turns = 5
+		try:
+			provider_name = frappe.db.get_value("Chat Session", session_id, "llm_provider")
+			if provider_name:
+				val = frappe.db.get_value("LLM Provider", provider_name, "max_reasoning_turns")
+				if val is not None:
+					max_reasoning_turns = int(val)
+		except Exception:
+			pass
+
 		if last_summary_message:
 			last_summary_doc = frappe.get_doc("Chat Message", last_summary_message)
 			prior_messages = frappe.get_all(
@@ -662,18 +708,41 @@ class FrappeMemoryProvider(HistoryProvider):
 						session=session_id,
 					)
 					assistant_msg.contents.append(
-						Content.from_text_reasoning(
-							protected_data=json.dumps(msg.reasoning_content)
-						)
+						Content.from_text_reasoning(protected_data=json.dumps(msg.reasoning_content))
 					)
 				history.append(assistant_msg)
+
+		# Strip text_reasoning content from older assistant messages to save
+		# input tokens. Only the most recent `max_reasoning_turns` assistant
+		# messages that contain reasoning keep their reasoning blocks. Older
+		# reasoning chains are dropped because summaries (or the visible text
+		# content) capture the outcome of reasoning, not the process.
+		if max_reasoning_turns > 0:
+			reasoning_msg_count = 0
+			for msg in reversed(history):
+				if msg.role != "assistant":
+					continue
+				has_reasoning = any(getattr(c, "type", None) == "text_reasoning" for c in msg.contents)
+				if not has_reasoning:
+					continue
+				reasoning_msg_count += 1
+				if reasoning_msg_count > max_reasoning_turns:
+					msg.contents = [c for c in msg.contents if getattr(c, "type", None) != "text_reasoning"]
+					debug_log(
+						"FrappeMemoryProvider: stripped reasoning_content from old message",
+						f"Session: {session_id}, "
+						f"Max reasoning turns: {max_reasoning_turns}, "
+						f"Discarded position: {reasoning_msg_count} from end",
+						session=session_id,
+					)
 
 		# Strip non-text content types from assistant messages in history.
 		# Tool call/result pairs (function_call, function_result) exist only
 		# in-memory during execution and are not persisted to the DB.
-		# Reasoning tokens (text_reasoning) ARE persisted and MUST be preserved
-		# because DeepSeek's thinking mode requires reasoning_content to be
-		# echoed back in subsequent requests.
+		# Reasoning tokens (text_reasoning) ARE persisted but are stripped
+		# from older messages per the max_reasoning_turns threshold to save
+		# input tokens. The most recent N assistant messages with reasoning
+		# retain their text_reasoning content for DeepSeek compatibility.
 		filtered: list[Message] = []
 		for msg in history:
 			if msg.role == "assistant":
@@ -684,7 +753,13 @@ class FrappeMemoryProvider(HistoryProvider):
 				# Drop assistant messages with no text or reasoning content (e.g. tool-only turns)
 			else:
 				filtered.append(msg)
-		return filtered
+
+		# Reorder so system summary messages precede user/assistant history.
+		# This keeps the system prompt + summary prefix contiguous, maximizing
+		# DeepSeek automatic prefix-cache hits (90%+ discount on cached tokens).
+		system_msgs = [m for m in filtered if m.role == "system"]
+		non_system_msgs = [m for m in filtered if m.role != "system"]
+		return system_msgs + non_system_msgs
 
 	async def save_messages(
 		self,
@@ -733,35 +808,11 @@ def _credit_auxiliary_api_tokens(session_name: str, usage, label: str = "auxilia
 		if not input_tokens and not output_tokens:
 			return
 
-		session_doc = frappe.get_doc("Chat Session", session_name)
-		user = session_doc.user
-		provider_name = session_doc.llm_provider
-		provider = frappe.get_doc("LLM Provider", provider_name)
-
-		# Pricing
-		provider_input_rate = float(provider.input_cost_per_1m_tokens or 0)
-		provider_output_rate = float(provider.output_cost_per_1m_tokens or 0)
-		provider_cache_rate = float(provider.cache_hit_cost_per_1m_tokens or 0)
-
-		# User token usage record (get or create)
-		from ph_agent.ph_agent.doctype.user_token_usage.user_token_usage import UserTokenUsage
-		usage_name = UserTokenUsage.get_or_create_for_user(user)
-		usage_doc = frappe.get_doc("User Token Usage", usage_name)
-		override_input = float(usage_doc.input_cost_over_per_1m or 0)
-		override_output = float(usage_doc.output_cost_over_per_1m or 0)
-		override_cache = float(usage_doc.cache_hit_cost_over_per_1m or 0)
-
-		# Effective rates
-		eff_input = provider_input_rate + override_input
-		eff_output = provider_output_rate + override_output
-		eff_cache = provider_cache_rate + override_cache
-
-		# 3-tier cost
-		cache_miss = max(0, input_tokens - cache_hit_tokens)
-		cost = (cache_miss * eff_input + cache_hit_tokens * eff_cache + output_tokens * eff_output) / 1_000_000
-
-		# Atomic updates — increment counters directly in SQL to avoid races
-		_atomic_update_user_token_usage(usage_name, input_tokens, output_tokens, cache_hit_tokens, cost)
+		rates = _resolve_effective_rates(session_name)
+		cost = _calculate_cost_from_rates(input_tokens, output_tokens, cache_hit_tokens, rates)
+		_atomic_update_user_token_usage(
+			rates["usage_name"], input_tokens, output_tokens, cache_hit_tokens, cost
+		)
 		_atomic_update_chat_session_tokens(session_name, input_tokens, output_tokens, cache_hit_tokens)
 	except Exception:
 		frappe.log_error(
@@ -848,9 +899,9 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 	api_key = provider_doc.get_password("api_key")
 	if not api_key:
 		frappe.throw(
-			frappe._("API key not configured for provider {0}. Please update the LLM Provider record.").format(
-				provider_doc.name
-			)
+			frappe._(
+				"API key not configured for provider {0}. Please update the LLM Provider record."
+			).format(provider_doc.name)
 		)
 	if not provider_doc.is_enabled:
 		frappe.throw(
@@ -875,7 +926,9 @@ def _build_agent(session_name: str, user: str | None = None) -> Agent:
 		if provider_doc.temperature is not None
 		else 1.0
 	)
-	tools = ToolManager.get_tools(session_name=session_name, user=user or frappe.session.user, persona=session_doc.persona)
+	tools = ToolManager.get_tools(
+		session_name=session_name, user=user or frappe.session.user, persona=session_doc.persona
+	)
 
 	chat_client = OpenAIChatCompletionClient(
 		model=provider_doc.default_model,
@@ -963,12 +1016,12 @@ def _load_session_state(session_name: str) -> dict[str, Any]:
 		return {}
 	except Exception as e:
 		import traceback
+
 		frappe.log_error(
 			title="Error loading session state",
-			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}"
+			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}",
 		)
 		return {}
-
 
 
 class LoggingEncoder(json.JSONEncoder):
@@ -1022,96 +1075,20 @@ def _save_session_state(session_name: str, session: AgentSession) -> None:
 		)
 	except Exception as e:
 		import traceback
+
 		frappe.log_error(
 			title="Error saving session state",
-			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}"
+			message=f"Session: {session_name}, Error: {e}\n{traceback.format_exc()}",
 		)
 
 
-def _extract_approval_data(response, session_name: str | None = None) -> dict[str, Any] | None:
-	"""Extract approval data from an agent response.
-
-	If ``session_name`` is provided, validates that each tool being approved
-	actually exists in the current session's tool set. Tools not in the set
-	are silently skipped (the LLM hallucinated them), preventing spurious
-	approval requests for tools the persona cannot use.
-	"""
-	# Pre-resolve available tool names if session_name is given
-	available_tools: set[str] | None = None
-	if session_name:
-		try:
-			temp_agent = _build_agent(session_name=session_name)
-			available_tools = _get_available_tool_names(temp_agent)
-		except Exception:
-			available_tools = None  # Fall back to no filtering
-
-	approval_requests: list[dict[str, str]] = []
-	tool_calls: list[dict[str, str]] = []
-
-	for msg in response.messages:
-		for content in msg.contents:
-			if content.type != "function_approval_request" or not content.function_call:
-				continue
-			function_call = content.function_call
-			tool_name = function_call.name or ""
-
-			# Skip tools that don't exist in the current session's tool set
-			if available_tools is not None and tool_name and tool_name not in available_tools:
-				logger.warning(
-					"Skipping approval request for tool '%s' — not in session's tool set.",
-					tool_name,
-				)
-				continue
-
-			arguments = function_call.arguments
-			
-			# Handle arguments - they could be dict, string, or string containing JSON
-			if isinstance(arguments, dict):
-				arguments_str = json.dumps(arguments)
-			elif isinstance(arguments, str):
-				# Try to parse as JSON first
-				try:
-					parsed = json.loads(arguments)
-					if isinstance(parsed, dict):
-						arguments_str = json.dumps(parsed)
-					else:
-						# Not a dict, store as string
-						arguments_str = arguments
-				except (json.JSONDecodeError, TypeError):
-					# Not valid JSON, store as string
-					arguments_str = arguments or "{}"
-			else:
-				# Convert other types to string
-				arguments_str = str(arguments) if arguments is not None else "{}"
-			
-			approval_requests.append(
-				{
-					"id": content.id or "",
-					"call_id": function_call.call_id or "",
-					"name": function_call.name or "",
-					"arguments": arguments_str,
-				}
-			)
-			tool_calls.append(
-				{
-					"id": function_call.call_id or "",
-					"name": function_call.name or "",
-					"arguments": arguments_str,
-				}
-			)
-
-	if not approval_requests:
-		return None
-
-	return {
-		"approval_needed": True,
-		"tool_calls": tool_calls,
-		"conversation_state": {"approval_requests": approval_requests},
-	}
-
-
-def _run_agent(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None) -> tuple[Any, AgentSession]:
-	"""Run agent (non-streaming) and return (response, agent_session).
+def _run_agent(
+	session_name: str,
+	message: Message | list,
+	user: str | None = None,
+	session_state: dict[str, Any] | None = None,
+) -> tuple[Any, AgentSession, set[str]]:
+	"""Run agent (non-streaming) and return (response, agent_session, available_tools).
 
 	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
 	so that provider state (including ``InMemoryHistoryProvider`` messages)
@@ -1124,16 +1101,21 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 		session=session_name,
 	)
 	agent = _build_agent(session_name=session_name, user=user)
+	available_tools = _get_available_tool_names(agent)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
 		agent_session.state.update(session_state)
 	messages = message if isinstance(message, list) else [message]
 
-	# Per-turn tool routing — filter before API call
+	# Per-turn tool routing + agent run in a single event loop.
 	user_text = _extract_text_from_messages(messages)
-	asyncio.run(_try_route_tools(agent, session_name, user_text))
 
-	result = asyncio.run(agent.run(messages, session=agent_session))
+	async def _impl():
+		await _try_route_tools(agent, session_name, user_text)
+		init_context_budget(agent_session.state)
+		return await agent.run(messages, session=agent_session)
+
+	result = asyncio.run(_impl())
 	debug_log(
 		"_run_agent complete",
 		f"Session: {session_name}, Tokens: {_get_usage_tokens(result.usage_details)}",
@@ -1146,11 +1128,16 @@ def _run_agent(session_name: str, message: Message | list, user: str | None = No
 			f"Session: {session_name}, Keys: {list(result.usage_details.keys())}",
 			session=session_name,
 		)
-	return result, agent_session
+	return result, agent_session, available_tools
 
 
-async def _run_agent_stream(session_name: str, message: Message | list, user: str | None = None, session_state: dict[str, Any] | None = None) -> tuple[Any, AgentSession]:
-	"""Run agent with streaming support and return (stream, agent_session).
+async def _run_agent_stream(
+	session_name: str,
+	message: Message | list,
+	user: str | None = None,
+	session_state: dict[str, Any] | None = None,
+) -> tuple[Any, AgentSession, set[str]]:
+	"""Run agent with streaming support and return (stream, agent_session, available_tools).
 
 	If ``session_state`` is provided, it is loaded into a fresh ``AgentSession``
 	so that provider state (including ``InMemoryHistoryProvider`` messages)
@@ -1163,6 +1150,7 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 		session=session_name,
 	)
 	agent = _build_agent(session_name=session_name, user=user)
+	available_tools = _get_available_tool_names(agent)
 	agent_session = AgentSession(session_id=session_name)
 	if session_state:
 		agent_session.state.update(session_state)
@@ -1172,6 +1160,7 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 	user_text = _extract_text_from_messages(messages)
 	await _try_route_tools(agent, session_name, user_text)
 
+	init_context_budget(agent_session.state)
 	stream = agent.run(messages, session=agent_session, stream=True)
 	if inspect.isawaitable(stream):
 		stream = await stream
@@ -1180,27 +1169,29 @@ async def _run_agent_stream(session_name: str, message: Message | list, user: st
 		f"Session: {session_name}, Stream obtained",
 		session=session_name,
 	)
-	return stream, agent_session
+	return stream, agent_session, available_tools
 
 
 def _extract_reasoning_from_response(response) -> str:
 	"""Extract reasoning content from a non-streaming agent response."""
 	reasoning_parts = []
-	for msg in getattr(response, 'messages', []) or []:
-		for content in getattr(msg, 'contents', []) or []:
-			if getattr(content, 'type', None) == "text_reasoning":
+	for msg in getattr(response, "messages", []) or []:
+		for content in getattr(msg, "contents", []) or []:
+			if getattr(content, "type", None) == "text_reasoning":
 				# Prefer protected_data (JSON-encoded), fall back to text
 				if content.protected_data:
 					try:
 						reasoning_parts.append(json.loads(content.protected_data))
-					except (json.JSONDecodeError, TypeError):
+					except json.JSONDecodeError, TypeError:
 						reasoning_parts.append(content.protected_data)
 				else:
 					reasoning_parts.append(content.text or "")
 	return "\n".join(reasoning_parts)
 
 
-def get_agent_response(session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False) -> tuple[str, int, int, int, dict | None, str]:
+def get_agent_response(
+	session_name: str, user_message: str, cancel_check=None, skip_session_state: bool = False
+) -> tuple[str, int, int, int, str]:
 	"""Get agent response (non-streaming).
 
 	Args:
@@ -1210,34 +1201,36 @@ def get_agent_response(session_name: str, user_message: str, cancel_check=None, 
 		skip_session_state: If True, skip loading cached session state
 			(e.g. InMemoryHistoryProvider messages). Used during regeneration
 			to prevent stale messages from leaking into the new context.
-	
+
 	Returns:
-		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content)
+		tuple of (response_text, input_tokens, output_tokens, cache_hit_tokens, reasoning_content)
 	"""
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
 	# Load session state before running agent (skip for regeneration)
 	stored_state = None if skip_session_state else _load_session_state(session_name)
-	
-	response, agent_session = _run_agent(session_name, Message("user", [user_message]), session_state=stored_state)
+
+	response, agent_session, _available_tools = _run_agent(
+		session_name, Message("user", [user_message]), session_state=stored_state
+	)
 
 	if cancel_check and cancel_check():
 		raise asyncio.CancelledError()
 
 	input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
-	approval_data = _extract_approval_data(response, session_name=session_name)
 	reasoning_content = _extract_reasoning_from_response(response)
-	
-	# Always save session state, regardless of approval flow
+
+	# Always save session state
 	_save_session_state(session_name, agent_session)
-	
-	if approval_data and agent_session.state:
-		# Also store full session dict in approval data for continuation.
-		# run_after_approval will reconstruct the AgentSession from this.
-		approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-	
-	return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, approval_data, reasoning_content
+
+	return (
+		_fix_agent_response_text(response.text or ""),
+		input_tokens,
+		output_tokens,
+		cache_hit_tokens,
+		reasoning_content,
+	)
 
 
 def get_agent_response_stream(
@@ -1246,7 +1239,7 @@ def get_agent_response_stream(
 	cancel_check=None,
 	status_callback=None,
 	skip_session_state: bool = False,
-) -> Generator[tuple[Any, bool, int, int, int], None, None]:
+) -> Generator[tuple[Any, bool, int, int, int]]:
 	"""Stream agent response.
 
 	Yields:
@@ -1266,12 +1259,10 @@ def get_agent_response_stream(
 			try:
 				# Load session state before running agent (skip for regeneration)
 				stored_state = None if skip_session_state else _load_session_state(session_name)
-				
+
 				# Use streaming agent runner — returns (stream, AgentSession)
-				stream, agent_session = await _run_agent_stream(
-					session_name, 
-					Message("user", [user_message]), 
-					session_state=stored_state
+				stream, agent_session, _available_tools = await _run_agent_stream(
+					session_name, Message("user", [user_message]), session_state=stored_state
 				)
 
 				seen_text = ""
@@ -1283,20 +1274,20 @@ def get_agent_response_stream(
 					if stop_event.is_set():
 						break
 
-					if hasattr(update, 'contents') and update.contents:
+					if hasattr(update, "contents") and update.contents:
 						for c in update.contents:
-							c_type = getattr(c, 'type', 'unknown')
+							c_type = getattr(c, "type", "unknown")
 							if c_type == "text_reasoning":
 								# Prefer protected_data (JSON-encoded), fall back to text
 								if c.protected_data:
 									try:
 										reasoning_text = json.loads(c.protected_data)
-									except (json.JSONDecodeError, TypeError):
+									except json.JSONDecodeError, TypeError:
 										reasoning_text = c.protected_data
 								else:
 									reasoning_text = c.text or ""
 								if reasoning_text.startswith(seen_reasoning):
-									reasoning_delta = reasoning_text[len(seen_reasoning):]
+									reasoning_delta = reasoning_text[len(seen_reasoning) :]
 									seen_reasoning = reasoning_text
 								else:
 									reasoning_delta = reasoning_text
@@ -1345,24 +1336,18 @@ def get_agent_response_stream(
 						f"Session: {session_name}, Keys: {list(final_response.usage_details.keys())}",
 						session=session_name,
 					)
-				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(final_response.usage_details)
+				input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(
+					final_response.usage_details
+				)
 				debug_log(
 					"Stream: final_response received",
 					f"Session: {session_name}, Input tokens: {input_tokens}, Output tokens: {output_tokens}, Cache hit tokens: {cache_hit_tokens}",
 					session=session_name,
 				)
-				approval_data = _extract_approval_data(final_response, session_name=session_name)
-				
-				# Always save session state, regardless of approval flow
+				# Always save session state
 				_save_session_state(session_name, agent_session)
-				
-				if approval_data:
-					# Also store full session dict in approval data for continuation.
-					# run_after_approval will reconstruct the AgentSession from this.
-					approval_data["conversation_state"]["session_state"] = agent_session.to_dict()
-					result_queue.put(("approval", (approval_data, input_tokens, output_tokens, cache_hit_tokens)))
-				else:
-					result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
+
+				result_queue.put(("done", ("", input_tokens, output_tokens, cache_hit_tokens)))
 			except Exception as exc:
 				result_queue.put(("error", exc))
 
@@ -1370,8 +1355,8 @@ def get_agent_response_stream(
 		try:
 			if site_name:
 				frappe.init(site=site_name)
+				initialized = True  # before connect so destroy always runs if init succeeded
 				frappe.connect()
-				initialized = True
 				if active_user:
 					frappe.set_user(active_user)
 			asyncio.run(_consume())
@@ -1380,6 +1365,7 @@ def get_agent_response_stream(
 			# failure) that the inner _consume() except doesn't cover, so the
 			# main thread gets the error instead of hanging forever.
 			import traceback
+
 			frappe.log_error(
 				title="Streaming producer thread crashed",
 				message=f"Session: {session_name}, Error: {exc}\n{traceback.format_exc()}",
@@ -1387,8 +1373,10 @@ def get_agent_response_stream(
 			result_queue.put(("error", exc))
 		finally:
 			if initialized:
-				# Commit any pending DB operations (e.g., UserPreferenceProvider saves)
-				frappe.db.commit()
+				try:
+					frappe.db.commit()
+				except Exception:
+					pass  # commit failure must not prevent destroy
 				frappe.destroy()
 
 	thread = threading.Thread(target=_producer, daemon=True)
@@ -1407,6 +1395,7 @@ def get_agent_response_stream(
 		# extension, or the thread was killed externally).
 		if not thread.is_alive() and result_queue.empty():
 			import traceback
+
 			error_msg = (
 				f"Streaming producer thread died unexpectedly for session {session_name}. "
 				"No error was placed in the result queue."
@@ -1426,174 +1415,12 @@ def get_agent_response_stream(
 		if event_type == "chunk":
 			yield payload, False, 0, 0, 0
 			continue
-		if event_type == "approval":
-			approval_data, input_tokens, output_tokens, cache_hit_tokens = payload
-			yield approval_data, True, input_tokens, output_tokens, cache_hit_tokens
-			break
 		if event_type == "done":
 			chunk, input_tokens, output_tokens, cache_hit_tokens = payload
 			yield (chunk, full_reasoning), True, input_tokens, output_tokens, cache_hit_tokens
 			break
 		if event_type == "error":
 			raise payload
-
-
-def run_after_approval(
-	session_name: str,
-	conversation_state: dict[str, Any],
-	approved: bool,
-	user: str | None = None,
-) -> tuple[str, int, int, int, str]:
-	import traceback
-	
-	approval_requests = (conversation_state or {}).get("approval_requests") or []
-	if not approval_requests:
-		return "", 0, 0
-
-	approval = approval_requests[0]
-	arguments_raw = approval.get("arguments") or "{}"
-	try:
-		arguments = json.loads(arguments_raw)
-	except Exception as e:
-		# If we can't parse as JSON, try to handle it as a string
-		# Some arguments might be simple strings
-		if isinstance(arguments_raw, str) and arguments_raw.strip():
-			# Try to parse as JSON one more time with error handling
-			try:
-				arguments = json.loads(arguments_raw)
-			except Exception:
-				# If it's not valid JSON, treat it as a string argument
-				arguments = {"input": arguments_raw}
-		else:
-			arguments = {}
-
-	# Ensure arguments is a dictionary
-	if not isinstance(arguments, dict):
-		arguments = {"input": str(arguments)}
-
-	approval_id = approval.get("id") or ""
-	tool_name = approval.get("name") or ""
-
-	try:
-		# Recreate the inner function_call Content
-		function_call = Content.from_function_call(
-			call_id=approval.get("call_id") or "",
-			name=tool_name,
-			arguments=arguments,
-		)
-		# Recreate the function_approval_request Content (what was in the original assistant message)
-		approval_request_content = Content.from_function_approval_request(
-			id=approval_id,
-			function_call=function_call,
-		)
-		# Create the approval response
-		approval_response = Content.from_function_approval_response(
-			approved=approved,
-			id=approval_id,
-			function_call=function_call,
-		)
-	except Exception as e:
-		frappe.log_error(
-			title=f"Error creating approval Content objects for {session_name}",
-			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}"
-		)
-		raise
-
-	# Get session state from conversation_state.
-	# This is now a full AgentSession.to_dict() output (with "type": "session").
-	# Reconstruct the AgentSession to extract the state dict with proper
-	# SerializationProtocol objects restored.
-	session_data = conversation_state.get("session_state", {})
-	if isinstance(session_data, dict) and session_data.get("type") == "session":
-		try:
-			restored_session = AgentSession.from_dict(session_data)
-			session_state = restored_session.state
-		except Exception:
-			session_state = session_data.get("state", {})
-	else:
-		session_state = session_data if isinstance(session_data, dict) else {}
-	
-	try:
-		# --- Tool existence validation ---
-		# Build a temporary agent to check whether the approved tool is
-		# actually available in the current persona's tool set.  If the
-		# LLM hallucinated a tool that isn't in the persona's groups, we
-		# must NOT send the approval messages to the API — that would
-		# produce a malformed conversation (assistant message with
-		# tool_calls but no corresponding tool result), triggering a 400
-		# "insufficient tool messages" error from the LLM provider.
-		temp_agent = _build_agent(session_name=session_name, user=user)
-		available_tools = _get_available_tool_names(temp_agent)
-		tool_is_available = tool_name in available_tools
-
-		if not tool_is_available:
-			logger.warning(
-				"Approved tool '%s' is not available in persona's tool set "
-				"(session=%s, persona=%s). Injecting synthetic error result.",
-				tool_name, session_name,
-				getattr(frappe.get_doc("Chat Session", session_name), "persona", "N/A"),
-			)
-			frappe.log_error(
-				title=f"Approved tool '{tool_name}' not available for session {session_name}",
-				message=(
-					f"Tool '{tool_name}' was approved but is not in the current persona's tool set.\n"
-					f"Available tools: {sorted(available_tools)}\n"
-					f"Session: {session_name}\n"
-					f"Arguments: {json.dumps(arguments, indent=2)}"
-				),
-			)
-			# Build a synthetic function_result with an error message so the
-			# LLM can gracefully respond to the failure instead of crashing.
-			error_result = Content.from_function_result(
-				call_id=approval.get("call_id") or "",
-				result=json.dumps({
-					"error": True,
-					"message": (
-						f"The tool '{tool_name}' is not available for this session's persona. "
-						f"Please use one of the available tools: {', '.join(sorted(available_tools))}."
-					),
-				}),
-			)
-			messages = [
-				Message("assistant", [approval_request_content]),
-				Message("user", [approval_response]),
-				Message("tool", [error_result]),
-			]
-			response, agent_session = _run_agent(
-				session_name,
-				messages,
-				user=user,
-				session_state=session_state,
-			)
-		else:
-			# Per the Microsoft Agent Framework documentation, provide:
-			# 1. The assistant message containing the original function_approval_request
-			# 2. The user message containing the function_approval_response
-			# The original user query is supplied automatically by FrappeMemoryProvider.
-			messages = [
-				Message("assistant", [approval_request_content]),
-				Message("user", [approval_response]),
-			]
-			response, agent_session = _run_agent(
-				session_name, 
-				messages,  # Pass both messages
-				user=user,
-				session_state=session_state,
-			)
-
-		input_tokens, output_tokens, cache_hit_tokens = _get_usage_tokens(response.usage_details)
-		reasoning_content = _extract_reasoning_from_response(response)
-		
-		# Save updated session state to Chat Session
-		_save_session_state(session_name, agent_session)
-		
-		return _fix_agent_response_text(response.text or ""), input_tokens, output_tokens, cache_hit_tokens, reasoning_content
-	except Exception as e:
-		frappe.log_error(
-			title=f"Error in _run_agent for {session_name}",
-			message=f"Error: {str(e)}, Traceback: {traceback.format_exc()}"
-		)
-		raise
 
 
 def _provider_max_tokens(provider_doc) -> int:
@@ -1639,6 +1466,81 @@ def generate_session_title(session_name: str, user_message: str, agent_reply: st
 			reference_name=session_name,
 		)
 		return ""
+
+
+def generate_session_title_and_suggestions(
+	session_name: str,
+	user_message: str,
+	agent_reply: str,
+	conversation_history: list,
+) -> tuple[str, list[str]]:
+	"""Generate both a conversation title and follow-up suggestions in a single API call."""
+	session = frappe.get_doc("Chat Session", session_name)
+	provider_doc = frappe.get_doc("LLM Provider", session.llm_provider)
+
+	api_key = provider_doc.get_password("api_key")
+	if not api_key or not provider_doc.is_enabled:
+		return "", []
+
+	openai_client = AsyncOpenAI(api_key=api_key, base_url=provider_doc.api_url)
+	temperature = provider_doc.temperature if provider_doc.temperature is not None else 1.0
+	max_tokens = _provider_max_tokens(provider_doc)
+
+	context_parts = []
+	for msg in conversation_history[-6:]:
+		role = "User" if msg.get("role") == "user" else "Assistant"
+		context_parts.append(f"{role}: {msg.get('content', '')[:500]}")
+
+	try:
+		response = asyncio.run(
+			openai_client.chat.completions.create(
+				model=provider_doc.default_model,
+				messages=[
+					{
+						"role": "system",
+						"content": (
+							"You are a helpful assistant. Based on the conversation, do two things:\n"
+							"1. Generate a concise 5-8 word title that summarizes the conversation.\n"
+							"2. Suggest exactly 3-5 follow-up questions the user might ask next.\n"
+							'Return a JSON object with "title" (string) and "suggestions" (array of strings).\n'
+							'Example: {"title": "Discussing Project Timeline", "suggestions": ["What about budget?", "Timeline for phase 2?", "Who are the stakeholders?"]}'
+						),
+					},
+					{
+						"role": "user",
+						"content": f"User: {user_message}\nAssistant: {agent_reply}\n\nConversation context:\n"
+						+ "\n".join(context_parts),
+					},
+				],
+				temperature=temperature,
+				max_tokens=max_tokens,
+				response_format={"type": "json_object"},
+			)
+		)
+
+		if response.usage:
+			_credit_auxiliary_api_tokens(session_name, response.usage, "title_and_suggestions")
+
+		raw = (response.choices[0].message.content or "").strip()
+		if not raw:
+			return "", []
+
+		data = json.loads(raw)
+		title = (data.get("title") or "").strip()
+		suggestions = data.get("suggestions", [])
+		if isinstance(suggestions, list):
+			suggestions = [str(s) for s in suggestions if s][:5]
+		else:
+			suggestions = []
+
+		return title, suggestions
+	except Exception:
+		frappe.log_error(
+			title=f"Batched title+suggestions generation failed for session {session_name}",
+			reference_doctype="Chat Session",
+			reference_name=session_name,
+		)
+		return "", []
 
 
 def generate_conversation_summary(session_name: str, conversation_history: list) -> str:

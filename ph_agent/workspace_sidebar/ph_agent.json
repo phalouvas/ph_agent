@@ -18,18 +18,6 @@
    "type": "Link"
   },
   {
-   "child": 0,
-   "collapsible": 1,
-   "icon": "pen-tool",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Tool Approval Request",
-   "link_to": "Tool Approval Request",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
    "child": 1,
    "collapsible": 1,
    "icon": "person-standing",
@@ -162,7 +150,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-05-01 07:18:43.100281",
+ "modified": "2026-05-02 21:36:57.380487",
  "modified_by": "Administrator",
  "module": "PH Agent",
  "name": "PH Agent",

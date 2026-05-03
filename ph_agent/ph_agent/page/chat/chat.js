@@ -260,11 +260,22 @@ frappe.pages["chat"].on_page_load = function (wrapper) {
 	summaryButton.insertAfter(tempBtn);
 
 	// Mount container inside page main area
-	const $container = $('<div style="height: calc(100vh - 120px);"></div>');
-	const $status = $('<div id="ph-chat-status" style="height:24px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:24px;display:flex;align-items:center;gap:6px;justify-content:space-between;"><div style="display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span><button class="ph-stop-btn" title="Stop generation" style="display:none;margin-left:4px;padding:2px 8px;font-size:11px;font-weight:600;line-height:16px;border:none;border-radius:3px;background:#e53e3e;color:#fff;cursor:pointer;flex-shrink:0;">&#9632; Stop</button></div><div class="ph-token-counter" style="font-size:11px;color:#6b7280;display:flex;align-items:center;">Tokens: <span class="ph-token-count">0</span>/<span class="ph-token-limit">0</span> (<span class="ph-token-percent">0</span>%)</div></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}.ph-stop-btn:hover{background:#c53030!important}</style>');
+	const $wrapper = $('<div style="display:flex;flex-direction:column;"></div>');
+	const $container = $('<div style="flex:1;min-height:0;"></div>');
+	const $status = $('<div id="ph-chat-status" style="height:24px;padding:0 8px;font-size:12px;color:#4f72b8;font-weight:500;line-height:24px;display:flex;align-items:center;gap:6px;justify-content:space-between;flex-shrink:0;"><div style="display:flex;align-items:center;gap:6px;"><span class="ph-status-spinner" style="display:none;width:12px;height:12px;border:2px solid #c5d0e8;border-top-color:#4f72b8;border-radius:50%;animation:ph-spin 0.7s linear infinite;flex-shrink:0;"></span><span class="ph-status-text"></span><button class="ph-stop-btn" title="Stop generation" style="display:none;margin-left:4px;padding:2px 8px;font-size:11px;font-weight:600;line-height:16px;border:none;border-radius:3px;background:#e53e3e;color:#fff;cursor:pointer;flex-shrink:0;">&#9632; Stop</button></div><div class="ph-token-counter" style="font-size:11px;color:#6b7280;display:flex;align-items:center;">Tokens: <span class="ph-token-count">0</span>/<span class="ph-token-limit">0</span> (<span class="ph-token-percent">0</span>%)</div></div><style>@keyframes ph-spin{to{transform:rotate(360deg)}}.ph-stop-btn:hover{background:#c53030!important}</style>');
 	
-	$(page.main).append($container);
-	$(page.main).append($status);
+	$wrapper.append($container);
+	$wrapper.append($status);
+	$(page.main).append($wrapper);
+	// Calculate exact available height dynamically instead of a hardcoded vh offset.
+	// Uses page.main's bottom edge as the reference so the wrapper fills remaining space.
+	function resizeWrapper() {
+		const top = $wrapper[0].getBoundingClientRect().top;
+		$wrapper.css("height", `${window.innerHeight - top}px`);
+	}
+	// Defer initial measurement until Frappe page layout settles
+	requestAnimationFrame(() => requestAnimationFrame(resizeWrapper));
+	$(window).on("resize.phChatWrapper", resizeWrapper);
 
 	// Load chat modules before initializing the chat
 	if (window.phAgent && window.phAgent.loadAllModules) {

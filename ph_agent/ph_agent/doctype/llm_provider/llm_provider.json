@@ -14,11 +14,14 @@
   "section_api",
   "api_key",
   "api_url",
+  "embedding_model",
+  "embedding_api_url",
   "default_model",
   "temperature",
   "section_thinking",
   "enable_thinking",
   "reasoning_effort",
+  "max_reasoning_turns",
   "section_token_limits",
   "max_output_tokens",
   "context_length",
@@ -88,6 +91,18 @@
    "reqd": 1
   },
   {
+   "description": "Model used for tool routing embeddings (e.g., text-embedding-3-small). When set, tool routing uses embedding similarity instead of an LLM call. Leave empty to keep LLM-based routing.",
+   "fieldname": "embedding_model",
+   "fieldtype": "Data",
+   "label": "Embedding Model"
+  },
+  {
+   "description": "Separate API URL for embeddings endpoint. Leave empty to use the main API URL. Required when the primary provider (e.g., DeepSeek) does not support an embeddings API.",
+   "fieldname": "embedding_api_url",
+   "fieldtype": "Data",
+   "label": "Embedding API URL"
+  },
+  {
    "default": "deepseek-v4-flash",
    "fieldname": "default_model",
    "fieldtype": "Data",
@@ -122,6 +137,14 @@
    "fieldtype": "Select",
    "label": "Reasoning Effort",
    "options": "high\nmax"
+  },
+  {
+   "default": "5",
+   "description": "Maximum number of recent assistant messages whose reasoning_content is echoed back to the LLM. Older reasoning blocks are stripped at read time to save context tokens. Range: 1-20. Default: 5.",
+   "fieldname": "max_reasoning_turns",
+   "fieldtype": "Int",
+   "label": "Max Reasoning Turns",
+   "non_negative": 1
   },
   {
    "description": "Default system prompt for all sessions using this provider. Can be overridden per session.",

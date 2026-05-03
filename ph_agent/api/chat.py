@@ -451,10 +451,9 @@ def delete_session(session):
 	navigates away. The function:
 	1. Cancels any running background job for this session
 	2. Deletes all User Memory records linked to this session or its messages
-	3. Clears Tool Approval Request references (chat_message, chat_session)
-	4. Clears the session's last_summary_message link
-	5. Deletes all Chat Messages (cascade deletes attached files)
-	6. Deletes the Chat Session itself
+	3. Clears the session's last_summary_message link
+	4. Deletes all Chat Messages (cascade deletes attached files)
+	5. Deletes the Chat Session itself
 	"""
 	frappe.has_permission("Chat Session", ptype="delete", doc=session, throw=True)
 
@@ -480,31 +479,16 @@ def delete_session(session):
 		pluck="name",
 	)
 	
-	# 3. Delete all User Memory records linked to this session or its messages
+	# 2. Delete all User Memory records linked to this session or its messages
 	frappe.db.delete("User Memory", {"source_session": session})
 	for message_id in messages:
 		frappe.db.delete("User Memory", {"source_message": message_id})
 
-	# 4. Clear Tool Approval Request references to avoid link validation errors
-	frappe.db.set_value(
-		"Tool Approval Request",
-		{"chat_session": session},
-		"chat_session",
-		None,
-	)
-	for message_id in messages:
-		frappe.db.set_value(
-			"Tool Approval Request",
-			{"chat_message": message_id},
-			"chat_message",
-			None,
-		)
-
-	# 5. Clear the session's last_summary_message reference
+	# 3. Clear the session's last_summary_message reference
 	frappe.db.set_value("Chat Session", session, "last_summary_message", None)
 	frappe.db.commit()
 	
-	# 6. Delete each message individually (triggers on_trash hook which deletes attached files)
+	# 4. Delete each message individually (triggers on_trash hook which deletes attached files)
 	for message_id in messages:
 		try:
 			frappe.delete_doc("Chat Message", message_id, ignore_permissions=True)

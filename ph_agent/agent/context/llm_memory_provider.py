@@ -120,14 +120,21 @@ class LLMMemoryProvider(ContextProvider):
 		# Extract the current user query for relevance filtering
 		user_message = self._get_latest_user_message(context) or ""
 
-		memories = self._load_memories(user, persona=persona, query=user_message, top_k=_MAX_INJECTED_MEMORIES)
+		memories = self._load_memories(
+			user, persona=persona, query=user_message, top_k=_MAX_INJECTED_MEMORIES
+		)
 
 		# Cache in session state for same-turn access
 		state[self.MEMORIES_KEY] = memories
 
 		instructions_text = self._format_memories(memories)
 		if instructions_text:
-			context.extend_instructions(self.source_id, instructions_text)
+			# Apply token budget — memories have highest priority
+			from ph_agent.api.token_counter import consume_context_budget
+
+			instructions_text = consume_context_budget(state, "memories", instructions_text)
+			if instructions_text:
+				context.extend_instructions(self.source_id, instructions_text)
 
 	async def after_run(
 		self,
@@ -146,7 +153,9 @@ class LLMMemoryProvider(ContextProvider):
 		# Rate-limit extraction (across runs, not within same run)
 		last_time = state.get(self.LAST_EXTRACTION_KEY, 0)
 		if time.time() - last_time < _EXTRACTION_INTERVAL:
-			logger.debug("LLMMemoryProvider: rate-limited (last extraction %.1fs ago)", time.time() - last_time)
+			logger.debug(
+				"LLMMemoryProvider: rate-limited (last extraction %.1fs ago)", time.time() - last_time
+			)
 			return
 
 		# Collect user message + assistant response from this turn
@@ -155,6 +164,14 @@ class LLMMemoryProvider(ContextProvider):
 
 		if not user_message:
 			logger.debug("LLMMemoryProvider: no user message found in context.input_messages")
+			return
+
+		# Skip extraction for very short messages — unlikely to contain meaningful memories
+		if len(user_message.strip()) < 20:
+			logger.debug(
+				"LLMMemoryProvider: message too short (%d chars), skipping extraction",
+				len(user_message.strip()),
+			)
 			return
 
 		logger.debug(
@@ -270,22 +287,34 @@ class LLMMemoryProvider(ContextProvider):
 
 	@staticmethod
 	def _get_extraction_model(session: Any) -> str:
-		"""Get the model to use for extraction.
+		"""Return a cheap model appropriate for the session's provider.
 
-		Preference: use a cheaper/faster model if available. Falls back to
-		the session's configured default model.
+		Uses a provider-aware cheap model so extraction works across
+		different LLM backends (OpenAI, DeepSeek, etc.).
 		"""
 		session_id = getattr(session, "session_id", None)
-		if not session_id:
-			return _DEFAULT_EXTRACTION_MODEL
-		try:
-			provider_name = frappe.db.get_value("Chat Session", session_id, "llm_provider")
-			if not provider_name:
-				return _DEFAULT_EXTRACTION_MODEL
-			model = frappe.db.get_value("LLM Provider", provider_name, "default_model")
-			return model or _DEFAULT_EXTRACTION_MODEL
-		except Exception:
-			return _DEFAULT_EXTRACTION_MODEL
+		if session_id:
+			try:
+				provider_name = frappe.db.get_value("Chat Session", session_id, "llm_provider")
+				if provider_name:
+					provider_doc = frappe.get_doc("LLM Provider", provider_name)
+					api_url = (provider_doc.api_url or "").lower()
+
+					# DeepSeek — use their chat model
+					if "deepseek" in api_url:
+						return "deepseek-chat"
+					# Anthropic — Mesa optimization; can't use OpenAI models
+					if "anthropic" in api_url:
+						return provider_doc.default_model or _DEFAULT_EXTRACTION_MODEL
+					# OpenAI-compatible — use the cheap model
+					if "openai" in api_url or not api_url:
+						return _DEFAULT_EXTRACTION_MODEL
+
+					# Unknown provider — fall back to the provider's own model
+					return provider_doc.default_model or _DEFAULT_EXTRACTION_MODEL
+			except Exception:
+				pass
+		return _DEFAULT_EXTRACTION_MODEL
 
 	# ------------------------------------------------------------------
 	# Memory extraction via LLM
@@ -313,10 +342,7 @@ class LLMMemoryProvider(ContextProvider):
 			or an empty list on failure.
 		"""
 		model = LLMMemoryProvider._get_extraction_model(session)
-		prompt = (
-			f"User message: {user_message}\n"
-			f"Assistant response: {assistant_response}"
-		)
+		prompt = f"User message: {user_message}\nAssistant response: {assistant_response}"
 
 		# Use persona-aware prompt if persona is known
 		system_prompt = _EXTRACTION_SYSTEM_PROMPT
@@ -365,13 +391,13 @@ class LLMMemoryProvider(ContextProvider):
 
 		try:
 			data = json.loads(cleaned)
-		except (json.JSONDecodeError, TypeError):
+		except json.JSONDecodeError, TypeError:
 			# Try to find a JSON array in the response
 			try:
 				start_idx = cleaned.index("[")
 				end_idx = cleaned.rindex("]")
 				data = json.loads(cleaned[start_idx : end_idx + 1])
-			except (ValueError, json.JSONDecodeError, TypeError):
+			except ValueError, json.JSONDecodeError, TypeError:
 				logger.warning("Failed to parse LLM extraction response: %s", content[:200])
 				return []
 
@@ -386,11 +412,13 @@ class LLMMemoryProvider(ContextProvider):
 			fact = (item.get("fact") or "").strip()
 			if not fact:
 				continue
-			valid.append({
-				"fact": fact,
-				"category": str(item.get("category", "Fact")),
-				"confidence": float(item.get("confidence", 0.5)),
-			})
+			valid.append(
+				{
+					"fact": fact,
+					"category": str(item.get("category", "Fact")),
+					"confidence": float(item.get("confidence", 0.5)),
+				}
+			)
 
 		return valid
 
@@ -399,7 +427,9 @@ class LLMMemoryProvider(ContextProvider):
 	# ------------------------------------------------------------------
 
 	@staticmethod
-	def _load_memories(user: str, persona: str | None = None, query: str = "", top_k: int = 15) -> list[dict[str, Any]]:
+	def _load_memories(
+		user: str, persona: str | None = None, query: str = "", top_k: int = 15
+	) -> list[dict[str, Any]]:
 		"""Load memories for a user and persona, filtered by relevance to the current query.
 
 		When ``query`` is non-empty, memories are scored by word overlap with
@@ -517,29 +547,33 @@ class LLMMemoryProvider(ContextProvider):
 				try:
 					doc = frappe.get_doc("User Memory", existing_name)
 					new_confidence = min(float(doc.confidence or 0) + 0.05, 1.0)
-					doc.db_set({
-						"confidence": new_confidence,
-						"encounter_count": (doc.encounter_count or 1) + 1,
-						"last_encountered_at": frappe.utils.now(),
-						"category": category,  # Allow category to be refined
-					})
+					doc.db_set(
+						{
+							"confidence": new_confidence,
+							"encounter_count": (doc.encounter_count or 1) + 1,
+							"last_encountered_at": frappe.utils.now(),
+							"category": category,  # Allow category to be refined
+						}
+					)
 				except Exception as e:
 					logger.warning("Failed to update User Memory %s: %s", existing_name, e)
 			else:
 				# Insert new
 				try:
-					doc = frappe.get_doc({
-						"doctype": "User Memory",
-						"user": user,
-						"persona": persona,
-						"fact": fact,
-						"category": category,
-						"confidence": confidence,
-						"source_session": session_id,
-						"source_message": source_message,
-						"last_encountered_at": frappe.utils.now(),
-						"encounter_count": 1,
-					})
+					doc = frappe.get_doc(
+						{
+							"doctype": "User Memory",
+							"user": user,
+							"persona": persona,
+							"fact": fact,
+							"category": category,
+							"confidence": confidence,
+							"source_session": session_id,
+							"source_message": source_message,
+							"last_encountered_at": frappe.utils.now(),
+							"encounter_count": 1,
+						}
+					)
 					doc.insert(ignore_permissions=True)
 				except frappe.DuplicateEntryError:
 					# Race condition — entry was created between our check and insert.
@@ -556,11 +590,13 @@ class LLMMemoryProvider(ContextProvider):
 						if dup_name:
 							dup_doc = frappe.get_doc("User Memory", dup_name)
 							new_confidence = min(float(dup_doc.confidence or 0) + 0.05, 1.0)
-							dup_doc.db_set({
-								"confidence": new_confidence,
-								"encounter_count": (dup_doc.encounter_count or 1) + 1,
-								"last_encountered_at": frappe.utils.now(),
-							})
+							dup_doc.db_set(
+								{
+									"confidence": new_confidence,
+									"encounter_count": (dup_doc.encounter_count or 1) + 1,
+									"last_encountered_at": frappe.utils.now(),
+								}
+							)
 					except Exception:
 						pass
 				except Exception as e:
@@ -579,7 +615,7 @@ class LLMMemoryProvider(ContextProvider):
 		for msg in reversed(context.input_messages):
 			if msg.role == "user":
 				parts: list[str] = []
-				for c in (msg.contents or []):
+				for c in msg.contents or []:
 					if hasattr(c, "text") and c.text:
 						parts.append(c.text)
 					elif isinstance(c, str):
@@ -608,7 +644,7 @@ class LLMMemoryProvider(ContextProvider):
 		for msg in reversed(messages):
 			if msg.role == "assistant":
 				parts: list[str] = []
-				for c in (msg.contents or []):
+				for c in msg.contents or []:
 					if hasattr(c, "text") and c.text:
 						parts.append(c.text)
 					elif isinstance(c, str):

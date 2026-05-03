@@ -42,21 +42,6 @@ def cleanup_temporary_sessions():
 				frappe.db.delete("User Memory", {"source_message": message_id})
 			frappe.db.delete("User Memory", {"source_session": session_name})
 
-			# Clear Tool Approval Request references
-			frappe.db.set_value(
-				"Tool Approval Request",
-				{"chat_session": session_name},
-				"chat_session",
-				None,
-			)
-			for message_id in messages:
-				frappe.db.set_value(
-					"Tool Approval Request",
-					{"chat_message": message_id},
-					"chat_message",
-					None,
-				)
-
 			# Clear last_summary_message link
 			frappe.db.set_value("Chat Session", session_name, "last_summary_message", None)
 			frappe.db.commit()

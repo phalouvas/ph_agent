@@ -1,4 +1,14 @@
 """
+DEPRECATED: This module is no longer active. It is not registered in
+_build_agent() (context_providers in framework_agent.py). The standalone
+_try_route_tools() function in framework_agent.py is the active tool routing
+path, and has been migrated to embedding-based routing via embedding_router.py.
+
+The constants (_ROUTER_SYSTEM_PROMPT, _ROUTING_THRESHOLD, _ROUTER_MAX_TOKENS)
+are still imported by framework_agent.py for the LLM fallback path.
+
+This file is kept for reference and will be removed in a future version.
+
 ToolRouterContextProvider — per-turn LLM tool selection.
 
 Reduces input token overhead by using a cheap LLM call to select only the

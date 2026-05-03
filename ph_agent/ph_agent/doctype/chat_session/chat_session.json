@@ -123,7 +123,7 @@
   },
   {
    "default": "0",
-   "description": "Temporary session \u2014 auto-deleted when you navigate away. Messages, memories, and tool approvals are removed on deletion.",
+   "description": "Temporary session \u2014 auto-deleted when you navigate away. Messages and memories are removed on deletion.",
    "fieldname": "is_temporary",
    "fieldtype": "Check",
    "label": "Temporary Session"

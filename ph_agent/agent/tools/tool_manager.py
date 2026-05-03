@@ -206,7 +206,7 @@ class ToolManager:
             fields=[
                 "name", "tool_name", "description", "script_type",
                 "tool_group", "python_function", "custom_script",
-                "parameters_json", "requires_approval"
+                "parameters_json"
             ]
         )
         
@@ -253,8 +253,7 @@ class ToolManager:
             "ToolManager: registered tool",
 			f"Name: {record['tool_name']}, Type: {script_type}, "
 			f"Group: {record.get('tool_group', 'General')}, "
-			f"Requires approval: {record.get('requires_approval', False)}",
-        )
+			        )
         return tool_obj
     
     @classmethod
@@ -341,10 +340,6 @@ class ToolManager:
             # Check if function is already decorated with @tool
             if hasattr(func, 'name') and hasattr(func, 'description'):
                 # Function is already a tool, use it as-is
-                # But apply requires_approval from Tool Registry if set
-                if record.get("requires_approval"):
-                    func.approval_mode = "always_require"
-                    logger.debug("Tool %s: set approval_mode=always_require from registry", record["tool_name"])
                 logger.debug("Tool %s is already decorated with @tool", record["tool_name"])
                 return func
             
@@ -353,10 +348,6 @@ class ToolManager:
                 "name": record["tool_name"],
                 "description": record["description"] or "No description provided"
             }
-            
-            # Add approval mode if required
-            if record.get("requires_approval"):
-                tool_kwargs["approval_mode"] = "always_require"
             
             # Create decorated tool
             decorated_tool = tool(**tool_kwargs)(func)
@@ -400,13 +391,11 @@ class ToolManager:
         parameters_json = record.get("parameters_json")
         input_model = cls._build_input_model_from_schema(parameters_json)
         
-        # Create approval kwargs
+        # Create tool kwargs
         tool_kwargs = {
             "name": record["tool_name"],
             "description": record["description"] or "No description provided",
         }
-        if record.get("requires_approval"):
-            tool_kwargs["approval_mode"] = "always_require"
         
         # If we have an input model (schema defined), use FunctionTool directly
         # with the model so the LLM sees proper typed parameters.
@@ -476,7 +465,6 @@ class ToolManager:
         wrapped = FunctionTool(
             name=original_tool.name,
             description=original_tool.description,
-            approval_mode=getattr(original_tool, 'approval_mode', None),
             # Reuse the original tool's Pydantic input model so the LLM sees
             # the same parameter schema (properties, types, descriptions, defaults).
             input_model=original_tool.input_model,
@@ -485,23 +473,6 @@ class ToolManager:
         # Preserve tool_group so persona filtering survives context injection
         setattr(wrapped, "tool_group", getattr(original_tool, "tool_group", "General"))
         return wrapped
-    
-    @classmethod
-    def tool_requires_approval(cls, tool_name: str) -> bool:
-        """
-        Check if a tool requires human approval before execution.
-        
-        Args:
-            tool_name: Name of the tool to check
-            
-        Returns:
-            True if the tool requires approval, False otherwise
-        """
-        tools = cls.get_tools()
-        for tool_obj in tools:
-            if tool_obj.name == tool_name:
-                return getattr(tool_obj, 'approval_mode', 'never_require') == 'always_require'
-        return False
     
     @classmethod
     def get_tool_by_name(cls, tool_name: str) -> Optional[Any]:

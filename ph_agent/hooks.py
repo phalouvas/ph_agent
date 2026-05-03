@@ -17,7 +17,7 @@ add_to_apps_screen = [
 		"logo": "/assets/ph_agent/logo.png",
 		"title": "PH Agent",
 		"route": "/ph_agent",
-		"has_permission": "ph_agent.api.permission.has_app_permission"
+		"has_permission": "ph_agent.api.permission.has_app_permission",
 	}
 ]
 
@@ -134,16 +134,14 @@ after_migrate = "ph_agent.patches.sample_skills.after_migrate"
 # Hook on document methods and events
 
 doc_events = {
-	# Cascade cancel Tool Approval Requests when session/message is deleted
-	"Chat Session": {
-		"on_trash": "ph_agent.api.agent_jobs.cancel_approvals_for_session",
-	},
-	"Chat Message": {
-		"on_trash": "ph_agent.api.agent_jobs.cancel_approvals_for_message",
-	},
 	# Cascade delete User Memory and Chat Sessions when persona is deleted
 	"Persona": {
 		"on_trash": "ph_agent.api.agent_jobs.cascade_delete_persona",
+	},
+	# Invalidate tool embedding cache whenever tool registry changes
+	"Tool Registry": {
+		"on_update": "ph_agent.agent.tools.embedding_router.clear_tool_embedding_cache",
+		"on_trash": "ph_agent.agent.tools.embedding_router.clear_tool_embedding_cache",
 	},
 }
 
@@ -151,9 +149,7 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
-	"hourly": [
-		"ph_agent.ph_agent.tasks.cleanup_temporary_sessions"
-	],
+	"hourly": ["ph_agent.ph_agent.tasks.cleanup_temporary_sessions"],
 }
 
 # Testing

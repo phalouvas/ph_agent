@@ -38,7 +38,7 @@ This is a **Frappe v16 app** for AI chatbots in ERPNext. The core flow:
    - `UserPreferenceProvider` — learned user preferences per persona
    - Hook-registered context providers via `ph_agent_context_providers` hook
 4. **Tools** → `agent/tools/tool_manager.py:ToolManager` loads enabled tools from the Tool Registry DocType, caches them, filters by persona/session tool groups
-5. **Real-time** → `frappe.publish_realtime()` pushes streaming chunks, status updates, token counters, and approval requests to the browser via WebSockets
+5. **Real-time** → `frappe.publish_realtime()` pushes streaming chunks, status updates, token counters to the browser via WebSockets
 
 ### Key DocTypes
 
@@ -49,7 +49,6 @@ This is a **Frappe v16 app** for AI chatbots in ERPNext. The core flow:
 | `LLM Provider` | API key, URL, model, pricing, context limits |
 | `Persona` | System prompt, tool groups, default provider, routing settings |
 | `Tool Registry` | Python function or custom script wrapped as agent-callable tools |
-| `Tool Approval Request` | Pending tool approvals with conversation state for resumption |
 | `Skill Registry` | Domain-specific skills with resources and scripts (progressive disclosure) |
 | `User Token Usage` | Per-user aggregate token counts and costs |
 | `User Memory` / `User Preference` | Auto-extracted long-term facts and learned preferences |
@@ -96,7 +95,7 @@ The chat UI is `ph_agent/ph_agent/page/chat/chat.js` (loaded via `hooks.py:page_
 
 ## Additional context
 
-The `.github/copilot-instructions.md` file contains complementary guidelines about front-end patterns (MutationObserver, conditional auto-scroll), session state serialization, and the tool approval workflow — consult it for those details.
+The `.github/copilot-instructions.md` file contains complementary guidelines about front-end patterns (MutationObserver, conditional auto-scroll) and session state serialization — consult it for those details.
 
 ## Command style
 - Always write bash commands as single lines

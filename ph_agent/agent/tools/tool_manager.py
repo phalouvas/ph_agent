@@ -8,14 +8,22 @@ for use with the Microsoft Agent Framework.
 import importlib
 import json
 import logging
-from typing import List, Optional, Dict, Any, get_type_hints
+from typing import Any, Dict, List, Optional, get_type_hints
 
 import frappe
 from agent_framework import FunctionInvocationContext, FunctionTool, tool
-from ph_agent.utils.debug_logger import debug_log
 from pydantic import BaseModel, Field, create_model
 
+from ph_agent.utils.debug_logger import debug_log
+
 logger = logging.getLogger(__name__)
+
+# Cache version key — bumped on Tool Registry changes to invalidate cached tool records.
+_TOOL_CACHE_VERSION_KEY = "ph_agent:tool_cache:v1"
+# Cache key prefix for the compiled tool record list.
+_TOOL_CACHE_KEY_PREFIX = "ph_agent:tool_cache:records"
+# TTL for cached tool records (seconds). Version-based invalidation keeps it fresh.
+_TOOL_CACHE_TTL = 3600
 
 
 # Safe namespace for executing custom scripts.
@@ -81,11 +89,25 @@ SAFE_NAMESPACE = {
 }
 
 
+def clear_tool_cache(doc=None, method=None) -> None:
+    """Invalidate cached tool records by bumping the version counter.
+
+    Called from ``doc_events`` hook whenever a Tool Registry record is
+    created, updated, or deleted.
+    """
+    try:
+        version = frappe.cache().get_value(_TOOL_CACHE_VERSION_KEY) or 0
+        frappe.cache().set_value(_TOOL_CACHE_VERSION_KEY, version + 1)
+        logger.info("[tool_cache] Bumped cache version to %d", version + 1)
+    except Exception:
+        logger.warning("[tool_cache] Failed to bump cache version", exc_info=True)
+
+
 class ToolManager:
     """Manager for loading and registering tools from the Tool Registry."""
-    
+
     @classmethod
-    def get_tools(cls, session_name: Optional[str] = None, user: Optional[str] = None, persona: Optional[str] = None) -> List:
+    def get_tools(cls, session_name: str | None = None, user: str | None = None, persona: str | None = None) -> list:
         """
         Get all enabled tools from the Tool Registry.
 
@@ -98,7 +120,7 @@ class ToolManager:
         Returns:
             List of tool objects ready to be passed to Agent constructor
         """
-        # Load tools from database
+        # Load tools from cache/DB
         tools = cls._load_tools_from_db()
 
         # Filter by session-level tool settings first, then persona
@@ -112,9 +134,9 @@ class ToolManager:
             session=session_name,
         )
         return result
-    
+
     @classmethod
-    def _filter_by_session(cls, tools: List, session_name: Optional[str], persona: Optional[str]) -> List:
+    def _filter_by_session(cls, tools: list, session_name: str | None, persona: str | None) -> list:
         """Filter tools by session-level tool settings, falling back to persona.
 
         If the session has ``disable_tools = 1``, returns an empty list.
@@ -160,7 +182,7 @@ class ToolManager:
         return cls._filter_by_persona(tools, persona)
 
     @classmethod
-    def _filter_by_persona(cls, tools: List, persona: Optional[str]) -> List:
+    def _filter_by_persona(cls, tools: list, persona: str | None) -> list:
         """Filter tools by the persona's configured tool groups.
 
         If the persona has ``disable_tools = 1``, returns an empty list.
@@ -195,12 +217,23 @@ class ToolManager:
         return filtered
 
     @classmethod
-    def _load_tools_from_db(cls) -> List:
-        """Load enabled tools from the Tool Registry database."""
-        tools = []
-        
-        # Get all enabled tools from Tool Registry
-        tool_records = frappe.get_all(
+    def _get_cached_tool_records(cls) -> list[dict[str, Any]]:
+        """Return tool records from cache, or load from DB and cache them.
+
+        Cache is invalidated by bumping ``_TOOL_CACHE_VERSION_KEY`` whenever
+        a Tool Registry record is created, updated, or deleted.
+        """
+        cache = frappe.cache()
+        version = cache.get_value(_TOOL_CACHE_VERSION_KEY) or 0
+        cache_key = f"{_TOOL_CACHE_KEY_PREFIX}:v{version}"
+
+        records = cache.get_value(cache_key)
+        if records is not None:
+            logger.debug("Using %d cached tool records (version %d)", len(records), version)
+            return records
+
+        # Cache miss — query DB and populate cache
+        records = frappe.get_all(
             "Tool Registry",
             filters={"is_enabled": 1},
             fields=[
@@ -209,9 +242,18 @@ class ToolManager:
                 "parameters_json"
             ]
         )
-        
-        logger.info("Loading %d enabled tools from Tool Registry", len(tool_records))
-        
+        cache.set_value(cache_key, records, expires_in_sec=_TOOL_CACHE_TTL)
+        logger.info("Cached %d tool records at version %d", len(records), version)
+        return records
+
+    @classmethod
+    def _load_tools_from_db(cls) -> list:
+        """Load enabled tools, using cached records to skip the DB query."""
+        tools = []
+        tool_records = cls._get_cached_tool_records()
+
+        logger.info("Registering %d tools from cached records", len(tool_records))
+
         for record in tool_records:
             try:
                 tool_obj = cls._register_tool(record)
@@ -220,26 +262,25 @@ class ToolManager:
                     logger.debug("Successfully registered tool: %s", record["tool_name"])
             except Exception as e:
                 logger.error("Failed to register tool %s: %s", record["tool_name"], str(e))
-                # Continue with other tools even if one fails
-        
+
         logger.info("Successfully loaded %d/%d tools", len(tools), len(tool_records))
         return tools
-    
+
     @classmethod
-    def _register_tool(cls, record: Dict[str, Any]):
+    def _register_tool(cls, record: dict[str, Any]):
         """
         Register a single tool from Tool Registry record.
-        
+
         Dispatches to the appropriate registration method based on script_type.
-        
+
         Args:
             record: Tool Registry document as dictionary
-            
+
         Returns:
             Registered tool object or None if registration fails
         """
         script_type = record.get("script_type", "Existing Function")
-        
+
         if script_type == "Custom Script":
             tool_obj = cls._register_custom_script_tool(record)
         else:
@@ -247,43 +288,43 @@ class ToolManager:
 
         # Attach tool_group so _filter_by_persona can use it without a DB round-trip
         if tool_obj is not None:
-            setattr(tool_obj, "tool_group", record.get("tool_group") or "General")
+            tool_obj.tool_group = record.get("tool_group") or "General"
 
         debug_log(
             "ToolManager: registered tool",
-			f"Name: {record['tool_name']}, Type: {script_type}, "
-			f"Group: {record.get('tool_group', 'General')}, "
-			        )
+            f"Name: {record['tool_name']}, Type: {script_type}, "
+            f"Group: {record.get('tool_group', 'General')}, "
+        )
         return tool_obj
-    
+
     @classmethod
-    def _get_safe_namespace(cls) -> Dict[str, Any]:
+    def _get_safe_namespace(cls) -> dict[str, Any]:
         """Return a copy of the safe namespace dict."""
         return dict(SAFE_NAMESPACE)
-    
+
     @classmethod
-    def _build_input_model_from_schema(cls, parameters_json: Optional[str]) -> Optional[type[BaseModel]]:
+    def _build_input_model_from_schema(cls, parameters_json: str | None) -> type[BaseModel] | None:
         """
         Build a Pydantic input model from a JSON Schema string.
-        
+
         Args:
             parameters_json: JSON Schema string describing tool parameters
-            
+
         Returns:
             A Pydantic BaseModel subclass, or None if no schema provided
         """
         if not parameters_json:
             return None
-        
+
         schema = json.loads(parameters_json)
         properties = schema.get("properties", {})
         required_fields = set(schema.get("required", []))
-        
+
         fields = {}
         for field_name, field_schema in properties.items():
             field_type = cls._json_schema_type_to_python(field_schema)
             field_description = field_schema.get("description", "")
-            
+
             if field_name in required_fields:
                 # Required — use Field with no default
                 fields[field_name] = (
@@ -297,21 +338,21 @@ class ToolManager:
                     Optional[field_type],
                     Field(default=default_value, description=field_description),
                 )
-        
+
         if not fields:
             return None
-        
+
         # Add additionalProperties: false to the schema to help DeepSeek
         # correctly populate required parameters instead of sending empty {}
         schema["additionalProperties"] = False
-        
+
         return create_model("ToolInputModel", **fields)
-    
+
     @classmethod
-    def _json_schema_type_to_python(cls, field_schema: Dict[str, Any]) -> type:
+    def _json_schema_type_to_python(cls, field_schema: dict[str, Any]) -> type:
         """Map JSON Schema types to Python types."""
         json_type = field_schema.get("type", "string")
-        
+
         type_map = {
             "string": str,
             "integer": int,
@@ -320,14 +361,14 @@ class ToolManager:
             "array": list,
             "object": dict,
         }
-        
+
         return type_map.get(json_type, str)
-    
+
     @classmethod
-    def _register_existing_function_tool(cls, record: Dict[str, Any]):
+    def _register_existing_function_tool(cls, record: dict[str, Any]):
         """
         Register a tool backed by an existing Python function.
-        
+
         This is the original behaviour: import a dotted function path and
         wrap it with @tool.
         """
@@ -336,67 +377,67 @@ class ToolManager:
             module_path, func_name = record["python_function"].rsplit('.', 1)
             module = importlib.import_module(module_path)
             func = getattr(module, func_name)
-            
+
             # Check if function is already decorated with @tool
             if hasattr(func, 'name') and hasattr(func, 'description'):
                 # Function is already a tool, use it as-is
                 logger.debug("Tool %s is already decorated with @tool", record["tool_name"])
                 return func
-            
+
             # Apply @tool decorator dynamically
             tool_kwargs = {
                 "name": record["tool_name"],
                 "description": record["description"] or "No description provided"
             }
-            
+
             # Create decorated tool
             decorated_tool = tool(**tool_kwargs)(func)
-            
+
             logger.debug("Dynamically decorated tool %s", record["tool_name"])
             return decorated_tool
-            
+
         except (ImportError, AttributeError, ValueError) as e:
             logger.error("Failed to import tool function %s: %s", record["python_function"], str(e))
             raise
         except Exception as e:
             logger.error("Unexpected error registering tool %s: %s", record["tool_name"], str(e))
             raise
-    
+
     @classmethod
-    def _register_custom_script_tool(cls, record: Dict[str, Any]):
+    def _register_custom_script_tool(cls, record: dict[str, Any]):
         """
         Register a tool backed by a Custom Script stored in the Tool Registry.
-        
+
         The script must define a top-level ``run_tool`` function.
         The ``parameters_json`` field provides the JSON Schema for LLM arguments.
         """
         script_code = record.get("custom_script", "")
         if not script_code:
             raise ValueError(f"Tool '{record['tool_name']}' has no custom script content.")
-        
+
         # Compile and exec in safe namespace
         namespace = cls._get_safe_namespace()
         try:
             exec(script_code, namespace)
         except Exception as e:
             raise ValueError(f"Failed to execute custom script for tool '{record['tool_name']}': {e}") from e
-        
+
         run_tool_func = namespace.get("run_tool")
         if not callable(run_tool_func):
             raise ValueError(
                 f"Custom script for tool '{record['tool_name']}' must define a callable 'run_tool' function."
             )
-        
+
         # Build input model from parameters_json
         parameters_json = record.get("parameters_json")
         input_model = cls._build_input_model_from_schema(parameters_json)
-        
+
         # Create tool kwargs
         tool_kwargs = {
             "name": record["tool_name"],
             "description": record["description"] or "No description provided",
         }
-        
+
         # If we have an input model (schema defined), use FunctionTool directly
         # with the model so the LLM sees proper typed parameters.
         if input_model is not None:
@@ -405,37 +446,37 @@ class ToolManager:
                 input_model=input_model,
                 func=run_tool_func,
             )
-        
+
         # Otherwise use the @tool decorator which infers from type hints
         return tool(**tool_kwargs)(run_tool_func)
-    
+
     @classmethod
-    def _inject_context_into_tools(cls, tools: List, session_name: Optional[str] = None, user: Optional[str] = None) -> List:
+    def _inject_context_into_tools(cls, tools: list, session_name: str | None = None, user: str | None = None) -> list:
         """
         Create tool wrappers that inject context into tool calls.
-        
+
         Args:
             tools: List of tool objects
             session_name: Chat session name to inject
             user: User name to inject
-            
+
         Returns:
             List of tools with context injection
         """
         if not session_name and not user:
             # No context to inject, return tools as-is
             return tools
-        
+
         context_tools = []
         for tool_obj in tools:
             # Create a wrapper that injects context
             context_tool = cls._create_context_wrapper(tool_obj, session_name, user)
             context_tools.append(context_tool)
-        
+
         return context_tools
-    
+
     @classmethod
-    def _create_context_wrapper(cls, original_tool, session_name: Optional[str] = None, user: Optional[str] = None):
+    def _create_context_wrapper(cls, original_tool, session_name: str | None = None, user: str | None = None):
         """
         Create a FunctionTool that injects session/user context into tool calls while
         preserving the original tool's parameter schema.
@@ -471,25 +512,30 @@ class ToolManager:
             func=injecting_func,
         )
         # Preserve tool_group so persona filtering survives context injection
-        setattr(wrapped, "tool_group", getattr(original_tool, "tool_group", "General"))
+        wrapped.tool_group = getattr(original_tool, "tool_group", "General")
         return wrapped
-    
+
     @classmethod
-    def get_tool_by_name(cls, tool_name: str) -> Optional[Any]:
+    def get_tool_by_name(cls, tool_name: str) -> Any | None:
         """
         Get a specific tool by name.
-        
+
+        Uses cached records to avoid a full tool rebuild, then registers
+        only the matching tool.
+
         Args:
             tool_name: Name of the tool to retrieve
-            
+
         Returns:
             Tool object or None if not found
         """
-        tools = cls.get_tools()
-        for tool_obj in tools:
-            if tool_obj.name == tool_name:
-                return tool_obj
+        tool_records = cls._get_cached_tool_records()
+        for record in tool_records:
+            if record.get("tool_name") == tool_name:
+                tool_obj = cls._register_tool(record)
+                if tool_obj is not None:
+                    return tool_obj
         return None
-    
+
 # Singleton instance for convenience
 tool_manager = ToolManager()

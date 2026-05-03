@@ -138,10 +138,16 @@ doc_events = {
 	"Persona": {
 		"on_trash": "ph_agent.api.agent_jobs.cascade_delete_persona",
 	},
-	# Invalidate tool embedding cache whenever tool registry changes
+	# Invalidate tool caches whenever tool registry changes
 	"Tool Registry": {
-		"on_update": "ph_agent.agent.tools.embedding_router.clear_tool_embedding_cache",
-		"on_trash": "ph_agent.agent.tools.embedding_router.clear_tool_embedding_cache",
+		"on_update": [
+			"ph_agent.agent.tools.embedding_router.clear_tool_embedding_cache",
+			"ph_agent.agent.tools.tool_manager.clear_tool_cache",
+		],
+		"on_trash": [
+			"ph_agent.agent.tools.embedding_router.clear_tool_embedding_cache",
+			"ph_agent.agent.tools.tool_manager.clear_tool_cache",
+		],
 	},
 }
 

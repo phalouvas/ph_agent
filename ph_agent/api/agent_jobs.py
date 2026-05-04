@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 import traceback
 
@@ -24,6 +25,7 @@ from ph_agent.api.token_utils import (
 )
 from ph_agent.utils.debug_logger import debug_log
 from ph_agent.utils.file_extractor import extract_file_text
+from ph_agent.utils.substitution import substitute_placeholders
 
 # ---------------------------------------------------------------------------
 # Token usage & cost helpers
@@ -468,13 +470,8 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 			# extracted file text so the LLM sees the actual content instead
 			# of literal "{{actual_text}}" markers.
 			combined_text = "\n\n".join(file_texts)
-			import re
 
-			agent_content = re.sub(
-				r"\{\{\w+\}\}",
-				lambda m: combined_text,
-				content,
-			)
+			agent_content = substitute_placeholders(content, combined_text)
 			# If no {{variable}} placeholders were found, append text at end
 			if agent_content == content:
 				agent_content = content + "\n\n" + combined_text
@@ -1012,8 +1009,6 @@ def _call_agent_background(session, content, file_names, enqueued_by, agent_msg_
 	is_first_turn = current_title == "New Chat" and msg_count == 2
 
 	if is_first_turn:
-		import re
-
 		agent_reply = re.sub(
 			r'<details class="ph-reasoning-block">.*?</details>\s*',
 			"",

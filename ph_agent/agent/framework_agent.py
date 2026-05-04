@@ -484,6 +484,23 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 	if not persona_doc.get("enable_tool_routing") or persona_doc.get("disable_tools"):
 		return
 
+	# Skip routing on follow-up turns. The router LLM only sees the
+	# current user message (no conversation history), so it can't
+	# know the agent is mid-workflow. Routing is designed for the
+	# first message to scope relevant tools; once a workflow is in
+	# progress the agent needs all its session tools.
+	user_msg_count = frappe.db.count(
+		"Chat Message",
+		{"chat_session": session_name, "sender_type": "User"},
+	)
+	if user_msg_count > 1:
+		debug_log(
+			"_try_route_tools skipped (follow-up turn)",
+			f"Session: {session_name}, User messages: {user_msg_count}",
+			session=session_name,
+		)
+		return
+
 	tools = agent.default_options.get("tools", [])
 	if len(tools) <= _ROUTING_THRESHOLD:
 		return
@@ -555,7 +572,13 @@ async def _try_route_tools(agent, session_name: str, user_query: str) -> None:
 			selected_names = []
 
 		selected_set = set(str(n) for n in selected_names)
-		filtered = [t for t in tools if t.name in selected_set]
+		# Always keep General-group tools (datetime, calculator, etc.)
+		# regardless of the router LLM's response. Mirrors the
+		# embedding router's behavior so the agent never loses basic
+		# utility tools even when the router returns an empty list.
+		general_set = set(t.name for t in tools if getattr(t, "tool_group", "General") == "General")
+		kept_set = selected_set | general_set
+		filtered = [t for t in tools if t.name in kept_set]
 
 		agent.default_options["tools"] = filtered
 		route_elapsed = time.time() - route_start
@@ -724,6 +747,17 @@ class FrappeMemoryProvider(HistoryProvider):
 						Content.from_text_reasoning(protected_data=json.dumps(msg.reasoning_content))
 					)
 				history.append(assistant_msg)
+
+		# The current user message is saved to the DB before the agent runs
+		# (in chat.py), so it appears in the history loaded above. But the
+		# calling code also passes it as input_messages to agent.run().
+		# Without removing it here, the framework concatenates both and
+		# sends two consecutive user messages, which is malformed for the
+		# OpenAI-compatible API (expects strict user↔assistant alternation).
+		for i in range(len(history) - 1, -1, -1):
+			if history[i].role == "user":
+				history.pop(i)
+				break
 
 		# Strip text_reasoning content from older assistant messages to save
 		# input tokens. Only the most recent `max_reasoning_turns` assistant
